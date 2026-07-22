@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.slettmayer/geosphere-mcp-server",
+  "title": "GeoSphere Austria Weather",
+  "description": "MCP server for weather forecasts: GeoSphere Austria high-resolution data (AROME/INCA/C-LAEF) for Austria and the Alps, Open-Meteo worldwide.",
+  "websiteUrl": "https://github.com/slettmayer/geosphere-mcp-server",
+  "repository": {
+    "url": "https://github.com/slettmayer/geosphere-mcp-server",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "geosphere-mcp-server",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
