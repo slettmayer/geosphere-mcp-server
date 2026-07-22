@@ -14,7 +14,7 @@ and are emitted verbatim (e.g. ``partlycloudy``).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -374,7 +374,15 @@ def render_hourly(data: dict[str, Any]) -> str:
 
     hours = data.get("hours", [])
     if hours:
-        lines.extend(_hourly_line(hour) for hour in hours)
+        current_day: date | None = None
+        for hour in hours:
+            when = hour.get("time")
+            day = when.date() if when is not None else None
+            if day is not None and day != current_day:
+                lines.append(f"{when:%a} {when:%Y-%m-%d}")
+                current_day = day
+            indent = "  " if current_day is not None else ""
+            lines.append(f"{indent}{_hourly_line(hour)}")
     else:
         lines.append("No forecast hours available for the requested window.")
 

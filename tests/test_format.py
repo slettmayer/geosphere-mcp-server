@@ -217,10 +217,41 @@ def test_render_hourly_geosphere() -> None:
     assert out.splitlines()[0] == "# 24-Hour Forecast for 48.2208, 16.3738"
     assert "AROME model, reference 2026-07-15 12:00 CEST" in out
     assert "Source: GeoSphere (AROME + C-LAEF ensemble)" in out
-    # 14:00 CEST line with precip + probability + wind.
-    assert "14:00: 21.3°C — rainy, 1.2 mm (70% chance), wind 3 m/s" in out
+    # A day-divider header precedes the hours, which are indented beneath it.
+    assert "Wed 2026-07-15" in out
+    # 14:00 CEST line with precip + probability + wind (indented under the day).
+    assert "  14:00: 21.3°C — rainy, 1.2 mm (70% chance), wind 3 m/s" in out
     # 15:00 CEST line: zero precip/probability omitted, wind kept.
-    assert "15:00: 20.1°C — cloudy, wind 2 m/s" in out
+    assert "  15:00: 20.1°C — cloudy, wind 2 m/s" in out
+
+
+def test_render_hourly_day_divider_on_rollover() -> None:
+    """A new day-divider header is emitted each time the local date changes."""
+    sample = {
+        **SAMPLE_HOURLY_GEOSPHERE,
+        "hourly": [
+            {
+                "time": datetime(2026, 7, 15, 21, 0, tzinfo=UTC),  # 23:00 CEST
+                "condition": "clear-night",
+                "temperature_c": 18.0,
+                "wind_speed_ms": 2.0,
+            },
+            {
+                "time": datetime(2026, 7, 15, 22, 0, tzinfo=UTC),  # 00:00 CEST +1
+                "condition": "clear-night",
+                "temperature_c": 17.0,
+                "wind_speed_ms": 2.0,
+            },
+        ],
+    }
+    data = normalize_hourly_geosphere(sample, LAT, LON, 24)
+    lines = render_hourly(data).splitlines()
+    # Both local days appear as headers, each followed by its indented hour.
+    assert "Wed 2026-07-15" in lines
+    assert "Thu 2026-07-16" in lines
+    assert lines.index("Wed 2026-07-15") < lines.index("Thu 2026-07-16")
+    assert "  23:00: 18.0°C — clear-night, wind 2 m/s" in lines
+    assert "  00:00: 17.0°C — clear-night, wind 2 m/s" in lines
 
 
 def test_render_hourly_geosphere_horizon_note() -> None:
