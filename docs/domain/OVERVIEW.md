@@ -45,6 +45,13 @@ Coverage is discovered dynamically -- there is no hardcoded bounding box. A GeoS
 
 Every response names its data source (e.g. `📡 Source: GeoSphere (INCA + AROME)` or `📡 Source: Open-Meteo`).
 
+### Graceful Degradation Paths
+Three distinct signals let a call degrade instead of failing:
+
+1. **Out-of-domain (HTTP 400)** -- a coverage signal; transparently falls back to Open-Meteo.
+2. **Rate limit (HTTP 429)** -- the server retries once if the API asks for a short wait (<= 5 s), otherwise returns a rate-limit notice. It reminds the caller that `get_daily_forecast` still works because daily is always Open-Meteo, never GeoSphere.
+3. **Ensemble/secondary fetch failure** -- the C-LAEF probability is simply omitted; the forecast still renders (see Precipitation Probability).
+
 ### Tools
 
 | Tool | Signature | Sources | Horizon |
@@ -65,11 +72,18 @@ On the GeoSphere path, fields are filled from a per-field fallback chain (ported
 - 1-h precipitation: INCA `RR`, else sum of the last four nowcast 15-min `rr` buckets
 - precipitation flag: nowcast `pt` (255 = none)
 
+Two fields are **derived**, not fetched: apparent temperature ("feels like", Australian BoM formula from temp/humidity/wind, surfaced by every current-weather response) and -- on the hourly path only -- dew point (Magnus formula from temperature + humidity, since AROME has no native dew-point parameter).
+
 ### Condition Vocabulary
 One shared vocabulary across all tools -- the Home Assistant condition set: `sunny`, `clear-night`, `partlycloudy`, `cloudy`, `rainy`, `pouring`, `lightning`, `lightning-rainy`, `snowy`, `snowy-rainy`, `windy`, `windy-variant`, `fog`.
 
-- **GeoSphere paths** derive it physically (ported `condition.py`), with thresholds in `const.py`: CAPE >= 1000 J/kg (lightning), precip >= 0.1 mm (rainy), pouring >= 4 mm/h, gust >= 15 m/s (windy), cloud 12.5 % / 62.5 % breakpoints, fog when RH >= 98 % & wind < 2 m/s & cloud >= 87.5 %, snow when T <= 1 degC. Day/night (sunny vs clear-night) via `astral`.
-- **Open-Meteo paths** map the WMO `weather_code` (0-99) to the same vocabulary via a static dict in `const.py`, combined with `is_day` for sunny/clear-night.
+**GeoSphere paths** derive the condition physically (ported `condition.py`) with thresholds in `const.py`. There are two derivation functions with deliberately different rules:
+
+- `derive_condition` -- used per forecast hour (hourly tool). Rain vs snow is split from AROME's **accumulated** `snow_acc`/`rr_acc` deltas (rain = precip - snowfall), not temperature. Precip >= 0.1 mm -> `rainy`, >= 4 mm/h -> `pouring`; with CAPE >= 1000 J/kg -> `lightning-rainy`. Dry `lightning` needs CAPE >= 1000 **and** cloud >= 60 %. Gust >= 15 m/s -> `windy` (cloud < 60 %) or `windy-variant` (cloud >= 60 %). Otherwise cloud breakpoints 12.5 % / 62.5 % map to `sunny`/`clear-night`, `partlycloudy`, `cloudy`. **No fog branch** -- the hourly tool never returns `fog`.
+- `derive_current_condition` -- used for current weather. Adds a **fog** heuristic (RH >= 98 % & wind < 2 m/s & cloud >= 87.5 %) and decides snow vs rain by temperature (`T <= 1 degC`), because the nowcast precipitation-type code table is undocumented (it only signals *that* it precipitates). The non-precipitating case falls back to `derive_condition` on cloud/CAPE/gust alone.
+- Day/night (sunny vs clear-night) via `astral` on both paths.
+
+**Open-Meteo paths** map the WMO `weather_code` (0-99) to the same vocabulary via a static dict in `const.py`, combined with `is_day` for sunny/clear-night.
 
 ### Precipitation Probability (POP)
 Derived from the C-LAEF ensemble as a stepped value matched by exact timestamp: p10 wet -> 95 %, p50 wet -> 70 %, p90 wet -> 30 %, otherwise 0 %. On the Open-Meteo path, `precipitation_probability` is used directly. Ensemble fetch failure simply omits probability (secondary dataset degrades gracefully).
@@ -87,6 +101,8 @@ Derived from the C-LAEF ensemble as a stepped value matched by exact timestamp: 
 | **POP** | Probability of precipitation -- stepped value derived from ensemble percentiles |
 | **WMO code** | World Meteorological Organization present-weather code (0-99), used by Open-Meteo |
 | **out-of-domain** | GeoSphere 400 with "outside of dataset bounds" -- a coverage signal that triggers the Open-Meteo fallback |
+| **rate limit** | GeoSphere 429 -- retried once if the wait is <= 5 s, else returned as a notice; distinct from out-of-domain (no source fallback, but daily still works via Open-Meteo) |
+| **apparent temperature** | "Feels like" temperature derived (Australian BoM formula) from temp/humidity/wind, not fetched |
 | **condition** | An HA-style weather condition string (e.g. `partlycloudy`), the shared output vocabulary |
 
 ### External Integrations

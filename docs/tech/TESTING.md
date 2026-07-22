@@ -20,6 +20,7 @@ Documents the test structure, patterns, tooling, and conventions used in the pro
 tests/
   test_geosphere_api.py   -- unit tests, mocked HTTP (runs in CI)
   test_openmeteo_api.py   -- unit tests, mocked HTTP (runs in CI)
+  test_server.py          -- unit tests for the three MCP tool functions (runs in CI)
   test_condition.py       -- unit tests, pure derivation table tests (runs in CI)
   test_weather.py         -- unit tests, merge chain / POP / differencing (runs in CI)
   test_format.py          -- unit tests, markdown renderer snapshots (runs in CI)
