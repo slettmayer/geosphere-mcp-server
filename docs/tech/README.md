@@ -1,6 +1,6 @@
 # Technical Context
 
-Index of technical documentation files for AI-assisted development.
+Index of technical documentation files for AI-assisted development. Loaded on demand when a task touches the corresponding topic.
 
 ## Contents
 - [Tech Stack](TECH-STACK.md) -- languages, frameworks, build tools, databases, API patterns

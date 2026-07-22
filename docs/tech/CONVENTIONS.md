@@ -36,7 +36,8 @@ Documents naming patterns, code style, import ordering, error handling, and logg
 - `*_count` suffix for totals
 
 ### Constants
-- `UPPER_SNAKE_CASE`, all in `const.py` -- no inline magic values anywhere (URLs, dataset resource IDs, parameter lists, thresholds, the WMO -> condition map, timeouts)
+- `UPPER_SNAKE_CASE`, centralized in `const.py` (URLs, dataset resource IDs, parameter lists, thresholds, the WMO -> condition map, timeouts) -- no inline magic values
+- One documented exception: `RATE_LIMIT_RETRY_MAX_S = 5.0` lives in `server.py`, since it governs presentation-layer retry policy rather than a data/derivation value
 - Test fixture data uses `SAMPLE_*` prefix
 
 ### Logger
@@ -67,7 +68,7 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 ### Error Handling
 - API modules raise typed exceptions for failure categories: timeout, rate-limit (429), out-of-domain (400 with "outside of dataset bounds"), generic client error
 - The **server layer** catches these and returns a short markdown error line -- tools never raise across the MCP boundary
-- GeoSphere out-of-domain is not an error at the orchestration layer: `weather.py` catches it and falls back to Open-Meteo
+- GeoSphere out-of-domain is not an error: `weather.py` raises `GeoSphereOutOfDomainError` and `server.py` catches it to fall back to Open-Meteo
 - `asyncio.timeout()` enforces per-request timeouts (30 s GeoSphere / 15 s Open-Meteo)
 
 ### Return Types
@@ -86,7 +87,7 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 
 ## Known Risks
 - `condition.py` duplicates HA condition string literals to stay import-free -- could drift if HA renames a condition.
-- Broad exception handling at the server layer could mask unexpected errors behind `⚠️ No data`.
+- Broad exception handling at the server layer could mask unexpected errors behind `⚠️ No weather data available`.
 
 ## Extension Guidelines
 - New functions follow the naming pattern for their category (see table above)
