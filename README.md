@@ -122,12 +122,13 @@ Hour-by-hour forecast. GeoSphere AROME (with C-LAEF precipitation probability) u
 
 AROME model, reference 2026-07-22 12:00 CEST · Source: GeoSphere (AROME + C-LAEF ensemble)
 
-15:00: 24.7°C — partlycloudy, wind 3 m/s
-16:00: 23.9°C — rainy, 1.2 mm (70% chance), wind 4 m/s
-17:00: 22.5°C — cloudy, wind 3 m/s
+Wed 2026-07-22
+  15:00: 24.7°C — partlycloudy, wind 3 m/s
+  16:00: 23.9°C — rainy, 1.2 mm (70% chance), wind 4 m/s
+  17:00: 22.5°C — cloudy, wind 3 m/s
 ```
 
-Requesting more hours than the AROME horizon provides appends a note suggesting `get_daily_forecast` for days further ahead. Dry hours omit the precipitation and probability parts.
+The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note suggesting `get_daily_forecast` for days further ahead. Dry hours omit the precipitation and probability parts.
 
 ### `get_daily_forecast`
 
