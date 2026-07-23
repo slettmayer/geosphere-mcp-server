@@ -192,6 +192,21 @@ async def test_async_get_daily_builds_params() -> None:
     assert "precipitation_probability_max" in params["daily"]
 
 
+@pytest.mark.asyncio
+async def test_async_get_daily_date_range_replaces_forecast_days() -> None:
+    """A start_date/end_date range sends those params instead of forecast_days."""
+    session = _make_session(json_data=SAMPLE_DAILY)
+
+    await async_get_daily(
+        session, 38.72, -9.14, start_date="2026-07-25", end_date="2026-07-26"
+    )
+
+    params = session.get.call_args.kwargs["params"]
+    assert params["start_date"] == "2026-07-25"
+    assert params["end_date"] == "2026-07-26"
+    assert "forecast_days" not in params
+
+
 # --- Error handling ---
 
 
