@@ -117,19 +117,28 @@ async def async_get_daily(
     latitude: float,
     longitude: float,
     days: int = 7,
+    start_date: str | None = None,
+    end_date: str | None = None,
     base_url: str = OPENMETEO_API_BASE_URL,
 ) -> dict[str, Any]:
     """Fetch the daily forecast worldwide.
 
-    Returns the raw Open-Meteo body containing ``daily``, ``daily_units``,
-    ``timezone`` and coordinate fields.
+    Pass ``days`` for a count from today, or both ``start_date`` and
+    ``end_date`` (ISO ``YYYY-MM-DD``) for an explicit calendar range; the range
+    takes precedence and replaces ``forecast_days``. Returns the raw Open-Meteo
+    body containing ``daily``, ``daily_units``, ``timezone`` and coordinate
+    fields.
     """
     params = {
         "latitude": str(latitude),
         "longitude": str(longitude),
         "daily": ",".join(OPENMETEO_DAILY_VARIABLES),
         "wind_speed_unit": OPENMETEO_WIND_SPEED_UNIT,
-        "forecast_days": str(max(days, 1)),
         "timezone": "auto",
     }
+    if start_date is not None and end_date is not None:
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+    else:
+        params["forecast_days"] = str(max(days, 1))
     return await _async_get(session, params, base_url)

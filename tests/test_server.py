@@ -275,3 +275,55 @@ async def test_daily_title_uses_clamped_days(days: int) -> None:
     with patch.object(openmeteo_api, "async_get_daily", om):
         out = await get_daily_forecast(LAT, LON, days=days)
     assert f"# {days}-Day Forecast" in out
+
+
+async def test_daily_date_range_happy_path() -> None:
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_DAILY)
+    with patch.object(openmeteo_api, "async_get_daily", om):
+        out = await get_daily_forecast(
+            LAT, LON, start_date="2026-07-25", end_date="2026-07-26"
+        )
+    assert om.await_args.kwargs["start_date"] == "2026-07-25"
+    assert om.await_args.kwargs["end_date"] == "2026-07-26"
+    assert "days" not in om.await_args.kwargs
+    # The two-day span drives the title and both days render.
+    assert "# 2-Day Forecast for 48.2208, 16.3738" in out
+    assert "Sat 2026-07-25:" in out
+    assert "Sun 2026-07-26:" in out
+
+
+async def test_daily_single_bound_defaults_to_one_day() -> None:
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_DAILY)
+    with patch.object(openmeteo_api, "async_get_daily", om):
+        out = await get_daily_forecast(LAT, LON, start_date="2026-07-25")
+    assert om.await_args.kwargs["start_date"] == "2026-07-25"
+    assert om.await_args.kwargs["end_date"] == "2026-07-25"
+    assert "# 1-Day Forecast" in out
+
+
+async def test_daily_range_clamped_to_16_days() -> None:
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_DAILY)
+    with patch.object(openmeteo_api, "async_get_daily", om):
+        await get_daily_forecast(
+            LAT, LON, start_date="2026-07-01", end_date="2026-08-01"
+        )
+    # Inclusive 16-day cap: 2026-07-01 + 15 days.
+    assert om.await_args.kwargs["end_date"] == "2026-07-16"
+
+
+async def test_daily_invalid_start_date_returns_error() -> None:
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_DAILY)
+    with patch.object(openmeteo_api, "async_get_daily", om):
+        out = await get_daily_forecast(LAT, LON, start_date="not-a-date")
+    assert out.startswith("⚠️ Invalid start_date")
+    om.assert_not_awaited()
+
+
+async def test_daily_end_before_start_returns_error() -> None:
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_DAILY)
+    with patch.object(openmeteo_api, "async_get_daily", om):
+        out = await get_daily_forecast(
+            LAT, LON, start_date="2026-07-26", end_date="2026-07-25"
+        )
+    assert out.startswith("⚠️ end_date")
+    om.assert_not_awaited()

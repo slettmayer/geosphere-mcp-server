@@ -138,7 +138,11 @@ Multi-day outlook, always from Open-Meteo (worldwide, including Austria).
 |-----------|------|---------|-------------|
 | `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
 | `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
-| `days` | int | 7 | Forecast days (clamped to 1–16) |
+| `days` | int | 7 | Forecast days from today (clamped to 1–16). Ignored when `start_date`/`end_date` are given |
+| `start_date` | str | — | Optional first forecast day, ISO `YYYY-MM-DD` |
+| `end_date` | str | — | Optional last forecast day (inclusive), ISO `YYYY-MM-DD`; defaults to `start_date`. Span capped at 16 days |
+
+Request either a count of days from today (`days`) or an explicit calendar range (`start_date`/`end_date`). The range is the reliable way to answer a named period — for "the weekend" or "next Tuesday", the caller resolves today's date, then passes the exact dates rather than converting the period into a day count.
 
 ```
 # 3-Day Forecast for 48.2208, 16.3738

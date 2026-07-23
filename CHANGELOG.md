@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0 - 2026-07-23
+
+- `get_daily_forecast` now accepts an explicit calendar range via optional `start_date`/`end_date` (ISO `YYYY-MM-DD`) in addition to the `days`-from-today count. The range takes precedence, defaults `end_date` to `start_date` (single day), and is capped at 16 days. This lets a caller answer a named period ("the weekend", "next Tuesday") by passing the exact dates instead of converting the period into an error-prone day count.
+
 ## 0.1.0 - 2026-07-22
 
 - Initial release

@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import aiohttp
 from mcp.server.fastmcp import FastMCP
@@ -48,7 +48,8 @@ mcp = FastMCP(
         "back to Open-Meteo, and each response states its source. Use "
         "get_current_weather for conditions now, get_hourly_forecast for the "
         "next hours (up to ~60 h on GeoSphere, 48 h on the Open-Meteo "
-        "fallback), and get_daily_forecast for a 1–16 day outlook worldwide."
+        "fallback), and get_daily_forecast for a 1–16 day outlook worldwide "
+        "(by a day count or an explicit start_date/end_date range)."
     ),
 )
 
@@ -111,6 +112,16 @@ def _parse_start(start: str | None) -> tuple[datetime | None, str | None]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed, None
+
+
+def _parse_date(value: str, label: str) -> tuple[date | None, str | None]:
+    """Parse an ISO calendar date; return (date, error-line-or-None)."""
+    try:
+        return date.fromisoformat(value), None
+    except ValueError:
+        return None, (
+            f"⚠️ Invalid {label} '{value}'; use an ISO 8601 date (e.g. 2026-07-25)"
+        )
 
 
 @mcp.tool()
@@ -200,27 +211,63 @@ async def get_hourly_forecast(
 
 
 @mcp.tool()
-async def get_daily_forecast(latitude: float, longitude: float, days: int = 7) -> str:
+async def get_daily_forecast(
+    latitude: float,
+    longitude: float,
+    days: int = 7,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> str:
     """Get a multi-day weather forecast for a location.
 
     Always served by Open-Meteo (worldwide, including Austria), covering 1–16
-    days with daily highs/lows, precipitation, and wind.
+    days with daily highs/lows, precipitation, and wind. Request either a count
+    of days from today (``days``) or an explicit calendar range
+    (``start_date``/``end_date``).
 
     Args:
         latitude: Decimal latitude (e.g. 48.2208 for Vienna). Geocode city
             names to coordinates yourself.
         longitude: Decimal longitude (e.g. 16.3738 for Vienna).
-        days: Number of forecast days (default 7, clamped to 1–16).
+        days: Number of forecast days from today (default 7, clamped to 1–16).
+            Ignored when start_date/end_date are given.
+        start_date: Optional first forecast day as an ISO date (YYYY-MM-DD).
+            For a named period like "the weekend" or "next Tuesday", call
+            GetDateTime first and pass the exact calendar dates here instead of
+            converting the period into a day count.
+        end_date: Optional last forecast day, inclusive (YYYY-MM-DD); defaults
+            to start_date (a single day). The range is capped at 16 days.
     """
-    clamped_days = _clamp(days, 1, OPENMETEO_MAX_DAYS)
+    if start_date is not None or end_date is not None:
+        raw_start = start_date if start_date is not None else end_date
+        raw_end = end_date if end_date is not None else start_date
+        start, error = _parse_date(raw_start, "start_date")
+        if error is not None:
+            return error
+        end, error = _parse_date(raw_end, "end_date")
+        if error is not None:
+            return error
+        if end < start:
+            return f"⚠️ end_date '{end}' is before start_date '{start}'"
+        # Cap the inclusive span at the Open-Meteo maximum, matching the
+        # silent clamp applied to the days count below.
+        end = min(end, start + timedelta(days=OPENMETEO_MAX_DAYS - 1))
+        render_days = (end - start).days + 1
+        api_kwargs: dict[str, object] = {
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+        }
+    else:
+        render_days = _clamp(days, 1, OPENMETEO_MAX_DAYS)
+        api_kwargs = {"days": render_days}
 
     async def work() -> str:
         async with aiohttp.ClientSession() as session:
             body = await openmeteo_api.async_get_daily(
-                session, latitude, longitude, days=clamped_days
+                session, latitude, longitude, **api_kwargs
             )
         return fmt.render_daily(
-            fmt.normalize_daily_openmeteo(body, latitude, longitude, clamped_days)
+            fmt.normalize_daily_openmeteo(body, latitude, longitude, render_days)
         )
 
     return await _guarded(work, note_daily=False)

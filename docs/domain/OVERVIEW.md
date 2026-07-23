@@ -58,7 +58,7 @@ Three distinct signals let a call degrade instead of failing:
 |------|-----------|---------|---------|
 | `get_current_weather` | `(latitude, longitude) -> str` | GeoSphere merge, else Open-Meteo | now |
 | `get_hourly_forecast` | `(latitude, longitude, hours=24, start=None) -> str` | GeoSphere AROME (+C-LAEF), else Open-Meteo | 1-60 h (GeoSphere) / 1-48 h (fallback) |
-| `get_daily_forecast` | `(latitude, longitude, days=7) -> str` | Open-Meteo only | 1-16 days |
+| `get_daily_forecast` | `(latitude, longitude, days=7, start_date=None, end_date=None) -> str` | Open-Meteo only | 1-16 days (by day count or explicit date range) |
 
 Location input is plain decimal `latitude`/`longitude` -- the calling LLM geocodes place names; there is no geocoder in the server. Output is compact emoji-markdown in metric units.
 
