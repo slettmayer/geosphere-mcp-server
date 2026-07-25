@@ -78,13 +78,16 @@ Each hour renders as `HH:MM: {temp}°C — {condition}, {precip} mm ({prob}% cha
 Precipitation is omitted when zero or unavailable, the probability is omitted when it is absent or zero,
 and the whole line degrades to `HH:MM: n/a` when there is no temperature.
 
-When fewer hours are returned than were requested, a trailing note is appended:
+When the **GeoSphere** path returns fewer hours than were requested, a trailing note is appended:
 `Note: AROME forecast horizon ends {timestamp} (~60 h); use get_daily_forecast for days further ahead.`
-An empty window renders `No forecast hours available for the requested window.`
+The Open-Meteo path never emits this note — a short window there is rendered without explanation. An empty
+window on either path renders `No forecast hours available for the requested window.`
 
 ### Daily Forecast Output
-Plain text, no emoji anywhere — including the attribution, which is `Source: Open-Meteo (Europe/Vienna)`
-with the timezone in parentheses and **no** `📡`.
+Plain text, no emoji anywhere — including the attribution, which is `Source: Open-Meteo ({timezone})` with
+**no** `📡`. The timezone in parentheses is whatever the response reported (Open-Meteo is queried with
+`timezone=auto`, so it reflects the requested coordinates), and it is omitted when the response carries
+none.
 
 Each day renders as
 `{Day} {YYYY-MM-DD}: {min}–{max}°C — {condition}, {precip} mm ({prob}% chance), wind up to {speed} m/s`,
