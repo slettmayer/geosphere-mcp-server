@@ -66,10 +66,11 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 - `noqa` comments used sparingly for intentional suppressions
 
 ### Error Handling
-- API modules raise typed exceptions for failure categories: connection failure (which **includes**
-  timeouts), rate-limit (429), out-of-domain (400 with "outside of dataset bounds"), generic client error
-- Each client wraps `TimeoutError` and `aiohttp.ClientError` into its own `*ConnectionError`; a timeout is
-  therefore never propagated as a bare `TimeoutError` (see [ARCHITECTURE.md](ARCHITECTURE.md))
+- API modules raise typed exceptions for failure categories: timeout, connection failure, rate-limit (429),
+  out-of-domain (400 with "outside of dataset bounds"), generic client error
+- Each client wraps `TimeoutError` into its own `*TimeoutError` and `aiohttp.ClientError` into its own
+  `*ConnectionError`; a bare `TimeoutError` is therefore never propagated to the server layer, which is
+  why that layer catches the typed timeouts explicitly (see [ARCHITECTURE.md](ARCHITECTURE.md))
 - The **server layer** catches these and returns a short markdown error line -- tools never raise across the MCP boundary
 - Argument validation happens in the tool body before any session is opened, and returns its own
   `⚠️ `-prefixed line rather than raising
@@ -94,8 +95,9 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 ## Known Risks
 - `condition.py` duplicates HA condition string literals to stay import-free -- could drift if HA renames a condition.
 - Broad exception handling at the server layer could mask unexpected errors behind
-  `⚠️ No weather data available`. It already does so for timeouts (see
-  [ARCHITECTURE.md](ARCHITECTURE.md) Known Risks).
+  `⚠️ No weather data available`; the warning log is the only signal.
+- A new API client that does not raise a dedicated `*TimeoutError` would have its timeouts silently folded
+  into that same generic line (see [ARCHITECTURE.md](ARCHITECTURE.md) Known Risks).
 - Constants can go stale without any signal: `INCA_MAX_AGE_SECONDS` sits in `const.py` unreferenced.
 
 ## Extension Guidelines

@@ -112,7 +112,8 @@ rate-limit retry policy.
 | Rate limit, retry-after known | `⚠️ GeoSphere rate limit exceeded (retry in {N}s)` |
 | Rate limit, no retry-after | `⚠️ GeoSphere rate limit exceeded (retry shortly)` |
 | Any of the above on current/hourly | gains the suffix `— get_daily_forecast still works (Open-Meteo).` |
-| Anything else, including timeouts | `⚠️ No weather data available` |
+| Timeout against either upstream API | `⚠️ Timeout fetching weather data` |
+| Anything else, including non-timeout network failures | `⚠️ No weather data available` |
 
 ## Dependencies
 - `server.py` owns argument parsing, validation, and clamping

@@ -13,6 +13,7 @@ from geosphere_mcp_server.geosphere_api import (
     GeoSphereConnectionError,
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
+    GeoSphereTimeoutError,
     _parse_geojson,
     async_get_timeseries,
 )
@@ -239,10 +240,10 @@ async def test_async_get_timeseries_server_error() -> None:
 
 @pytest.mark.asyncio
 async def test_async_get_timeseries_timeout() -> None:
-    """A timeout surfaces as GeoSphereConnectionError."""
+    """A timeout surfaces as GeoSphereTimeoutError (a GeoSphereConnectionError)."""
     session = _make_session(raise_error=TimeoutError())
 
-    with pytest.raises(GeoSphereConnectionError):
+    with pytest.raises(GeoSphereTimeoutError):
         await async_get_timeseries(
             session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
         )

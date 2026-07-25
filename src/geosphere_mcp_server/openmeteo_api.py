@@ -34,7 +34,11 @@ class OpenMeteoApiError(Exception):
 
 
 class OpenMeteoConnectionError(OpenMeteoApiError):
-    """Network-level failure (timeout / connection)."""
+    """Network-level failure."""
+
+
+class OpenMeteoTimeoutError(OpenMeteoConnectionError):
+    """Request exceeded ``OPENMETEO_TIMEOUT``."""
 
 
 async def _async_get(
@@ -54,7 +58,11 @@ async def _async_get(
                     else resp.status
                 )
                 raise OpenMeteoApiError(f"Open-Meteo API error: {reason}")
-    except (TimeoutError, aiohttp.ClientError) as err:
+    except TimeoutError as err:
+        raise OpenMeteoTimeoutError(
+            f"Timed out after {OPENMETEO_TIMEOUT}s talking to the Open-Meteo API"
+        ) from err
+    except aiohttp.ClientError as err:
         raise OpenMeteoConnectionError(
             f"Error connecting to the Open-Meteo API: {err}"
         ) from err

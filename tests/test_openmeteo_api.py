@@ -10,6 +10,7 @@ import pytest
 from geosphere_mcp_server.openmeteo_api import (
     OpenMeteoApiError,
     OpenMeteoConnectionError,
+    OpenMeteoTimeoutError,
     async_get_current,
     async_get_daily,
     async_get_hourly,
@@ -232,10 +233,10 @@ async def test_async_get_current_http_error() -> None:
 
 @pytest.mark.asyncio
 async def test_async_get_hourly_timeout() -> None:
-    """A timeout surfaces as OpenMeteoConnectionError."""
+    """A timeout surfaces as OpenMeteoTimeoutError (an OpenMeteoConnectionError)."""
     session = _make_session(raise_error=TimeoutError())
 
-    with pytest.raises(OpenMeteoConnectionError):
+    with pytest.raises(OpenMeteoTimeoutError):
         await async_get_hourly(session, 38.72, -9.14)
 
 

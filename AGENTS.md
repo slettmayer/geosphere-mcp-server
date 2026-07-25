@@ -83,9 +83,9 @@ indexes the per-concept files on data sources, condition derivation, and the too
 - `condition.py` duplicates HA `ATTR_CONDITION_*` string literals (to stay import-free) -- could drift if HA renames a condition
 - Rate limits (GeoSphere 5 req/s, 240 req/h) shared across all callers -- no server-side quota tracking
 - `RATE_LIMIT_RETRY_MAX_S` lives in `server.py`, not `const.py` -- the one magic value outside the central module (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
-- The `except TimeoutError` branch in `server.py` is unreachable -- both clients wrap timeouts into their
-  own `*ConnectionError`, so a timeout renders `⚠️ No weather data available`
-  (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
+- Clients never let a bare `TimeoutError` escape (each wraps it in a typed `*TimeoutError`), so the server
+  layer must catch those explicitly -- a new client that skips this regresses timeouts to the generic
+  "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
 - Several merged fields (dew point, CAPE, global radiation, hourly wind bearing) are computed and then
   dropped in normalization -- surfacing them is a `format.py` change only
 

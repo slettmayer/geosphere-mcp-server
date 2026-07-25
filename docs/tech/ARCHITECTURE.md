@@ -120,11 +120,13 @@ hardcoded bounding box.
 | Exception | Raised for | Caught by |
 |-----------|------------|-----------|
 | `GeoSphereApiError` | Base; also a rejected request or an unexpected HTTP status | `_guarded` generic handler |
-| `GeoSphereConnectionError` | Network failure **and timeouts** (`TimeoutError`/`aiohttp.ClientError` are wrapped) | `_guarded` generic handler |
+| `GeoSphereConnectionError` | Network failure (`aiohttp.ClientError` is wrapped) | `_guarded` generic handler |
+| `GeoSphereTimeoutError` | A `GEOSPHERE_TIMEOUT` breach; subclasses `GeoSphereConnectionError` | `_guarded` timeout handler |
 | `GeoSphereRateLimitError` | HTTP 429; carries a `retry_after` attribute | `_guarded` rate-limit handler |
 | `GeoSphereOutOfDomainError` | HTTP 400 containing "outside of dataset bounds" | each tool's `work()`, to trigger the fallback |
 | `OpenMeteoApiError` | Base; an error status or an unexpected response shape | `_guarded` generic handler |
-| `OpenMeteoConnectionError` | Network failure **and timeouts** | `_guarded` generic handler |
+| `OpenMeteoConnectionError` | Network failure (`aiohttp.ClientError` is wrapped) | `_guarded` generic handler |
+| `OpenMeteoTimeoutError` | An `OPENMETEO_TIMEOUT` breach; subclasses `OpenMeteoConnectionError` | `_guarded` timeout handler |
 
 **Validation lines** are returned by the tool body before `_guarded` runs and before any session opens:
 
@@ -144,14 +146,15 @@ An over-long `hours`, `days`, or date range is **clamped silently** rather than 
   `... (retry shortly)`. For the current and hourly tools it gains the suffix
   `— get_daily_forecast still works (Open-Meteo).` A failing retry is logged and the original rate-limit
   message is still returned.
+- a timeout -> `⚠️ Timeout fetching weather data`
 - anything else -> `⚠️ No weather data available` (logged at warning level)
 
-`_guarded` also has an `except TimeoutError` branch returning `⚠️ Timeout fetching weather data`, but it
-is **currently unreachable through the real call chain**: both clients wrap `TimeoutError` into their
-`*ConnectionError`, which does not subclass `TimeoutError`, so a genuine timeout falls through to the
-generic handler and renders `⚠️ No weather data available`. The server tests exercise that branch by
-injecting a bare `TimeoutError` into the orchestration layer, which is why the gap is not caught. See
-Known Risks.
+The timeout branch catches `GeoSphereTimeoutError` and `OpenMeteoTimeoutError` **as well as** a bare
+`TimeoutError`. This matters: the clients never let a bare `asyncio` timeout escape — each wraps it in its
+own typed error — so catching only the builtin would silently route every real timeout to the generic
+handler. Any new client must therefore either raise one of these timeout types or be added to that branch.
+A non-timeout network failure stays a plain `*ConnectionError` and is reported as "no weather data",
+because the caller can do nothing differently about it.
 
 GeoSphere out-of-domain is **not** an error -- `weather.py` raises `GeoSphereOutOfDomainError`, and each
 tool's `work()` catches it and falls back to Open-Meteo. Tools never raise across the MCP boundary.
@@ -175,10 +178,9 @@ tool's `work()` catches it and falls back to Open-Meteo. Tools never raise acros
 - Per-call session creation prevents HTTP connection reuse.
 - `condition.py` duplicates HA condition string literals to stay import-free -- could drift if HA renames a condition.
 - `RATE_LIMIT_RETRY_MAX_S` lives in `server.py`, not `const.py` -- a documented deviation from the "constants in `const.py` only" convention; move it if a second server-layer threshold appears.
-- The `except TimeoutError` branch in `_guarded` is unreachable because the clients wrap timeouts into
-  their own `*ConnectionError` types, so timeouts surface as the generic "no data" line. Fixing it means
-  either catching the connection errors explicitly at the server layer or having the clients re-raise a
-  `TimeoutError` subclass; the unit tests will not flag the current gap.
+- The timeout branch depends on each client raising a dedicated timeout type. A new client that wraps
+  timeouts into a plain connection error would silently regress to the generic "no data" line, since a
+  bare `TimeoutError` never reaches the server layer.
 - `INCA_MAX_AGE_SECONDS` in `const.py` is defined but never referenced -- leftover from the
   `ha-geosphere-next` port, implying a staleness check this stateless server does not perform.
 - The generic `except Exception` at the server layer can mask genuine defects behind
