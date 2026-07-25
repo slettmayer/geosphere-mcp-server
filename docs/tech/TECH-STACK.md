@@ -21,12 +21,19 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 - `from __future__ import annotations` required in every file
 
 ### Framework
-- **FastMCP** (`mcp[cli]`) -- MCP server framework. Exposes Python async functions as Model Context Protocol tools over stdio transport. Tools registered via `@mcp.tool()`. The framework handles protocol serialization, tool schema generation from type hints/docstrings, and transport lifecycle.
+- **FastMCP** (`mcp[cli]`) -- MCP server framework. Exposes Python async functions as Model Context
+  Protocol tools over stdio transport, registered via `@mcp.tool()`. The framework handles protocol
+  serialization, tool schema generation from type hints and docstrings, and the transport lifecycle.
 
 ### Build and Environment
 - **Hatchling** -- PEP 517 build backend declared in `pyproject.toml`
 - **hatch-vcs** -- single-sources the version from git tags into `src/geosphere_mcp_server/_version.py` (generated, gitignored)
 - **uv** -- environment and dependency management (`uv sync`); also the recommended runtime launcher (`uvx`). `uv.lock` is committed.
+- **`py.typed`** -- PEP 561 marker shipped inside the package so downstream consumers see the type hints
+- **`server.json`** -- the MCP Registry manifest describing the published server. Its version field is
+  rewritten by the release workflow, so it must stay in sync with the packaging metadata. The registry
+  enforces a description of 100 characters or fewer.
+- **`CHANGELOG.md`** -- maintained by hand per release and linked from the `pyproject.toml` project URLs
 
 ### Linting and Formatting
 - **ruff** -- single tool for both linting and formatting; configured in `pyproject.toml`
@@ -40,16 +47,27 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 - `asyncio.timeout` (stdlib, Python 3.11+) for timeout enforcement -- no `async_timeout` shim
 
 ### External APIs
-- **GeoSphere Austria Dataset API** (`https://dataset.api.hub.geosphere.at/v1`) -- keyless; rate limits 5 req/s, 240 req/h. Point queries via `GET /timeseries/{mode}/{resource_id}?parameters=...&lat_lon={lat},{lon}&output_format=geojson`. Out-of-bounds returns HTTP 400 with `"outside of dataset bounds"`. Datasets: AROME `forecast/nwp-v1-1h-2500m`, C-LAEF `forecast/ensemble-v1-1h-2500m`, INCA analysis `historical/inca-v1-1h-1km`, INCA nowcast `forecast/nowcast-v1-15min-1km`.
-- **Open-Meteo** (`https://api.open-meteo.com/v1/forecast`) -- keyless/free non-commercial, worldwide, up to 16 days; current + hourly + daily variables incl. precipitation probability and WMO weather codes, `timezone=auto`. Automatic fallback when a point is outside GeoSphere coverage, and the sole source for the daily tool.
+- **GeoSphere Austria Dataset API** (`https://dataset.api.hub.geosphere.at/v1`) -- keyless; rate limits
+  5 req/s and 240 req/h. Out-of-bounds points return HTTP 400 with `"outside of dataset bounds"`.
+  See [../domain/DATA-SOURCES-AND-COVERAGE.md](../domain/DATA-SOURCES-AND-COVERAGE.md) for the query
+  shape and the dataset catalog.
+- **Open-Meteo** (`https://api.open-meteo.com/v1/forecast`) -- keyless and free for non-commercial use,
+  worldwide, up to 16 days; current, hourly, and daily variables including precipitation probability and
+  WMO weather codes, with `timezone=auto`. It is the automatic fallback outside GeoSphere coverage and
+  the sole source for the daily tool.
 
 ### CI/CD
 - **GitHub Actions** -- `.github/workflows/validate.yml`
 - Triggers: push to `main` and all pull requests
 - Jobs: `ruff` (lint + format check), `test` (unit tests only), `gate` (fan-in that fails if either prior job fails; the single required status check)
 - Integration tests are excluded from CI
-- Release pipeline (`release.yml` on `v*` tags): `uv build` + tag/version check -> PyPI Trusted Publishing (OIDC) -> GitHub Release -> MCP Registry publish
+- Release pipeline (`release.yml` on `v*` tags), four jobs: `build` (`uv build` plus a tag/version
+  consistency check) -> `pypi-publish` (Trusted Publishing over OIDC) -> then `github-release` and
+  `mcp-registry` in **parallel**. The `mcp-registry` job rewrites the version in `server.json` and
+  publishes with the `mcp-publisher` CLI.
 - `auto-release.yml`: merged `dependabot/uv/*` PRs (or manual dispatch) cut the next patch tag
+- `.github/dependabot.yml`: weekly grouped updates for Python dependencies (`uv` ecosystem) and GitHub
+  Actions. Only the Python group feeds `auto-release.yml`.
 
 ### No Infrastructure
 No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed as a PyPI package, run locally via `uvx`.

@@ -13,7 +13,9 @@ context window on content that may not be relevant to the task. The architecture
 - **`docs/domain/*.md`** — domain docs loaded on demand when a task touches that topic. `README.md` in that folder is the index.
 - **Directory-scoped `AGENTS.md`** (with a sibling `CLAUDE.md` pointer) — loaded when working in that directory.
 
-This gives the agent the right information at the right time without burning context on irrelevant detail. CodeRabbit reviews against these docs and requests changes when they go stale — so keeping them current is enforced, not optional.
+This gives the agent the right information at the right time without burning context on irrelevant
+detail. CodeRabbit reviews against these docs and requests changes when they go stale — so keeping them
+current is enforced, not optional.
 
 ## File Locations and Scope
 
