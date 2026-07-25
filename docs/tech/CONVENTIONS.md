@@ -66,8 +66,14 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 - `noqa` comments used sparingly for intentional suppressions
 
 ### Error Handling
-- API modules raise typed exceptions for failure categories: timeout, rate-limit (429), out-of-domain (400 with "outside of dataset bounds"), generic client error
+- API modules raise typed exceptions for failure categories: timeout, connection failure, rate-limit (429),
+  out-of-domain (400 with "outside of dataset bounds"), generic client error
+- Each client wraps `TimeoutError` into its own `*TimeoutError` and `aiohttp.ClientError` into its own
+  `*ConnectionError`; a bare `TimeoutError` is therefore never propagated to the server layer, which is
+  why that layer catches the typed timeouts explicitly (see [ARCHITECTURE.md](ARCHITECTURE.md))
 - The **server layer** catches these and returns a short markdown error line -- tools never raise across the MCP boundary
+- Argument validation happens in the tool body before any session is opened, and returns its own
+  `⚠️ `-prefixed line rather than raising
 - GeoSphere out-of-domain is not an error: `weather.py` raises `GeoSphereOutOfDomainError` and `server.py` catches it to fall back to Open-Meteo
 - `asyncio.timeout()` enforces per-request timeouts (30 s GeoSphere / 15 s Open-Meteo)
 
@@ -77,7 +83,8 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 - Orchestration functions in `weather.py` return the assembled data structures consumed by `format.py`
 
 ## Dependencies
-- ruff enforces import ordering, line length, quote style, and pyupgrade rules
+- ruff enforces import ordering (`I`), line length and whitespace (`E`, `W`), unused/undefined names
+  (`F`), pyupgrade rewrites (`UP`), bugbear checks (`B`), and simplification hints (`SIM`)
 - `from __future__ import annotations` enables lowercase generics
 
 ## Design Decisions
@@ -87,7 +94,11 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 
 ## Known Risks
 - `condition.py` duplicates HA condition string literals to stay import-free -- could drift if HA renames a condition.
-- Broad exception handling at the server layer could mask unexpected errors behind `⚠️ No weather data available`.
+- Broad exception handling at the server layer could mask unexpected errors behind
+  `⚠️ No weather data available`; the warning log is the only signal.
+- A new API client that does not raise a dedicated `*TimeoutError` would have its timeouts silently folded
+  into that same generic line (see [ARCHITECTURE.md](ARCHITECTURE.md) Known Risks).
+- Constants can go stale without any signal: `INCA_MAX_AGE_SECONDS` sits in `const.py` unreferenced.
 
 ## Extension Guidelines
 - New functions follow the naming pattern for their category (see table above)

@@ -29,7 +29,9 @@ from geosphere_mcp_server.const import (
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
+    GeoSphereTimeoutError,
 )
+from geosphere_mcp_server.openmeteo_api import OpenMeteoTimeoutError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,7 +84,9 @@ async def _guarded(
     """
     try:
         return await work()
-    except TimeoutError:
+    except (TimeoutError, GeoSphereTimeoutError, OpenMeteoTimeoutError):
+        # The API clients wrap asyncio timeouts into their own typed errors, so
+        # both those and a bare TimeoutError must be handled here.
         return "⚠️ Timeout fetching weather data"
     except GeoSphereRateLimitError as err:
         retry_after = err.retry_after

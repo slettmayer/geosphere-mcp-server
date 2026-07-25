@@ -22,9 +22,14 @@
 | Know the tech stack | [TECH-STACK.md](docs/tech/TECH-STACK.md) |
 | Write or run tests | [TESTING.md](docs/tech/TESTING.md) |
 | Understand the business domain | [docs/domain/](docs/domain/README.md) |
+| Know a tool's signature, validation, or exact output | [OUTPUT-CONTRACT.md](docs/domain/OUTPUT-CONTRACT.md) |
+| Change a condition threshold or the merge chain | [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md) |
+| Add or bump a dataset, or check coverage rules | [DATA-SOURCES-AND-COVERAGE.md](docs/domain/DATA-SOURCES-AND-COVERAGE.md) |
 
 ## Architecture Overview
-FastMCP presentation layer over pure async API clients and pure derivation/rendering helpers. Purely functional -- no classes outside the `FastMCP` instance (only typed exceptions and small data holders). All code in `src/geosphere_mcp_server/`.
+FastMCP presentation layer over pure async API clients and pure derivation/rendering helpers. Purely
+functional -- no classes outside the `FastMCP` instance (only typed exceptions and small data holders).
+All code lives in `src/geosphere_mcp_server/`.
 
 - `server.py` -- FastMCP tool registration (3 tools), session lifecycle, GeoSphere-vs-Open-Meteo path selection + fallback, stdio entry point, sentinel error lines, `start`-argument parsing
 - `weather.py` -- merge chain, hourly assembly, POP mapping, unit conversions (orchestration)
@@ -61,9 +66,15 @@ See [Tech Stack](docs/tech/TECH-STACK.md) for full detail.
 See [Conventions](docs/tech/CONVENTIONS.md) for naming tables and full rules.
 
 ## Business Domain
-Weather MCP gateway. Three tools -- `get_current_weather`, `get_hourly_forecast`, `get_daily_forecast` -- matching the OWM server surface they replace. GeoSphere Austria's gridded datasets (AROME ~60 h, INCA analysis/nowcast, C-LAEF ensemble) drive current + hourly for Austria/the Alps; points outside coverage fall back to Open-Meteo automatically, and daily is always Open-Meteo (worldwide, 1-16 days). A shared HA-style condition vocabulary is derived physically on the GeoSphere path and mapped from WMO codes on the Open-Meteo path.
+Weather MCP gateway. Three tools -- `get_current_weather`, `get_hourly_forecast`, `get_daily_forecast` --
+match the OpenWeatherMap server surface they replace. GeoSphere Austria's gridded datasets (AROME ~60 h,
+INCA analysis/nowcast, C-LAEF ensemble) drive current + hourly for Austria and the Alps; points outside
+coverage fall back to Open-Meteo automatically, and daily is always Open-Meteo (worldwide, 1-16 days).
+A shared Home Assistant-style condition vocabulary is derived physically on the GeoSphere path and mapped
+from WMO codes on the Open-Meteo path.
 
-See [Domain Overview](docs/domain/OVERVIEW.md) for datasets, coverage, condition derivation, and attribution.
+See [Domain Overview](docs/domain/OVERVIEW.md) for the concept catalogue, API surfaces, and glossary; it
+indexes the per-concept files on data sources, condition derivation, and the tool/output contract.
 
 ## Structural Risks
 - GeoSphere dataset resource IDs are versioned -- a catalog rotation breaks the server until IDs in `const.py` are bumped
@@ -72,6 +83,11 @@ See [Domain Overview](docs/domain/OVERVIEW.md) for datasets, coverage, condition
 - `condition.py` duplicates HA `ATTR_CONDITION_*` string literals (to stay import-free) -- could drift if HA renames a condition
 - Rate limits (GeoSphere 5 req/s, 240 req/h) shared across all callers -- no server-side quota tracking
 - `RATE_LIMIT_RETRY_MAX_S` lives in `server.py`, not `const.py` -- the one magic value outside the central module (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
+- Clients never let a bare `TimeoutError` escape (each wraps it in a typed `*TimeoutError`), so the server
+  layer must catch those explicitly -- a new client that skips this regresses timeouts to the generic
+  "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
+- Several merged fields (dew point, CAPE, global radiation, hourly wind bearing) are computed and then
+  dropped in normalization -- surfacing them is a `format.py` change only
 
 ## Detailed Guides
 - [Technical Context](docs/tech/README.md) -- architecture, tech stack, conventions, testing

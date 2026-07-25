@@ -30,6 +30,10 @@ class GeoSphereConnectionError(GeoSphereApiError):
     """Network-level failure."""
 
 
+class GeoSphereTimeoutError(GeoSphereConnectionError):
+    """Request exceeded ``GEOSPHERE_TIMEOUT``."""
+
+
 class GeoSphereRateLimitError(GeoSphereApiError):
     """HTTP 429 — request budget exceeded (5 req/s, 240 req/h)."""
 
@@ -127,7 +131,11 @@ async def async_get_timeseries(
                     f"GeoSphere API returned HTTP {resp.status} for {resource_id}"
                 )
             body = await resp.json()
-    except (TimeoutError, aiohttp.ClientError) as err:
+    except TimeoutError as err:
+        raise GeoSphereTimeoutError(
+            f"Timed out after {GEOSPHERE_TIMEOUT}s talking to the GeoSphere API"
+        ) from err
+    except aiohttp.ClientError as err:
         raise GeoSphereConnectionError(
             f"Error connecting to the GeoSphere API: {err}"
         ) from err

@@ -16,7 +16,9 @@ from geosphere_mcp_server import openmeteo_api, weather
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
+    GeoSphereTimeoutError,
 )
+from geosphere_mcp_server.openmeteo_api import OpenMeteoTimeoutError
 from geosphere_mcp_server.server import (
     get_current_weather,
     get_daily_forecast,
@@ -145,6 +147,17 @@ async def test_current_timeout_returns_warning() -> None:
     assert out == "⚠️ Timeout fetching weather data"
 
 
+async def test_current_client_timeout_returns_warning() -> None:
+    """The client's wrapped timeout must reach the timeout line, not the
+
+    generic "no data" line -- the API layer never raises a bare TimeoutError.
+    """
+    fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
+    with patch.object(weather, "async_fetch_current_conditions", fetch):
+        out = await get_current_weather(LAT, LON)
+    assert out == "⚠️ Timeout fetching weather data"
+
+
 async def test_current_unexpected_error_returns_warning() -> None:
     fetch = AsyncMock(side_effect=ValueError("boom"))
     with patch.object(weather, "async_fetch_current_conditions", fetch):
@@ -264,6 +277,14 @@ async def test_daily_clamps_days_to_16() -> None:
 
 async def test_daily_timeout_returns_warning() -> None:
     om = AsyncMock(side_effect=TimeoutError())
+    with patch.object(openmeteo_api, "async_get_daily", om):
+        out = await get_daily_forecast(LAT, LON)
+    assert out == "⚠️ Timeout fetching weather data"
+
+
+async def test_daily_client_timeout_returns_warning() -> None:
+    """As above for the Open-Meteo client's wrapped timeout."""
+    om = AsyncMock(side_effect=OpenMeteoTimeoutError("timed out"))
     with patch.object(openmeteo_api, "async_get_daily", om):
         out = await get_daily_forecast(LAT, LON)
     assert out == "⚠️ Timeout fetching weather data"
