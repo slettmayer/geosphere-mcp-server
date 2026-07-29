@@ -17,8 +17,8 @@ Documents the project structure, module boundaries, layering, and data flow.
 ## Overview
 
 ### Architectural Pattern
-Layered functional design: a FastMCP presentation layer over pure async API clients plus pure derivation
-and rendering helpers. Purely functional -- no classes outside the `FastMCP` instance, aside from the
+Layered functional design: an MCP presentation layer over pure async API clients plus pure derivation
+and rendering helpers. Purely functional -- no classes outside the `MCPServer` instance, aside from the
 typed exceptions and two small `@dataclass(slots=True)` response holders in `geosphere_api.py`. The API
 clients and the `condition`/`weather`/`format` helpers carry no MCP or Home Assistant imports, so they are
 independently testable and portable.
@@ -27,7 +27,7 @@ independently testable and portable.
 ```
 src/geosphere_mcp_server/
   __init__.py          -- version string only (importlib.metadata, fallback "0.0.0+unknown")
-  server.py            -- FastMCP tool registration, session lifecycle, entry point
+  server.py            -- MCPServer tool registration, session lifecycle, entry point
   weather.py           -- merge chain, hourly assembly, POP mapping, unit conversions
   geosphere_api.py     -- pure async client for the GeoSphere Dataset API
   openmeteo_api.py     -- pure async client for Open-Meteo
@@ -91,7 +91,7 @@ One module per responsibility. No sub-packages.
 ```
 LLM client
   -> stdio transport
-    -> FastMCP framework (server.py)
+    -> MCPServer framework (server.py)
       -> @mcp.tool() handler creates aiohttp.ClientSession
         -- GeoSphere path --
         -> weather.py  (geosphere_api HTTP + parse -> condition.py derive -> merged dict)

@@ -17,10 +17,10 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 
 import aiohttp
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
+from geosphere_mcp_server import __version__, openmeteo_api, weather
 from geosphere_mcp_server import format as fmt
-from geosphere_mcp_server import openmeteo_api, weather
 from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
     OPENMETEO_MAX_DAYS,
@@ -39,8 +39,11 @@ _LOGGER = logging.getLogger(__name__)
 # no longer than this; otherwise surface the limit to the caller immediately.
 RATE_LIMIT_RETRY_MAX_S = 5.0
 
-mcp = FastMCP(
+mcp = MCPServer(
     "geosphere",
+    # v2 advertises this verbatim and defaults it to "" (v1 had no such
+    # parameter and reported the SDK's own version instead).
+    version=__version__,
     instructions=(
         "Weather forecasts, current conditions, and multi-day outlooks for any "
         "location worldwide. Pass a decimal latitude and longitude — geocode "

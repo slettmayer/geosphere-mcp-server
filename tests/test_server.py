@@ -1,8 +1,9 @@
-"""Tests for the FastMCP tool functions in server.py.
+"""Tests for the MCP tool functions in server.py.
 
 The GeoSphere fetch helpers (``weather.async_fetch_*``) and the Open-Meteo
 clients (``openmeteo_api.async_get_*``) are patched; the tool functions are
-called directly (FastMCP's ``@mcp.tool()`` returns the plain coroutine).
+called directly, which works because ``@mcp.tool()`` registers the function
+and returns it undecorated rather than wrapping it.
 """
 
 from __future__ import annotations

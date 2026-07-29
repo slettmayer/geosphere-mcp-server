@@ -27,11 +27,11 @@
 | Add or bump a dataset, or check coverage rules | [DATA-SOURCES-AND-COVERAGE.md](docs/domain/DATA-SOURCES-AND-COVERAGE.md) |
 
 ## Architecture Overview
-FastMCP presentation layer over pure async API clients and pure derivation/rendering helpers. Purely
-functional -- no classes outside the `FastMCP` instance (only typed exceptions and small data holders).
+MCP presentation layer over pure async API clients and pure derivation/rendering helpers. Purely
+functional -- no classes outside the `MCPServer` instance (only typed exceptions and small data holders).
 All code lives in `src/geosphere_mcp_server/`.
 
-- `server.py` -- FastMCP tool registration (3 tools), session lifecycle, GeoSphere-vs-Open-Meteo path selection + fallback, stdio entry point, sentinel error lines, `start`-argument parsing
+- `server.py` -- MCPServer tool registration (3 tools), session lifecycle, GeoSphere-vs-Open-Meteo path selection + fallback, stdio entry point, sentinel error lines, `start`-argument parsing
 - `weather.py` -- merge chain, hourly assembly, POP mapping, unit conversions (orchestration)
 - `geosphere_api.py` -- pure async client for the GeoSphere Dataset API
 - `openmeteo_api.py` -- pure async client for Open-Meteo (current/hourly/daily)
@@ -47,7 +47,7 @@ See [Architecture](docs/tech/ARCHITECTURE.md) for module boundaries and data flo
 
 ## Tech Stack
 - Python 3.12+, `from __future__ import annotations` in every file
-- `mcp[cli]` (FastMCP) for MCP server framework
+- `mcp[cli]` (`mcp.server.MCPServer`) for MCP server framework -- v2 line, pinned `>=2,<3`
 - `aiohttp` for async HTTP, `astral` for day/night
 - `ruff` for linting/formatting, `pytest` + `pytest-asyncio` for testing
 - `uv` for environment management, `hatchling` + `hatch-vcs` build backend
