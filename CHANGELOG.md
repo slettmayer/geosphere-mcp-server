@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: constrained `mcp[cli]` to `>=1.28.1,<2`. The mcp 2.0.0 release (2026-07-28) reworked the SDK and removed `mcp.server.fastmcp`, so any fresh install resolved a version this server cannot import. CI caught it as an unrelated-looking `ModuleNotFoundError` on a dependency-bump PR.
+- Changed: the CI `test` job now installs with `uv sync --locked` instead of `pip install -e .`. The previous command ignored the committed `uv.lock` entirely, so dependency bumps were never actually exercised by CI and unpinned upstream releases could break the build without any change to this repo.
 - Fixed: a request that timed out reported `⚠️ No weather data available` instead of `⚠️ Timeout fetching weather data`. Both API clients wrapped `TimeoutError` into their own connection error, which does not subclass `TimeoutError`, so the server's timeout branch was never reached. Each client now raises a dedicated `GeoSphereTimeoutError` / `OpenMeteoTimeoutError` (both still subclasses of the respective connection error), and the server catches those alongside the builtin.
 
 ## 0.2.0 - 2026-07-23
