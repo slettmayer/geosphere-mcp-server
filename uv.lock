@@ -455,7 +455,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.0.0" },
     { name = "astral", specifier = ">=3.2" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.28.1" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.28.1,<2" },
 ]
 
 [package.metadata.requires-dev]
