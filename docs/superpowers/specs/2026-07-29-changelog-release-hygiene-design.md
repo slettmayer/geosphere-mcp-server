@@ -153,7 +153,7 @@ Index it in `docs/tech/README.md`, and add a one-liner plus link in `AGENTS.md` 
 
 | Risk | Handling |
 |---|---|
-| Branch protection added to `main` later | The workflow pushes to `main`, unprotected today. Adding the handover's rule needs App-token bypass or this breaks. Noted in `RELEASING.md`. |
+| `main` write access | **Corrected:** `main` *is* protected, by a ruleset — not classic protection, whose API 404s here. The release App needs a ruleset bypass, else step 3 fails `GH013`. |
 | Workflow re-triggering itself | None. `auto-release.yml` triggers on `pull_request: closed` and `workflow_dispatch`, not `push`, so its own commit cannot start another run. |
 | Human already wrote the section | The idempotency check in step 2 makes the script a no-op. |
 | Extra CI run from the changelog commit | `validate.yml` runs on `push` to `main`; the commit triggers one harmless extra run. Accepted. |
