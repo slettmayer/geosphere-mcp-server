@@ -13,6 +13,7 @@
 - **Test (integration, live APIs)**: `pytest tests/ -v -m integration`
 - **Run server**: `uvx --from . geosphere-mcp-server` or `python -m geosphere_mcp_server.server`
 - **Validate (CI)**: Ruff + pytest unit tests (all must pass via the `gate` job)
+- **Release**: run the Auto Release workflow; the version comes from the git tag -- see [RELEASING.md](docs/tech/RELEASING.md)
 
 ## Where to Find Things
 | I need to... | Read |
@@ -21,6 +22,7 @@
 | Write code that fits conventions | [CONVENTIONS.md](docs/tech/CONVENTIONS.md) |
 | Know the tech stack | [TECH-STACK.md](docs/tech/TECH-STACK.md) |
 | Write or run tests | [TESTING.md](docs/tech/TESTING.md) |
+| Cut a release, or add a changelog entry | [RELEASING.md](docs/tech/RELEASING.md) |
 | Understand the business domain | [docs/domain/](docs/domain/README.md) |
 | Know a tool's signature, validation, or exact output | [OUTPUT-CONTRACT.md](docs/domain/OUTPUT-CONTRACT.md) |
 | Change a condition threshold or the merge chain | [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md) |
