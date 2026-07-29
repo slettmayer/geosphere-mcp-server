@@ -83,7 +83,8 @@ No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed a
   **mcp 2.0.0** (2026-07-28) removed `mcp.server.fastmcp` and replaced `FastMCP` with
   `mcp.server.MCPServer`. Bump the bound deliberately, not via Dependabot -- see the
   [migration guide](https://py.sdk.modelcontextprotocol.io/migration/).
-- Dev: `pytest`, `pytest-asyncio`; `ruff` (installed in CI)
+- Dev: `pytest`, `pytest-asyncio`, `ruff` -- all in the `dev` group and pinned by `uv.lock`, so CI lints
+  and tests with the same versions used locally
 - External: GeoSphere Austria Dataset API, Open-Meteo
 
 ## Design Decisions
