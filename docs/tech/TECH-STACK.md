@@ -60,6 +60,9 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 - **GitHub Actions** -- `.github/workflows/validate.yml`
 - Triggers: push to `main` and all pull requests
 - Jobs: `ruff` (lint + format check), `test` (unit tests only), `gate` (fan-in that fails if either prior job fails; the single required status check)
+- The `test` job installs via `uv sync --locked`, so it uses the committed `uv.lock` exactly and fails if
+  the lock has drifted from `pyproject.toml`. This is what makes Dependabot's `uv.lock` bumps meaningful --
+  an unlocked install would silently resolve different versions than the ones under review.
 - Integration tests are excluded from CI
 - Release pipeline (`release.yml` on `v*` tags), four jobs: `build` (`uv build` plus a tag/version
   consistency check) -> `pypi-publish` (Trusted Publishing over OIDC) -> then `github-release` and
@@ -73,7 +76,10 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed as a PyPI package, run locally via `uvx`.
 
 ## Dependencies
-- Runtime: `mcp[cli]>=1.28.1`, `aiohttp>=3.0.0`, `astral>=3.2`
+- Runtime: `mcp[cli]>=1.28.1,<2`, `aiohttp>=3.0.0`, `astral>=3.2`
+- The `mcp` upper bound is deliberate: **mcp 2.0.0** (2026-07-28) reworked the SDK and removed
+  `mcp.server.fastmcp`, which `server.py` imports. Do not relax it until the server is migrated to
+  `mcp.server.MCPServer` -- see the [migration guide](https://py.sdk.modelcontextprotocol.io/migration/).
 - Dev: `pytest`, `pytest-asyncio`; `ruff` (installed in CI)
 - External: GeoSphere Austria Dataset API, Open-Meteo
 
