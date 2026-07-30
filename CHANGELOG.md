@@ -7,6 +7,16 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Added: `tests/test_server_json.py` validates `server.json` against the MCP Registry's publish
+  constraints -- description length, package identifier, transport, OIDC namespace, and the `mcp-name:`
+  ownership marker in the README. The registry only validates at publish time, after the PyPI upload has
+  succeeded and the tag is immovable, so a rejection there cannot be re-run and costs a version number;
+  the sibling `calc-mcp-server` burned two that way. This repo already satisfies every check (the
+  description is 98 characters, two under the cap) -- the tests stop a future edit crossing it.
+- Added: `.python-version` pinning local development to 3.12, the version CI installs. Without it `uv`
+  picks the newest interpreter present, so local and CI silently diverge -- stdlib `math` error messages
+  were reworded after 3.12, so a test asserting on them passes locally and fails in CI.
+
 ## 0.3.1 - 2026-07-29
 
 - Added: releases now file their own changelog section. `auto-release.yml` runs `scripts/changelog_release.py` to move `## Unreleased` entries under the version being cut and append a `- Build:` line per Dependabot commit, then commits that before tagging. Previously it tagged without touching `CHANGELOG.md`, which is why 0.1.1, 0.1.2 and 0.2.1 were published with no section at all.
