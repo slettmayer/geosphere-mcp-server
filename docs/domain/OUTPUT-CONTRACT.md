@@ -76,6 +76,13 @@ formatted `%a %Y-%m-%d` (for example `Sat 2026-07-25`) is emitted and the hour l
 indented by two spaces. The grouping lives in the shared renderer, so it applies identically to the
 GeoSphere and Open-Meteo paths.
 
+**The series starts with the hour already under way**, not the next one: the window floors to the top of
+the current hour, so a request at 15:50 leads with the 15:00 line. Both source paths behave this way (the
+GeoSphere path needs an hour of lookback to manage it — see [STORM-OUTLOOK.md](STORM-OUTLOOK.md)), matching
+the OpenWeatherMap server this one replaces. `hours=N` therefore yields the in-progress hour plus `N - 1`
+later ones, and the leading hour's precipitation figure covers the whole hour, including the part of it
+that has already elapsed.
+
 Each hour renders as `HH:MM: {temp}°C — {condition}, {precip} mm ({prob}% chance), wind {speed} m/s`.
 Precipitation is omitted when zero or unavailable, the probability is omitted when it is absent or zero,
 and the whole line degrades to `HH:MM: n/a` when there is no temperature.
@@ -107,8 +114,9 @@ CAPE, `none in the forecast horizon` when the series is readable and calm, or
 `unknown (no usable forecast hours)` when no hour ahead can be judged at all. `🌡️ Max CAPE next 12 h` is omitted when unavailable. A
 `🕐 Timezone` line closes the block.
 
-A trailing note always explains the round-up horizon and the storm-in-progress timestamp; on the Open-Meteo
-A series with no hours at
+A trailing note always explains the round-up horizon and the storm-in-progress timestamp. It is identical
+on both source paths — the outlook carries no source-specific caveat, because both sources supply
+convective inhibition. A series with no hours at
 all renders `No forecast hours available for the outlook window.` See
 [STORM-OUTLOOK.md](STORM-OUTLOOK.md) for the semantics behind each figure.
 
@@ -123,9 +131,9 @@ forecasts rather than station measurements. With neither AQI nor concentrations 
 
 ### Values Computed but Never Rendered
 Several merged and assembled fields are dropped during normalization and never appear in any output.
-Current weather drops dew point, global radiation, snow limit, CAPE, precipitation type, and the
+Current weather drops dew point, global radiation, snow limit, CAPE, CIN, precipitation type, and the
 precipitation flag. The hourly path additionally computes wind bearing, wind gust, dew point, humidity,
-cloud cover, snowfall, snow limit, CAPE, and global radiation, of which the renderer reads only time,
+cloud cover, snowfall, snow limit, CAPE, CIN, and global radiation, of which the renderer reads only time,
 temperature, condition, precipitation, probability, and wind speed. Surfacing any of them is a renderer
 change only — the data is already assembled.
 

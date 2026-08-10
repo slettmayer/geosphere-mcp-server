@@ -212,12 +212,19 @@ def _arome_current(
     arome: GeoSphereResponse | None,
     now: datetime,
 ) -> dict[str, Any] | None:
-    """AROME "step 0" snapshot — first future hour — for the fallback chain."""
+    """AROME snapshot of the hour in progress, for the fallback chain.
+
+    Scans from index 0, unlike :func:`assemble_hourly_forecast`: every field
+    read here is instantaneous, so none of them needs a predecessor step. The
+    API trims the series to the current hour, so skipping index 0 would read
+    cloud, CAPE and CIN from the hour *after* now — and CIN gates the current
+    condition's thunder verdict.
+    """
     if arome is None:
         return None
     cutoff = now.replace(minute=0, second=0, microsecond=0)
     index: int | None = None
-    for i in range(1, len(arome.timestamps)):
+    for i in range(len(arome.timestamps)):
         if arome.timestamps[i] >= cutoff:
             index = i
             break

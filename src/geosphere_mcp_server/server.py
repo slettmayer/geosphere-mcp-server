@@ -230,10 +230,10 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
     CAPE over the next 12 hours. Deliberately reports no severity verdict —
     what counts as dangerous is the caller's judgement.
 
-    High-resolution GeoSphere AROME data (CAPE gated by convective inhibition)
-    is used inside its Austria/Alps coverage; elsewhere the tool falls back to
-    Open-Meteo, which publishes no inhibition and therefore judges thunder on
-    CAPE alone. The response states which source served it.
+    High-resolution GeoSphere AROME data is used inside its Austria/Alps
+    coverage; elsewhere the tool falls back to Open-Meteo. Both sources supply
+    convective inhibition, so CAPE is gated the same way on either path. The
+    response states which source served it.
 
     Horizons round up to whole hours: the "next hour" window covers the hour
     already under way plus the next one. A thunderstorm timestamp at or before

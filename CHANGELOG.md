@@ -43,6 +43,16 @@ version being cut, so you never rename that heading by hand. See
   invisible. One hour of history is now requested alongside the forecast,
   anchored to the top of the hour rather than to `now` (the API rounds `start` up to the next whole
   stamp, so `now - 1h` at 15:30 would come back as 15:00 and change nothing).
+- Changed: the hourly forecast now starts with the hour already under way rather than the next one, so
+  `hours=N` returns the in-progress hour plus `N - 1` later ones. This is a consequence of the lookback
+  fix above and it aligns the GeoSphere path with the Open-Meteo path, which always included the current
+  hour, and with `ha-geosphere-next`. The leading hour's precipitation figure covers the whole hour,
+  including the part already elapsed.
+- Fixed: the current condition no longer reads cloud cover, CAPE and CIN from the hour *after* now. The
+  AROME snapshot used for the fallback chain skipped index 0, copying the hourly path's need for an
+  accumulation predecessor -- but every field it reads is instantaneous, and the API trims the series to
+  the current hour. With the new CIN gate gating the thunder verdict, that meant a storm under way could
+  be reported as plain rain because the *next* hour was capped.
 - Fixed: `⚡ Next thunderstorm` now reports `unknown (no usable forecast hours)` instead of a confident
   `none in the forecast horizon` when no forecast hour ahead can be judged. The underlying scan returns
   the same empty result for "no storm" and "nothing readable here", so a response could declare the

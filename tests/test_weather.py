@@ -478,3 +478,46 @@ async def test_async_fetch_hourly_keeps_the_in_progress_hour() -> None:
     assert result["hourly"][0]["time"] == top_of_hour
     # And it carries a real accumulation delta rather than a None hole.
     assert result["hourly"][0]["precipitation_mm"] is not None
+
+
+def test_arome_current_reads_the_hour_in_progress() -> None:
+    """The snapshot must not skip index 0 when the API trims to the current hour.
+
+    The live forecast endpoint starts the series at the current top-of-hour, so
+    a `range(1, ...)` scan lands on the hour *after* now. Every field read here
+    is instantaneous -- unlike the accumulation deltas that force the hourly
+    assembly to skip its first step -- and CIN from the wrong hour flips the
+    current condition's thunder verdict.
+    """
+    trimmed = _response(
+        "nwp-v1-1h-2500m",
+        _ts((15, 0), (16, 0)),  # NOW is 15:30, so index 0 is the hour under way
+        {
+            "t2m": [20.0, 30.0],
+            "tcc": [0.9, 0.1],
+            "cape": [1800.0, 50.0],
+            "cin": [-5.0, -400.0],
+        },
+    )
+    current = weather._arome_current(trimmed, NOW)
+    assert current is not None
+    assert current["temperature"] == 20.0
+    assert current["cape"] == 1800.0
+    assert current["cin"] == -5.0
+
+
+def test_merge_current_gates_thunder_on_the_current_hour() -> None:
+    """A storm under way is not cancelled by the next hour being capped."""
+    trimmed = _response(
+        "nwp-v1-1h-2500m",
+        _ts((15, 0), (16, 0)),
+        {
+            "t2m": [20.0, 20.0],
+            "tcc": [0.9, 0.9],
+            "cape": [1800.0, 1800.0],
+            "cin": [-5.0, -400.0],  # uncapped now, strongly capped next hour
+        },
+    )
+    merged = merge_current_conditions(None, None, trimmed, 48.219, 16.362, NOW)
+    assert merged["cin_jkg"] == -5.0
+    assert merged["condition"] == "lightning"

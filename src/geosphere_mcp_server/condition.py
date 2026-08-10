@@ -77,10 +77,13 @@ def dew_point_from_t_rh(
 def is_thunder(cape: float | None, cin: float | None) -> bool:
     """True when CAPE is sufficient AND convective inhibition is weak enough.
 
-    AROME publishes `cin` as negative J/kg (0.0 = uncapped). A missing value is
-    treated as uncapped so behaviour degrades to the pre-CIN logic — which is
-    what the Open-Meteo path relies on, its forecast endpoint publishing CAPE
-    but no inhibition.
+    Takes `cin` in the AROME convention: negative J/kg, `0.0` uncapped, more
+    negative a stronger lid. Open-Meteo publishes the same quantity as a
+    positive magnitude, and `format.openmeteo_hourly_rows` negates it before it
+    reaches here, so this function only ever sees one sign convention.
+
+    A missing value is treated as uncapped, so an hour whose source leaves the
+    field blank degrades to the pre-CIN, CAPE-only logic.
     """
     if cape is None or cape < THUNDER_CAPE_JKG:
         return False
