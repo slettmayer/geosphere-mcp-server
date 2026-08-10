@@ -17,6 +17,7 @@ from geosphere_mcp_server.format import (
     normalize_hourly_openmeteo,
     normalize_outlook_geosphere,
     normalize_outlook_openmeteo,
+    openmeteo_hourly_rows,
     render_air_quality,
     render_current,
     render_daily,
@@ -378,7 +379,6 @@ def test_normalize_outlook_geosphere_localizes_only_the_output() -> None:
     assert data["next_thunderstorm_at"].hour == 20  # 18:00Z -> 20:00 CEST
     assert data["next_thunderstorm_cape_jkg"] == 1800.0
     assert data["max_cape_long_jkg"] == 1800.0
-    assert data["has_inhibition"] is True
 
 
 def test_render_outlook_geosphere() -> None:
@@ -392,8 +392,6 @@ def test_render_outlook_geosphere() -> None:
     assert "⛈️ Thunderstorm expected next 1 h: no" in out
     assert "⚡ Next thunderstorm: Wed 2026-07-15 20:00 (CAPE 1800 J/kg)" in out
     assert "🌡️ Max CAPE next 12 h: 1800 J/kg" in out
-    # The GeoSphere path has inhibition, so no CAPE-only caveat.
-    assert "no convective inhibition" not in out
 
 
 def test_render_outlook_reports_unknowns_distinctly() -> None:
@@ -407,7 +405,24 @@ def test_render_outlook_reports_unknowns_distinctly() -> None:
     out = render_outlook(data)
     assert "💨 Max gust next 1 h: unknown" in out
     assert "⛈️ Thunderstorm expected next 1 h: unknown (no usable forecast hours)" in out
+    # An unreadable series must not render a confident all-clear.
+    assert "⚡ Next thunderstorm: unknown (no usable forecast hours)" in out
+
+
+def test_render_outlook_reports_a_readable_calm_series_as_no_storm() -> None:
+    """A decidable series with no storm still gets the confident "none"."""
+    data = normalize_outlook_geosphere(
+        {
+            "sources": ["AROME"],
+            "hourly": [_geosphere_hour(0, condition="cloudy", cape=100.0, cin=0.0)],
+        },
+        LAT,
+        LON,
+        now=NOW_OUTLOOK,
+    )
+    out = render_outlook(data)
     assert "⚡ Next thunderstorm: none in the forecast horizon" in out
+    assert "⛈️ Thunderstorm expected next 1 h: no" in out
 
 
 def test_render_outlook_without_any_hours() -> None:
@@ -428,11 +443,13 @@ SAMPLE_OUTLOOK_OPENMETEO = {
         "precipitation": [0.0, 0.0, 4.0],
         "wind_gusts_10m": [9.0, 14.0, 26.0],
         "cape": [200.0, 500.0, 2000.0],
+        # Open-Meteo reports inhibition as a positive magnitude.
+        "convective_inhibition": [10.0, 10.0, 5.0],
     },
 }
 
 
-def test_normalize_outlook_openmeteo_uses_local_time_and_flags_missing_cin() -> None:
+def test_normalize_outlook_openmeteo_uses_local_time() -> None:
     """Open-Meteo rows are naive local, so `now` is converted before comparing."""
     data = normalize_outlook_openmeteo(
         SAMPLE_OUTLOOK_OPENMETEO, LAT, LON, now=NOW_OUTLOOK
@@ -440,15 +457,41 @@ def test_normalize_outlook_openmeteo_uses_local_time_and_flags_missing_cin() -> 
     assert data["max_gust_short_ms"] == 14.0
     assert data["max_gust_long_ms"] == 26.0
     assert data["next_thunderstorm_at"] == datetime(2026, 7, 15, 19, 0)
-    assert data["has_inhibition"] is False
 
 
-def test_render_outlook_openmeteo_carries_the_cape_only_caveat() -> None:
+def test_openmeteo_rows_negate_the_inhibition_sign() -> None:
+    """Open-Meteo publishes CIN positive; is_thunder expects AROME's negative."""
+    rows = openmeteo_hourly_rows(SAMPLE_OUTLOOK_OPENMETEO)
+    assert [row["cin_jkg"] for row in rows] == [-10.0, -10.0, -5.0]
+
+
+def test_openmeteo_rows_keep_a_missing_inhibition_as_none() -> None:
+    body = {"hourly": {"time": ["2026-07-15T15:00"], "cape": [1500.0]}}
+    assert openmeteo_hourly_rows(body)[0]["cin_jkg"] is None
+
+
+def test_openmeteo_capped_hour_is_not_a_storm() -> None:
+    """The gate now works on this path: high CAPE under a strong lid is calm."""
+    body = {
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": ["2026-07-15T14:00", "2026-07-15T15:00"],
+            "weather_code": [3, 3],
+            "precipitation": [2.0, 2.0],
+            "cape": [2000.0, 2000.0],
+            "convective_inhibition": [250.0, 250.0],
+        },
+    }
+    data = normalize_outlook_openmeteo(body, LAT, LON, now=NOW_OUTLOOK)
+    assert data["thunderstorm_short"] is False
+    assert data["next_thunderstorm_at"] is None
+
+
+def test_render_outlook_openmeteo() -> None:
     out = render_outlook(
         normalize_outlook_openmeteo(SAMPLE_OUTLOOK_OPENMETEO, LAT, LON, now=NOW_OUTLOOK)
     )
     assert "Source: Open-Meteo" in out
-    assert "no convective inhibition" in out
 
 
 # --- Air quality ---

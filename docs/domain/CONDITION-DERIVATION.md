@@ -57,10 +57,11 @@ functions call `is_thunder(cape, cin)` rather than comparing CAPE alone. AROME p
 **negative** value in J/kg — `0.0` is uncapped and more negative is a stronger lid — so the gate reads
 `cin > -CAP_CIN_JKG`.
 
-A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact and is exactly what the
-Open-Meteo path relies on: its forecast endpoint publishes CAPE but no inhibition, so thunder there is
-judged on CAPE alone. `CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination
-against real capped situations is unconfirmed against observations.
+A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour a source
+leaves blank. Open-Meteo publishes inhibition too, but as a **positive magnitude**, so `format.py` negates
+it into the AROME convention before it ever reaches this function — `is_thunder` only ever sees the
+negative form. `CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination against
+real capped situations is unconfirmed against observations.
 
 **`derive_current_condition`** — used for current weather. It adds a fog heuristic and changes the
 rain/snow rule:

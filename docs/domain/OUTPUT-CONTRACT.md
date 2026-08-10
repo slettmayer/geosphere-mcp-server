@@ -103,11 +103,12 @@ Per-field emoji, like current weather. The header carries model, reference time,
 `💨 Max gust next 1 h` and `💨 Max gust next 12 h` render as `{N} m/s (at {Day} {YYYY-MM-DD} {HH:MM})`, or
 `unknown` when the window holds no gust value. `⛈️ Thunderstorm expected next 1 h` is tri-state: `yes`,
 `no`, or `unknown (no usable forecast hours)`. `⚡ Next thunderstorm` renders the stamp and that hour's
-CAPE, or `none in the forecast horizon`. `🌡️ Max CAPE next 12 h` is omitted when unavailable. A
+CAPE, `none in the forecast horizon` when the series is readable and calm, or
+`unknown (no usable forecast hours)` when no hour ahead can be judged at all. `🌡️ Max CAPE next 12 h` is omitted when unavailable. A
 `🕐 Timezone` line closes the block.
 
 A trailing note always explains the round-up horizon and the storm-in-progress timestamp; on the Open-Meteo
-path it gains a sentence stating that the source has no convective inhibition. A series with no hours at
+A series with no hours at
 all renders `No forecast hours available for the outlook window.` See
 [STORM-OUTLOOK.md](STORM-OUTLOOK.md) for the semantics behind each figure.
 

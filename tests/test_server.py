@@ -391,6 +391,7 @@ SAMPLE_OPENMETEO_OUTLOOK_HOURLY = {
         "weather_code": [95, 95],
         "wind_gusts_10m": [19.0, 19.0],
         "cape": [2100.0, 2100.0],
+        "convective_inhibition": [5.0, 5.0],
         "precipitation": [4.0, 4.0],
     },
 }
@@ -424,8 +425,7 @@ async def test_storm_outlook_out_of_domain_falls_back_to_openmeteo() -> None:
         out = await get_storm_outlook(38.7, -9.1)
     assert "Source: Open-Meteo" in out
     assert "💨 Max gust next 1 h: 19 m/s" in out
-    # The fallback source has no inhibition and must say so.
-    assert "no convective inhibition" in out
+    assert "⛈️ Thunderstorm expected next 1 h: yes" in out
     om.assert_awaited_once()
 
 

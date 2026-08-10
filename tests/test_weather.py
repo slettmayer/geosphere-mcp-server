@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -442,3 +442,39 @@ async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
         pytest.raises(GeoSphereOutOfDomainError),
     ):
         await async_fetch_hourly_forecast(None, 38.7, -9.1, now=NOW)
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
+    """Both requests ask for one hour before the current top of the hour.
+
+    The API trims the forecast to the current hour and `assemble_hourly_forecast`
+    skips the first step (no predecessor for the accumulation deltas), so
+    without this lookback the hour already under way is dropped -- which breaks
+    the storm outlook's "first entry is the in-progress hour" contract.
+
+    The anchor is the top of the hour, not `now`: the API rounds `start` up to
+    the next whole stamp, so `now - 1h` at 15:30 would come back as 15:00 and
+    the in-progress hour would again be the predecessor-less first step.
+    """
+    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(None, 48.219, 16.362, now=NOW)
+
+    expected = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    assert mock.await_count == 2
+    for call in mock.await_args_list:
+        assert call.kwargs["start"] == expected
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_hourly_keeps_the_in_progress_hour() -> None:
+    """With the predecessor present, the series starts at the current hour."""
+    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    with patch.object(weather, "async_get_timeseries", mock):
+        result = await async_fetch_hourly_forecast(None, 48.219, 16.362, now=NOW)
+
+    top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
+    assert result["hourly"][0]["time"] == top_of_hour
+    # And it carries a real accumulation delta rather than a None hole.
+    assert result["hourly"][0]["precipitation_mm"] is not None

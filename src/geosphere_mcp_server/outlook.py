@@ -158,6 +158,22 @@ def next_thunderstorm(
     return None, None
 
 
+def series_is_decidable(rows: list[dict[str, Any]], now: datetime) -> bool:
+    """True when any hour at/after ``now`` can be judged for thunder at all.
+
+    The companion to :func:`next_thunderstorm`, which returns the same
+    ``(None, None)`` for "no storm in the horizon" and for "nothing here can be
+    read". A caller that reports the scan's result must consult this first, or
+    it will render a confident all-clear over an unreadable series.
+    """
+    start = now.replace(minute=0, second=0, microsecond=0)
+    return any(
+        _is_decidable(row)
+        for row in rows
+        if row.get("time") is not None and row["time"] >= start
+    )
+
+
 def thunderstorm_outlook(
     rows: list[dict[str, Any]], hours: int, now: datetime
 ) -> bool | None:

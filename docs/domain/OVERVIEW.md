@@ -98,8 +98,8 @@ These span more than one concept; per-concept decisions live in the sub-file tha
 - GeoSphere resource IDs are versioned — a catalog rotation breaks the primary path until the IDs in
   `const.py` are bumped.
 - No GeoSphere forecast reaches beyond ~60 h, so daily and long-range must use Open-Meteo.
-- The Open-Meteo forecast endpoint has no convective inhibition, so the storm outlook degrades to CAPE-only
-  gating outside GeoSphere coverage.
+- The two sources report convective inhibition with opposite signs (AROME negative, Open-Meteo a positive
+  magnitude); normalization flips Open-Meteo's, and getting that backwards would invert the thunder gate.
 - Shared GeoSphere rate limits (5 req/s, 240 req/h) with no server-side quota tracking.
 - `condition.py` duplicates Home Assistant condition strings to stay import-free, so they could drift.
 

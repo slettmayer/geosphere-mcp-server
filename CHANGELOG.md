@@ -18,8 +18,7 @@ version being cut, so you never rename that heading by hand. See
   hours with missing cloud cover, while the precipitation requirement keeps a dry high-CAPE afternoon
   from raising a signal. Inside GeoSphere coverage this costs one AROME request (the C-LAEF ensemble is
   skipped, since the outlook reports no precipitation probability); elsewhere it falls back to
-  Open-Meteo, whose forecast endpoint publishes CAPE but no convective inhibition, so thunder is judged
-  on CAPE alone there and the response says so.
+  Open-Meteo, which supplies both CAPE and convective inhibition, so the same gate applies there.
 - Added: `get_air_quality` -- NO₂, O₃, PM10 and PM2.5 surface concentrations plus the European Air
   Quality Index for today, tomorrow and in two days. GeoSphere's WRF-Chem forecast (`chem-v2-1h-3km` /
   `chem_aqi-v1-1d-3km`, 3 km grid) serves Austria and the Alps; elsewhere it falls back to Open-Meteo's
@@ -33,8 +32,21 @@ version being cut, so you never rename that heading by hand. See
   longer produces `lightning` / `lightning-rainy`. AROME's `cin` parameter is now fetched for this. A
   missing `cin` counts as uncapped, which both preserves the previous behaviour and is what the
   Open-Meteo path depends on. Ported from `ha-geosphere-next` 0.9.0.
-- Added: `cape` to the Open-Meteo hourly request, which the fallback storm outlook needs and which costs
-  no extra call.
+- Added: `cape` and `convective_inhibition` to the Open-Meteo hourly request, which the fallback storm
+  outlook needs and which cost no extra call. Open-Meteo reports inhibition as a positive magnitude where
+  AROME reports it negative, so the value is negated during normalization -- `is_thunder` only ever sees
+  the AROME convention.
+- Fixed: the hourly forecast (and with it the storm outlook) no longer drops the hour already under way.
+  The API trims the forecast to the current hour and the first step has no predecessor for the
+  accumulation deltas, so that hour was being skipped -- which silently broke every outlook window: the
+  "next 1 h" window held one stamp instead of two, `hour_at` never matched, and a thunderstorm forecast
+  for the current hour was invisible. One hour of history is now requested alongside the forecast,
+  anchored to the top of the hour rather than to `now` (the API rounds `start` up to the next whole
+  stamp, so `now - 1h` at 15:30 would come back as 15:00 and change nothing).
+- Fixed: `⚡ Next thunderstorm` now reports `unknown (no usable forecast hours)` instead of a confident
+  `none in the forecast horizon` when no forecast hour ahead can be judged. The underlying scan returns
+  the same empty result for "no storm" and "nothing readable here", so a response could declare the
+  window `unknown` on one line and assert a 60-hour all-clear on the next.
 
 ## 0.3.2 - 2026-08-07
 

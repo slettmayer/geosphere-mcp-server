@@ -96,8 +96,8 @@ indexes the per-concept files on data sources, condition derivation, and the too
   "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
 - Several merged fields (dew point, CAPE, global radiation, hourly wind bearing) are computed and then
   dropped in normalization -- surfacing them is a `format.py` change only
-- Open-Meteo's forecast endpoint has CAPE but no convective inhibition, so the storm outlook silently
-  degrades to CAPE-only thunder gating outside GeoSphere coverage (the rendered output says so)
+- AROME and Open-Meteo report convective inhibition with opposite signs (negative vs positive magnitude);
+  `format.openmeteo_hourly_rows` negates Open-Meteo's, and reversing that silently inverts the thunder gate
 - GeoSphere and Open-Meteo report the European AQI on two different scales (1-6 band vs 0-100+ numeric);
   `format.py` reconciles them to the band, and a new pollutant must be added on both paths at once
 

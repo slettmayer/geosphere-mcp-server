@@ -50,8 +50,9 @@ It serves two roles: the automatic fallback for the current, hourly, and storm-o
 GeoSphere coverage, and the sole source for the daily tool everywhere. `OPENMETEO_MAX_HOURS = 48` and
 `OPENMETEO_MAX_DAYS = 16` bound its horizons.
 
-The forecast endpoint publishes `cape` (which the storm outlook uses) but **no convective inhibition**, so
-thunder is gated on CAPE alone on this path — see [STORM-OUTLOOK.md](STORM-OUTLOOK.md).
+The forecast endpoint publishes both `cape` and `convective_inhibition`, which the storm outlook uses —
+but with the **opposite sign convention** to AROME (a positive magnitude rather than a negative one), so
+the value is negated during normalization. See [STORM-OUTLOOK.md](STORM-OUTLOOK.md).
 
 **Air quality lives on a separate host**: `https://air-quality-api.open-meteo.com/v1/air-quality`, also
 keyless, serving CAMS data. Same request and response shape, so it reuses the same client plumbing. Three

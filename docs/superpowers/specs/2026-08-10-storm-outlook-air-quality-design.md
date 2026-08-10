@@ -90,9 +90,19 @@ matching the HA entities. The tool takes no horizon argument.
 the C-LAEF ensemble contributes precipitation probability, which the outlook does not report, so the
 extra request is skipped. Outside GeoSphere coverage it falls back to Open-Meteo hourly.
 
-Open-Meteo's general `/v1/forecast` endpoint offers `cape` but **not** convective inhibition, so the
-fallback path passes `cin=None` — CAPE-only gating, the documented degradation. `cape` is added to
-`OPENMETEO_HOURLY_VARIABLES`, which also gives the existing hourly tool the data at no extra cost.
+Open-Meteo's `/v1/forecast` endpoint offers both `cape` and `convective_inhibition`, added to
+`OPENMETEO_HOURLY_VARIABLES` at no extra request. It reports inhibition as a **positive magnitude** where
+AROME reports it negative, so normalization negates it before `is_thunder` ever sees it.
+
+> **Corrected after review.** This section originally claimed the endpoint had no convective inhibition
+> and designed a CAPE-only fallback around that. It was wrong — the variable exists and is now used, so
+> the gate works identically on both paths and the "no inhibition" caveat that used to be printed in the
+> output is gone.
+
+The GeoSphere path additionally requests one hour of history (`HOURLY_LOOKBACK_HOURS`), anchored to the
+top of the hour: the API trims the forecast to the current hour and `assemble_hourly_forecast` skips the
+first step for lack of an accumulation predecessor, so without the lookback the in-progress hour — which
+every window semantic above depends on — is dropped.
 
 ### 3. Air quality
 

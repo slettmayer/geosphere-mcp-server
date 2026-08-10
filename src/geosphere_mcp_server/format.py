@@ -32,6 +32,7 @@ from geosphere_mcp_server.outlook import (
     max_cape,
     max_gust,
     next_thunderstorm,
+    series_is_decidable,
     thunderstorm_outlook,
 )
 
@@ -75,6 +76,11 @@ def _tz_line(tz_id: str | None, tz_abbr: str | None) -> str | None:
     if tz_id and tz_abbr:
         return f"🕐 Timezone: {tz_id} ({tz_abbr})"
     return f"🕐 Timezone: {tz_id or tz_abbr}"
+
+
+def _negated(value: float | None) -> float | None:
+    """Flip a value's sign, keeping ``None``."""
+    return None if value is None else -value
 
 
 def _parse_local(value: str | None) -> datetime | None:
@@ -324,6 +330,7 @@ def openmeteo_hourly_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
     winds = _col("wind_speed_10m")
     gusts = _col("wind_gusts_10m")
     capes = _col("cape")
+    cins = _col("convective_inhibition")
 
     rows: list[dict[str, Any]] = []
     for i, raw in enumerate(times):
@@ -340,9 +347,10 @@ def openmeteo_hourly_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
                 "wind_speed_ms": _at(winds, i),
                 "wind_gust_ms": _at(gusts, i),
                 "cape_jkg": _at(capes, i),
-                # This endpoint publishes no convective inhibition; a missing
-                # value reads as uncapped (see condition.is_thunder).
-                "cin_jkg": None,
+                # Open-Meteo publishes inhibition as a positive magnitude;
+                # AROME publishes it negative, and `is_thunder` expects the
+                # AROME sign. A missing value stays None (= uncapped).
+                "cin_jkg": _negated(_at(cins, i)),
             }
         )
     return rows
@@ -460,6 +468,10 @@ def _outlook(
         ),
         "next_thunderstorm_at": _when(storm_at),
         "next_thunderstorm_cape_jkg": storm_cape,
+        # next_thunderstorm returns (None, None) both for "no storm ahead" and
+        # for "nothing here can be read"; without this the renderer would print
+        # a confident all-clear over an unreadable series.
+        "next_thunderstorm_decidable": series_is_decidable(rows, now),
         "max_cape_long_jkg": max_cape(rows, OUTLOOK_LONG_HORIZON_HOURS, now),
         "hours_available": len(rows),
     }
@@ -492,7 +504,6 @@ def normalize_outlook_geosphere(
         "tz_id": GEOSPHERE_TZ,
         "tz_abbr": reference_local.tzname() if reference_local is not None else None,
         "source": f"GeoSphere ({' + '.join(sources)})",
-        "has_inhibition": True,
     }
 
 
@@ -520,9 +531,6 @@ def normalize_outlook_openmeteo(
         "tz_id": body.get("timezone"),
         "tz_abbr": body.get("timezone_abbreviation"),
         "source": "Open-Meteo",
-        # No convective inhibition on this endpoint: thunder gates on CAPE
-        # alone, which over-calls storms under a capped atmosphere.
-        "has_inhibition": False,
     }
 
 
@@ -579,7 +587,9 @@ def render_outlook(data: dict[str, Any]) -> str:
     )
 
     storm_at = _stamp(data.get("next_thunderstorm_at"))
-    if storm_at is None:
+    if storm_at is None and not data.get("next_thunderstorm_decidable"):
+        lines.append("⚡ Next thunderstorm: unknown (no usable forecast hours)")
+    elif storm_at is None:
         lines.append("⚡ Next thunderstorm: none in the forecast horizon")
     else:
         cape = _round_int(data.get("next_thunderstorm_cape_jkg"))
@@ -595,18 +605,11 @@ def render_outlook(data: dict[str, Any]) -> str:
         lines.append(tz_line)
 
     lines.append("")
-    note = (
+    lines.append(
         f'Horizons round up to whole hours: the "{short} h" window covers the '
         "hour already under way plus the next one. A thunderstorm timestamp at "
         "or before now means one is already in progress."
     )
-    if not data.get("has_inhibition"):
-        note += (
-            " This source publishes no convective inhibition, so thunder is "
-            "judged on CAPE alone and may over-call storms under a capped "
-            "atmosphere."
-        )
-    lines.append(note)
 
     return "\n".join(lines)
 

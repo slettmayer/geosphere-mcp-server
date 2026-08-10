@@ -33,6 +33,7 @@ from geosphere_mcp_server.const import (
     DATASET_INCA,
     DATASET_NOWCAST,
     ENSEMBLE_PARAMETERS,
+    HOURLY_LOOKBACK_HOURS,
     INCA_LOOKBACK_HOURS,
     INCA_PARAMETERS,
     NOWCAST_PARAMETERS,
@@ -438,15 +439,34 @@ async def async_fetch_hourly_forecast(
     """
     now = now or datetime.now(UTC)
 
+    # One hour of history, so the hour already under way has a predecessor for
+    # the accumulation deltas and survives assembly — see HOURLY_LOOKBACK_HOURS.
+    # Anchored to the top of the hour, not to `now`: the API rounds `start` up
+    # to the next whole stamp, so `now - 1h` at 19:33 would yield 19:00 and the
+    # in-progress hour would again be the predecessor-less first step.
+    series_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(
+        hours=HOURLY_LOOKBACK_HOURS
+    )
+
     requests = [
         async_get_timeseries(
-            session, *DATASET_AROME, AROME_PARAMETERS, latitude, longitude
+            session,
+            *DATASET_AROME,
+            AROME_PARAMETERS,
+            latitude,
+            longitude,
+            start=series_start,
         )
     ]
     if include_ensemble:
         requests.append(
             async_get_timeseries(
-                session, *DATASET_ENSEMBLE, ENSEMBLE_PARAMETERS, latitude, longitude
+                session,
+                *DATASET_ENSEMBLE,
+                ENSEMBLE_PARAMETERS,
+                latitude,
+                longitude,
+                start=series_start,
             )
         )
     results = await asyncio.gather(*requests, return_exceptions=True)

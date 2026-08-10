@@ -54,8 +54,6 @@ async def test_storm_outlook_vienna_uses_geosphere() -> None:
     result = await get_storm_outlook(*VIENNA)
     _assert_rendered(result)
     assert "AROME" in result
-    # The GeoSphere path has convective inhibition, so no CAPE-only caveat.
-    assert "no convective inhibition" not in result
 
 
 @pytest.mark.asyncio
@@ -110,7 +108,6 @@ async def test_storm_outlook_lisbon_falls_back_to_openmeteo() -> None:
     result = await get_storm_outlook(*LISBON)
     _assert_rendered(result)
     assert "Open-Meteo" in result
-    assert "no convective inhibition" in result
 
 
 @pytest.mark.asyncio

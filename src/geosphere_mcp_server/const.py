@@ -101,6 +101,13 @@ PT_NO_PRECIPITATION = 255
 # Horizon of the AROME hourly forecast (hours). Used to clamp the hourly tool.
 AROME_MAX_HOURS = 60
 
+# Hours of history requested alongside the forecast. The API trims the series
+# to the current hour, and the first step has no predecessor for the
+# accumulation deltas, so without this the in-progress hour is unusable and
+# gets dropped — taking the outlook's "first entry is the hour under way"
+# contract with it (see outlook.py).
+HOURLY_LOOKBACK_HOURS = 1
+
 # Forecast-outlook horizons (see outlook.py). The window rounds up to whole
 # hourly steps, so an N-hour horizon spans the in-progress hour plus N more.
 OUTLOOK_SHORT_HORIZON_HOURS = 1
@@ -144,10 +151,11 @@ OPENMETEO_HOURLY_VARIABLES = (
     "wind_speed_10m",
     "wind_direction_10m",
     "wind_gusts_10m",
-    # Drives the storm outlook on the fallback path. The general forecast
-    # endpoint publishes no convective inhibition, so that gate degrades to
-    # CAPE-only there (see condition.is_thunder).
+    # Drive the storm outlook on the fallback path. Open-Meteo reports
+    # inhibition as a POSITIVE magnitude where AROME reports it negative, so
+    # the value is negated during normalization (see format.openmeteo_hourly_rows).
     "cape",
+    "convective_inhibition",
 )
 
 OPENMETEO_DAILY_VARIABLES = (
