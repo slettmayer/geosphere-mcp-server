@@ -7,6 +7,35 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Added: `get_storm_outlook` -- peak wind gust for the next hour and the next 12 hours, whether a
+  thunderstorm is expected within the next hour (tri-state, so a data gap reads `unknown` rather than
+  `no`), when the next thunderstorm is expected across the whole horizon, and peak CAPE over 12 hours.
+  Ported from `ha-geosphere-next` 0.9.0. Two semantics carry over and are documented in the output
+  itself: horizons round up to whole hours, so the "next 1 h" window covers the hour already under way
+  plus the next one; and the next-thunderstorm stamp can sit up to 59 minutes in the past, which means a
+  storm is already in progress. An hour counts as a thunderstorm hour on the derived condition *or* on
+  the raw CAPE/CIN predicate plus forecast precipitation -- the second branch catches thundersnow and
+  hours with missing cloud cover, while the precipitation requirement keeps a dry high-CAPE afternoon
+  from raising a signal. Inside GeoSphere coverage this costs one AROME request (the C-LAEF ensemble is
+  skipped, since the outlook reports no precipitation probability); elsewhere it falls back to
+  Open-Meteo, whose forecast endpoint publishes CAPE but no convective inhibition, so thunder is judged
+  on CAPE alone there and the response says so.
+- Added: `get_air_quality` -- NO₂, O₃, PM10 and PM2.5 surface concentrations plus the European Air
+  Quality Index for today, tomorrow and in two days. GeoSphere's WRF-Chem forecast (`chem-v2-1h-3km` /
+  `chem_aqi-v1-1d-3km`, 3 km grid) serves Austria and the Alps; elsewhere it falls back to Open-Meteo's
+  CAMS air-quality API. The two sources publish different halves of the same scale -- GeoSphere the 1-6
+  EEA band, Open-Meteo a 0-100+ numeric index and no daily value at all -- so the output always leads
+  with the band, appends the numeric index only where one exists, and derives Open-Meteo's per-day figure
+  as the maximum of that local day's hourly values. A daily-AQI failure degrades to concentrations only;
+  a pollutant failure propagates.
+- Changed: **behaviour change.** Thunder derivation now requires weak convective inhibition
+  (`cin > -50` J/kg, `CAP_CIN_JKG`) in addition to CAPE >= 1000 J/kg, so high CAPE under a strong lid no
+  longer produces `lightning` / `lightning-rainy`. AROME's `cin` parameter is now fetched for this. A
+  missing `cin` counts as uncapped, which both preserves the previous behaviour and is what the
+  Open-Meteo path depends on. Ported from `ha-geosphere-next` 0.9.0.
+- Added: `cape` to the Open-Meteo hourly request, which the fallback storm outlook needs and which costs
+  no extra call.
+
 ## 0.3.2 - 2026-08-07
 
 - Added: `tests/test_server_json.py` validates `server.json` against the MCP Registry's publish

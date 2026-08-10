@@ -20,10 +20,12 @@ Documents the test structure, patterns, tooling, and conventions used in the pro
 tests/
   test_geosphere_api.py   -- unit tests, mocked HTTP (runs in CI)
   test_openmeteo_api.py   -- unit tests, mocked HTTP (runs in CI)
-  test_server.py          -- unit tests for the three MCP tool functions (runs in CI)
+  test_server.py          -- unit tests for the five MCP tool functions (runs in CI)
   test_condition.py       -- unit tests, pure derivation table tests (runs in CI)
   test_weather.py         -- unit tests, merge chain / POP / differencing (runs in CI)
   test_format.py          -- unit tests, markdown renderer snapshots (runs in CI)
+  test_outlook.py         -- unit tests, gust/thunderstorm windows (runs in CI)
+  test_air_quality.py     -- unit tests, pollutant merge + AQI day matching (runs in CI)
   test_server_json.py     -- MCP Registry publish constraints (runs in CI)
   test_integration.py     -- integration tests, live APIs (CI-excluded)
 ```
@@ -78,7 +80,7 @@ into CI, minutes before a release rather than during one.
 
 ### Integration Tests
 - Marked with `@pytest.mark.integration`, hit live GeoSphere + Open-Meteo APIs
-- Three coverage classes: Austria (INCA + AROME sources), Alps-non-AT (AROME-only), worldwide (Open-Meteo fallback), for all three tools
+- Three coverage classes: Austria (INCA + AROME sources), Alps-non-AT (AROME-only), worldwide (Open-Meteo fallback). Every tool is covered at Vienna and, where it has a fallback, at Lisbon
 - Excluded from CI: `pytest tests/ -v -m "not integration"`
 - Run manually: `pytest tests/ -v -m integration`
 

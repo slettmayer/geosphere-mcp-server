@@ -29,17 +29,20 @@ src/geosphere_mcp_server/
   __init__.py          -- version string only (importlib.metadata, fallback "0.0.0+unknown")
   server.py            -- MCPServer tool registration, session lifecycle, entry point
   weather.py           -- merge chain, hourly assembly, POP mapping, unit conversions
+  air_quality.py       -- WRF-Chem pollutant merge + daily AQI (orchestration)
   geosphere_api.py     -- pure async client for the GeoSphere Dataset API
-  openmeteo_api.py     -- pure async client for Open-Meteo
+  openmeteo_api.py     -- pure async client for Open-Meteo (weather + air quality)
   condition.py         -- pure condition derivation (ported from ha-geosphere-next)
-  format.py            -- emoji-markdown renderers for the three tools
+  outlook.py           -- pure storm-outlook derivation (ported from ha-geosphere-next)
+  format.py            -- emoji-markdown renderers for the five tools
   const.py             -- all constants (URLs, resource IDs, parameters, thresholds, WMO map)
   py.typed             -- typing marker
   _version.py          -- hatch-vcs generated, gitignored
 tests/
   test_geosphere_api.py, test_openmeteo_api.py  -- unit tests (mocked HTTP)
-  test_server.py                                 -- unit tests for the three MCP tool functions
+  test_server.py                                 -- unit tests for the five MCP tool functions
   test_condition.py, test_weather.py, test_format.py  -- unit tests (pure logic)
+  test_outlook.py, test_air_quality.py           -- unit tests (pure logic + fetch orchestration)
   test_integration.py                            -- integration tests (live APIs, CI-excluded)
 ```
 
@@ -56,13 +59,22 @@ One module per responsibility. No sub-packages.
   (ISO calendar date for the `get_daily_forecast` range), `_clamp` (horizon bounds). All run **before**
   any session is opened, so a validation failure never issues an HTTP request.
 - Does not own: HTTP communication, the merge/derivation logic
-- Calls: `weather.py` (GeoSphere fetch + merge), `openmeteo_api` (fallback and daily), and `format.py` (normalize + render) -- passing in the session
+- Calls: `weather.py` (GeoSphere fetch + merge), `air_quality.py` (GeoSphere air quality), `openmeteo_api` (fallback and daily), and `format.py` (normalize + render) -- passing in the session
 - `RATE_LIMIT_RETRY_MAX_S = 5.0` is defined here (not in `const.py`) -- the only literal threshold outside the central constants module
 
 **`weather.py` (Orchestration Layer)**
 - Owns: the current-conditions merge chain (INCA -> nowcast -> AROME per field), hourly assembly (accumulation differencing, wind-from-components, POP mapping), unit conversions
 - Does not own: HTTP calls (delegates to `geosphere_api`), the Open-Meteo fallback (raises `GeoSphereOutOfDomainError` up to `server.py`), rendering, MCP concerns
 - Calls: `geosphere_api`, `condition`
+- `async_fetch_hourly_forecast(include_ensemble=False)` skips the C-LAEF request; the storm outlook uses
+  this, since it reports no precipitation probability
+
+**`air_quality.py` (Orchestration Layer)**
+- Owns: the WRF-Chem pollutant merge (nearest forecast hour, full series retained) and the daily AQI
+  match by local calendar day, plus the concurrent fetch of both datasets
+- Applies the same primary/secondary rule as the ensemble: a `chem` failure propagates, an AQI failure
+  degrades with a warning
+- Calls: `geosphere_api`. Does not call `condition` -- air quality has no derived condition
 
 **`geosphere_api.py` / `openmeteo_api.py` (Data Access Layer)**
 - Own: all HTTP communication, URL/query construction, GeoJSON / JSON parsing, error taxonomy (connection/timeout, 429, out-of-domain 400)
@@ -72,12 +84,21 @@ One module per responsibility. No sub-packages.
   inclusive `start_date`/`end_date` range that takes precedence when supplied
 
 **`condition.py` (Pure Derivation)**
-- Owns: `derive_condition`, `derive_current_condition`, fog heuristic, `is_night` (astral), Magnus dew point, apparent temperature, wind-from-components
+- Owns: `derive_condition`, `derive_current_condition`, `is_thunder` (the CAPE/CIN gate), fog heuristic, `is_night` (astral), Magnus dew point, apparent temperature, wind-from-components
 - No I/O, no HTTP, no MCP/HA imports
+
+**`outlook.py` (Pure Derivation)**
+- Owns: `max_gust`, `max_cape`, `next_thunderstorm`, `thunderstorm_outlook`, `hour_at`, and the round-up
+  window they share
+- Reads the hourly **row dicts** both source paths produce, through `.get`, so one implementation serves
+  GeoSphere and Open-Meteo and a source missing a key degrades rather than raising
+- Depends only on `condition.is_thunder` and `const.py`; no I/O, no MCP/HA imports
 
 **`format.py` (Normalization + Rendering)**
 - Owns: the `normalize_*` functions (shape a GeoSphere or Open-Meteo payload into a render-ready dict)
-  and the markdown renderers (`render_current`/`render_hourly`/`render_daily`) for the three tools
+  and the markdown renderers (`render_current`/`render_hourly`/`render_daily`/`render_outlook`/`render_air_quality`) for the five tools
+- Owns the timezone reconciliation the outlook needs: GeoSphere rows are aware UTC and Open-Meteo rows are
+  naive local, so each normalizer converts `now` into its own rows' convention before any comparison
 - The renderers are shared across both data paths, so presentation behaviour such as the hourly
   day-divider headers applies identically to GeoSphere and Open-Meteo results
 - Normalization is a narrowing step: several merged fields are deliberately not forwarded to the renderers
@@ -160,10 +181,12 @@ GeoSphere out-of-domain is **not** an error -- `weather.py` raises `GeoSphereOut
 tool's `work()` catches it and falls back to Open-Meteo. Tools never raise across the MCP boundary.
 
 ## Dependencies
-- `server.py` depends on `weather.py`, `openmeteo_api.py`, `format.py`, `const.py`
+- `server.py` depends on `weather.py`, `air_quality.py`, `openmeteo_api.py`, `format.py`, `const.py`
 - `weather.py` depends on `geosphere_api.py`, `condition.py`, `const.py` (not `openmeteo_api` or `format`)
 - `geosphere_api.py` / `openmeteo_api.py` depend on `const.py`, `aiohttp`, `asyncio`
 - `condition.py` depends on `astral` and `const.py` only
+- `outlook.py` depends on `condition.py` and `const.py`; `format.py` depends on `outlook.py`
+- `air_quality.py` depends on `geosphere_api.py` and `const.py`
 - `const.py` has no internal dependencies
 - No circular dependencies exist
 

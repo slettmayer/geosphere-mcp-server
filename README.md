@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/geosphere-mcp-server.svg)](https://pypi.org/project/geosphere-mcp-server/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-MCP server for weather: current conditions, hourly forecasts, and multi-day outlooks for **any location worldwide**, via the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for weather: current conditions, hourly forecasts, multi-day outlooks, storm outlooks, and air quality for **any location worldwide**, via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 In **Austria and the Alpine region** it serves high-resolution [GeoSphere Austria](https://www.geosphere.at) data — the AROME numerical forecast, the INCA analysis/nowcast, and the C-LAEF ensemble for precipitation probability. **Everywhere else** it falls back automatically to [Open-Meteo](https://open-meteo.com), so it is a drop-in worldwide weather source. Every response states which source produced it.
 
@@ -14,11 +14,11 @@ Output is compact emoji-markdown with metric units — built for smart-home and 
 
 ## Coverage
 
-| Where | `get_current_weather` | `get_hourly_forecast` | `get_daily_forecast` |
-|-------|-----------------------|-----------------------|----------------------|
-| Austria | GeoSphere INCA + nowcast + AROME | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) |
-| Alps (non-AT) | GeoSphere AROME only | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) |
-| Rest of world | Open-Meteo | Open-Meteo (≤48 h) | Open-Meteo (1–16 days) |
+| Where | `get_current_weather` | `get_hourly_forecast` | `get_daily_forecast` | `get_storm_outlook` | `get_air_quality` |
+|-------|-----------------------|-----------------------|----------------------|---------------------|-------------------|
+| Austria | GeoSphere INCA + nowcast + AROME | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) | GeoSphere AROME, CAPE gated by CIN | GeoSphere WRF-Chem (3 km) |
+| Alps (non-AT) | GeoSphere AROME only | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) | GeoSphere AROME, CAPE gated by CIN | GeoSphere WRF-Chem (3 km) |
+| Rest of world | Open-Meteo | Open-Meteo (≤48 h) | Open-Meteo (1–16 days) | Open-Meteo, CAPE only | Open-Meteo (CAMS) |
 
 Coverage is detected automatically: the server tries GeoSphere first and falls back to Open-Meteo when the point is outside the AROME grid — no bounding box to configure. The daily forecast always uses Open-Meteo (GeoSphere publishes no forecasts beyond ~60 h).
 
@@ -154,16 +154,65 @@ Thu 2026-07-23: 15–22°C — rainy, 4.2 mm (80% chance), wind up to 15 m/s
 Fri 2026-07-24: 14–26°C — sunny, wind up to 8 m/s
 ```
 
+### `get_storm_outlook`
+
+Severe-weather outlook: peak gusts and thunderstorm timing. Reports figures, never a severity verdict — what counts as dangerous is the caller's judgement.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
+| `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
+
+```
+# Storm Outlook for 48.2208, 16.3738
+
+AROME model, reference 2026-08-10 14:00 CEST · Source: GeoSphere (AROME)
+
+💨 Max gust next 1 h: 12 m/s (at Mon 2026-08-10 17:00)
+💨 Max gust next 12 h: 24 m/s (at Mon 2026-08-10 20:00)
+⛈️ Thunderstorm expected next 1 h: no
+⚡ Next thunderstorm: Mon 2026-08-10 20:00 (CAPE 1800 J/kg)
+🌡️ Max CAPE next 12 h: 1800 J/kg
+🕐 Timezone: Europe/Vienna (CEST)
+```
+
+Two behaviours are worth knowing before you build on this:
+
+- **Horizons round up to whole hours.** The window starts at the top of the current hour, so the "next 1 h" figure covers the hour already under way *plus* the next one, and can report an event up to ~2 h out. Compare the returned timestamps yourself if you need a strict 60-minute answer.
+- **`Next thunderstorm` can be in the past**, by up to 59 minutes, when the storm hour is the one already under way. That means a storm is in progress — clamp a negative lead time to zero rather than assuming the stamp is in the future.
+
+A thunderstorm hour is one whose derived condition is `lightning`/`lightning-rainy`, *or* one where CAPE ≥ 1000 J/kg with weak inhibition **and** precipitation is forecast — the second branch catches thundersnow and hours with missing cloud data, and requires precipitation so that a dry high-CAPE afternoon does not raise a signal. `Thunderstorm expected` reports `unknown` rather than `no` when the window holds no usable hour. Outside GeoSphere coverage Open-Meteo publishes no convective inhibition, so thunder is judged on CAPE alone and the output says so.
+
+### `get_air_quality`
+
+Pollutant concentrations now, plus the European Air Quality Index for today, tomorrow and in two days.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
+| `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
+
+```
+# Air Quality at 48.2208, 16.3738
+
+🏷️ European AQI: 2 (fair) today · 3 (moderate) tomorrow · 2 (fair) in 2 days
+🌫️ Concentrations (16:00): NO₂ 18 µg/m³ · O₃ 92 µg/m³ · PM10 21 µg/m³ · PM2.5 12 µg/m³
+🕐 Timezone: Europe/Vienna (CEST)
+📡 Source: GeoSphere (WRF-Chem + daily AQI, 3 km)
+```
+
+The AQI is always reported as its 1–6 EEA band (1 good … 6 extremely poor) so both sources read alike. GeoSphere publishes that band directly; Open-Meteo publishes a 0–100+ numeric index instead, which is banded and rendered as `3 (moderate, index 44)`. Open-Meteo also has no daily index, so each day there is the maximum of that day's hourly values. Both sources are **model forecasts, not station measurements** — expect them to track a nearby monitoring station without matching it.
+
 ## Data sources & attribution
 
-- **GeoSphere Austria Dataset API** — AROME forecast, INCA analysis/nowcast, C-LAEF ensemble. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © GeoSphere Austria.
-- **Open-Meteo** — worldwide forecast API. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © Open-Meteo.
+- **GeoSphere Austria Dataset API** — AROME forecast, INCA analysis/nowcast, C-LAEF ensemble, WRF-Chem air quality. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © GeoSphere Austria.
+- **Open-Meteo** — worldwide forecast and air-quality (CAMS) APIs. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © Open-Meteo.
 
 Both APIs are keyless and intended for **non-commercial** use. When you redistribute their data, keep the attribution.
 
 ## Rate limits
 
-The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Each current/hourly call issues a small burst of concurrent requests; on an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice — `get_daily_forecast` keeps working through Open-Meteo in that case. Open-Meteo has its own generous free-tier limits.
+The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Each GeoSphere-path call issues a small burst of concurrent requests (three for current weather, two for hourly and air quality, one for the storm outlook); on an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice — `get_daily_forecast` keeps working through Open-Meteo in that case. Open-Meteo has its own generous free-tier limits.
 
 ## Development
 

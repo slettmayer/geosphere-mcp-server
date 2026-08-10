@@ -1,7 +1,7 @@
 # Tool and Output Contract
 
 ## Purpose
-Documents the three MCP tools' exact signatures and argument validation, and the markdown each renderer
+Documents the five MCP tools' exact signatures and argument validation, and the markdown each renderer
 produces — fields, source attribution, day-divider headers, and horizon notes.
 
 ## Responsibilities
@@ -24,6 +24,8 @@ produces — fields, source attribution, day-divider headers, and horizon notes.
 | `get_current_weather` | `(latitude, longitude) -> str` | GeoSphere merge, else Open-Meteo | now |
 | `get_hourly_forecast` | `(latitude, longitude, hours=24, start=None) -> str` | GeoSphere AROME (+C-LAEF), else Open-Meteo | 1-60 h GeoSphere / 1-48 h fallback |
 | `get_daily_forecast` | `(latitude, longitude, days=7, start_date=None, end_date=None) -> str` | Open-Meteo only | 1-16 days |
+| `get_storm_outlook` | `(latitude, longitude) -> str` | GeoSphere AROME (no ensemble), else Open-Meteo | fixed 1 h / 12 h windows over the full series |
+| `get_air_quality` | `(latitude, longitude) -> str` | GeoSphere WRF-Chem, else Open-Meteo CAMS | now + 3 days |
 
 Location input is plain decimal `latitude`/`longitude`. The calling model geocodes place names; the server
 has no geocoder. Output is compact markdown in metric units. Tools never raise — every failure resolves to
@@ -94,6 +96,30 @@ Each day renders as
 falling back to the max alone when there is no minimum, and to `n/a` when neither is available. An empty
 result renders `No daily forecast available.`
 
+### Storm Outlook Output
+Per-field emoji, like current weather. The header carries model, reference time, and source on one line
+(`AROME model, reference 2026-08-10 14:00 CEST · Source: GeoSphere (AROME)`).
+
+`💨 Max gust next 1 h` and `💨 Max gust next 12 h` render as `{N} m/s (at {Day} {YYYY-MM-DD} {HH:MM})`, or
+`unknown` when the window holds no gust value. `⛈️ Thunderstorm expected next 1 h` is tri-state: `yes`,
+`no`, or `unknown (no usable forecast hours)`. `⚡ Next thunderstorm` renders the stamp and that hour's
+CAPE, or `none in the forecast horizon`. `🌡️ Max CAPE next 12 h` is omitted when unavailable. A
+`🕐 Timezone` line closes the block.
+
+A trailing note always explains the round-up horizon and the storm-in-progress timestamp; on the Open-Meteo
+path it gains a sentence stating that the source has no convective inhibition. A series with no hours at
+all renders `No forecast hours available for the outlook window.` See
+[STORM-OUTLOOK.md](STORM-OUTLOOK.md) for the semantics behind each figure.
+
+### Air Quality Output
+Two content lines plus attribution. `🏷️ European AQI` joins the available days with ` · `, each as
+`{band} ({label}) {day}` — with `, index {N}` inserted after the label on the Open-Meteo path, which has a
+numeric index. A day whose value is unknown is omitted rather than rendered as a gap.
+`🌫️ Concentrations ({HH:MM})` joins the four pollutants with ` · `. Then `🕐 Timezone`, a
+`📡 Source: ...` line, and a trailing note giving the six EEA band names and stating that these are model
+forecasts rather than station measurements. With neither AQI nor concentrations available the body is
+`No air-quality data available for this location.` See [AIR-QUALITY.md](AIR-QUALITY.md).
+
 ### Values Computed but Never Rendered
 Several merged and assembled fields are dropped during normalization and never appear in any output.
 Current weather drops dew point, global radiation, snow limit, CAPE, precipitation type, and the
@@ -117,7 +143,7 @@ rate-limit retry policy.
 
 ## Dependencies
 - `server.py` owns argument parsing, validation, and clamping
-- `format.py` owns normalization and all three renderers
+- `format.py` owns normalization and all five renderers
 - Horizon bounds come from `AROME_MAX_HOURS`, `OPENMETEO_MAX_HOURS`, and `OPENMETEO_MAX_DAYS` in `const.py`
 
 ## Design Decisions
@@ -131,7 +157,7 @@ rate-limit retry policy.
   reliably than to an offset from today.
 
 ## Known Risks
-- Attribution formatting is inconsistent across the three tools (`📡 Source:`, `· Source:`, `Source:`),
+- Attribution formatting is inconsistent across the tools (`📡 Source:`, `· Source:`, `Source:`),
   so any consumer parsing the source string must handle all three shapes.
 - Silent truncation of an over-long date range is invisible to the caller — the header states the rendered
   day count, but nothing states that the request was shortened.

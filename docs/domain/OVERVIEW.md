@@ -30,7 +30,7 @@ The server exposes exactly one inbound surface, and it is unauthenticated becaus
 
 | Surface | Audience | Transport and auth | Detail |
 |---------|----------|--------------------|--------|
-| Three MCP tools (current, hourly, daily) | The user's AI assistant | MCP over stdio; no auth, launched locally by the client | [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) |
+| Five MCP tools (current, hourly, daily, storm outlook, air quality) | The user's AI assistant | MCP over stdio; no auth, launched locally by the client | [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) |
 | Outbound to the GeoSphere Austria Dataset API | Upstream provider | HTTPS, keyless, rate-limited | [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md) |
 | Outbound to Open-Meteo | Upstream provider | HTTPS, keyless | [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md) |
 
@@ -48,6 +48,9 @@ registered in `server.py` is itself part of the surface: it is how a model decid
 | Condition derivation | Physical derivation on GeoSphere, WMO mapping on Open-Meteo | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
 | Merge chain | Per-field source preference for current conditions | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
 | Precipitation probability | Stepped value from the C-LAEF ensemble percentiles | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
+| Thunder gate | CAPE gated by convective inhibition, and what a missing CIN means | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
+| Storm outlook | Peak gusts, next thunderstorm, and the round-up window semantics | [STORM-OUTLOOK.md](STORM-OUTLOOK.md) |
+| Air quality | Pollutant concentrations and the European AQI band scale | [AIR-QUALITY.md](AIR-QUALITY.md) |
 | Tool contract | Signatures, defaults, clamping, and validation errors | [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) |
 | Output contract | Rendered fields, attribution lines, day dividers, error lines | [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) |
 
@@ -60,6 +63,11 @@ registered in `server.py` is itself part of the surface: it is how a model decid
 | **AROME** | High-resolution (2.5 km) numerical weather prediction model, ~60 h forecast |
 | **INCA** | Integrated Nowcasting through Comprehensive Analysis — 1 km gridded analysis and nowcast, Austria only |
 | **C-LAEF** | Convection-permitting Limited Area Ensemble Forecasting — supplies precipitation percentiles (rr_p10/p50/p90) |
+| **WRF-Chem** | Weather Research and Forecasting model coupled with Chemistry — GeoSphere's 3 km air-quality forecast |
+| **CAMS** | Copernicus Atmosphere Monitoring Service — the air-quality model behind Open-Meteo's worldwide fallback |
+| **CAPE** | Convective Available Potential Energy (J/kg) — how much energy convection could release |
+| **CIN** | Convective Inhibition (J/kg, published negative) — the lid holding convection down; gates CAPE in the thunder test |
+| **EEA band** | The European Air Quality Index's six-step scale (1 good to 6 extremely poor) |
 | **nowcast** | Very short-range (15-min cadence) forecast from INCA |
 | **POP** | Probability of precipitation — a stepped value derived from ensemble percentiles |
 | **WMO code** | World Meteorological Organization present-weather code (0-99), used by Open-Meteo |
@@ -90,6 +98,8 @@ These span more than one concept; per-concept decisions live in the sub-file tha
 - GeoSphere resource IDs are versioned — a catalog rotation breaks the primary path until the IDs in
   `const.py` are bumped.
 - No GeoSphere forecast reaches beyond ~60 h, so daily and long-range must use Open-Meteo.
+- The Open-Meteo forecast endpoint has no convective inhibition, so the storm outlook degrades to CAPE-only
+  gating outside GeoSphere coverage.
 - Shared GeoSphere rate limits (5 req/s, 240 req/h) with no server-side quota tracking.
 - `condition.py` duplicates Home Assistant condition strings to stay import-free, so they could drift.
 

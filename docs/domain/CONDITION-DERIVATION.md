@@ -37,7 +37,7 @@ live in `const.py`. The two functions deliberately apply different rules.
 |------|-----------|----------|
 | Precipitation counts as wet | >= 0.1 mm | `PRECIP_MIN_MM` |
 | Wet becomes `pouring` | >= 4.0 mm/h | `POURING_MM_PER_H` |
-| Thunder (with or without rain) | CAPE >= 1000 J/kg | `THUNDER_CAPE_JKG` |
+| Thunder (with or without rain) | CAPE >= 1000 J/kg **and** CIN > -50 J/kg | `THUNDER_CAPE_JKG`, `CAP_CIN_JKG` |
 | Dry `lightning` also needs cloud | >= 60 % | `WINDY_CLOUD_TCC_PCT` |
 | Gust makes it windy | >= 15 m/s | `WINDY_GUST_MS` |
 | `windy` vs `windy-variant` split at cloud | 60 % | `WINDY_CLOUD_TCC_PCT` |
@@ -50,6 +50,17 @@ so exactly 12.5 % renders `sunny`/`clear-night` and exactly 62.5 % renders `part
 
 Rain versus snow is split from AROME's **accumulated** `snow_acc` and `rr_acc` deltas (rain = precipitation
 minus snowfall), not from temperature. There is **no fog branch** — the hourly tool never returns `fog`.
+
+**The thunder gate (`is_thunder`).** CAPE measures how much energy convection *could* release; convective
+inhibition (CIN) measures the lid holding it down. High CAPE under a strong lid produces no storm, so both
+functions call `is_thunder(cape, cin)` rather than comparing CAPE alone. AROME publishes `cin` as a
+**negative** value in J/kg — `0.0` is uncapped and more negative is a stronger lid — so the gate reads
+`cin > -CAP_CIN_JKG`.
+
+A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact and is exactly what the
+Open-Meteo path relies on: its forecast endpoint publishes CAPE but no inhibition, so thunder there is
+judged on CAPE alone. `CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination
+against real capped situations is unconfirmed against observations.
 
 **`derive_current_condition`** — used for current weather. It adds a fog heuristic and changes the
 rain/snow rule:
@@ -64,7 +75,7 @@ rain/snow rule:
 Snow versus rain is decided by temperature here because the nowcast precipitation-type code table is
 undocumented — it only signals *that* it is precipitating, not what kind. The fog heuristic can be
 switched off wholesale via the `FOG_HEURISTIC_ENABLED` flag in `const.py`. When it is not precipitating,
-the function falls back to `derive_condition` on cloud, CAPE, and gust alone.
+the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone.
 
 Day versus night (`sunny` vs `clear-night`) is resolved with `astral` on both derivation paths.
 
@@ -82,7 +93,7 @@ On the GeoSphere path, each field is filled from a per-field fallback chain (por
 | Dew point | INCA -> nowcast |
 | Gust | nowcast -> AROME |
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
-| Cloud cover, CAPE | AROME |
+| Cloud cover, CAPE, CIN | AROME |
 | 1-hour precipitation | INCA `RR`, else the sum of the last four nowcast 15-min `rr` buckets |
 | Precipitation flag | nowcast `pt` (255 means none) |
 
@@ -131,6 +142,8 @@ probability entirely and the forecast still renders.
   upstream.
 - The nowcast precipitation-type code table is undocumented, so the current path infers snow from
   temperature alone.
+- The CIN threshold is a textbook boundary, not one validated against Austrian storm reports; too strict a
+  value would suppress real storms and too loose a one would not filter anything.
 - Exact-timestamp POP matching yields no probability on any clock skew between the AROME and C-LAEF series.
 
 ## Extension Guidelines

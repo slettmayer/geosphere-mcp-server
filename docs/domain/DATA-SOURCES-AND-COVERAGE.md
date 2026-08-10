@@ -31,6 +31,8 @@ treated as a coverage signal, not an error, and triggers the Open-Meteo fallback
 | C-LAEF ensemble | `ensemble-v1-1h-2500m` | `forecast` | hourly (rr_p10/p50/p90) | Austria + Alps |
 | INCA analysis | `inca-v1-1h-1km` | `historical` | hourly | Austria only |
 | INCA nowcast | `nowcast-v1-15min-1km` | `forecast` | 15-min | Austria only |
+| WRF-Chem pollutants | `chem-v2-1h-3km` | `forecast` | ~73 h hourly | Austria + Alps |
+| WRF-Chem daily AQI | `chem_aqi-v1-1d-3km` | `forecast` | daily (EEA band 1-6) | Austria + Alps |
 
 Resource IDs, the per-dataset parameter lists, and the 30 s request timeout live in `const.py`.
 `AROME_MAX_HOURS = 60` bounds the GeoSphere hourly horizon.
@@ -44,9 +46,17 @@ to 16 days. Supplies current, hourly, and daily variables including precipitatio
 weather codes, with `timezone=auto`. Wind is requested in m/s so both paths share one unit. The request
 timeout is 15 s.
 
-It serves two roles: the automatic fallback for the current and hourly tools outside GeoSphere coverage,
-and the sole source for the daily tool everywhere. `OPENMETEO_MAX_HOURS = 48` and
+It serves two roles: the automatic fallback for the current, hourly, and storm-outlook tools outside
+GeoSphere coverage, and the sole source for the daily tool everywhere. `OPENMETEO_MAX_HOURS = 48` and
 `OPENMETEO_MAX_DAYS = 16` bound its horizons.
+
+The forecast endpoint publishes `cape` (which the storm outlook uses) but **no convective inhibition**, so
+thunder is gated on CAPE alone on this path — see [STORM-OUTLOOK.md](STORM-OUTLOOK.md).
+
+**Air quality lives on a separate host**: `https://air-quality-api.open-meteo.com/v1/air-quality`, also
+keyless, serving CAMS data. Same request and response shape, so it reuses the same client plumbing. Three
+forecast days are requested; unlike GeoSphere it publishes no daily index — see
+[AIR-QUALITY.md](AIR-QUALITY.md).
 
 The daily endpoint has two request modes: a forward-looking day count (`forecast_days`) or an explicit
 inclusive calendar range (`start_date`/`end_date`). The explicit range takes precedence when supplied.
@@ -70,8 +80,11 @@ Three distinct signals let a call degrade instead of failing:
 2. **Rate limit (HTTP 429)** — the server retries once when the API asks for a wait of 5 s or less,
    otherwise it returns a rate-limit notice. The notice reminds the caller that `get_daily_forecast`
    still works, because daily is always Open-Meteo and never GeoSphere.
-3. **Ensemble or secondary fetch failure** — the C-LAEF probability is omitted and the forecast still
-   renders. See [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) for the probability mapping.
+3. **Secondary fetch failure** — the secondary dataset is dropped and the call still renders. A C-LAEF
+   failure omits the precipitation probability (see
+   [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)); a daily-AQI failure keeps the pollutant
+   concentrations (see [AIR-QUALITY.md](AIR-QUALITY.md)). In both cases the primary dataset failing
+   propagates instead.
 
 ### Attribution and Compliance
 Both data sources are licensed **CC-BY 4.0** and must be attributed: **GeoSphere Austria** and

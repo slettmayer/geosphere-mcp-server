@@ -9,5 +9,8 @@ touches the corresponding domain area.
   degradation paths, attribution
 - [Condition Derivation](CONDITION-DERIVATION.md) -- condition vocabulary, derivation thresholds, merge
   chain, precipitation probability
+- [Storm Outlook](STORM-OUTLOOK.md) -- gust and thunderstorm derivations, window semantics, tri-state
+  outlook
+- [Air Quality](AIR-QUALITY.md) -- pollutants, the European AQI band scale, per-source differences
 - [Tool and Output Contract](OUTPUT-CONTRACT.md) -- tool signatures, validation, rendered output, error
   lines

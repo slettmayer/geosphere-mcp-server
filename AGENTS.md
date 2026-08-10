@@ -26,6 +26,8 @@
 | Understand the business domain | [docs/domain/](docs/domain/README.md) |
 | Know a tool's signature, validation, or exact output | [OUTPUT-CONTRACT.md](docs/domain/OUTPUT-CONTRACT.md) |
 | Change a condition threshold or the merge chain | [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md) |
+| Work on gusts, thunderstorm timing, or the outlook windows | [STORM-OUTLOOK.md](docs/domain/STORM-OUTLOOK.md) |
+| Work on pollutants or the air quality index | [AIR-QUALITY.md](docs/domain/AIR-QUALITY.md) |
 | Add or bump a dataset, or check coverage rules | [DATA-SOURCES-AND-COVERAGE.md](docs/domain/DATA-SOURCES-AND-COVERAGE.md) |
 
 ## Architecture Overview
@@ -33,17 +35,20 @@ MCP presentation layer over pure async API clients and pure derivation/rendering
 functional -- no classes outside the `MCPServer` instance (only typed exceptions and small data holders).
 All code lives in `src/geosphere_mcp_server/`.
 
-- `server.py` -- MCPServer tool registration (3 tools), session lifecycle, GeoSphere-vs-Open-Meteo path selection + fallback, stdio entry point, sentinel error lines, `start`-argument parsing
+- `server.py` -- MCPServer tool registration (5 tools), session lifecycle, GeoSphere-vs-Open-Meteo path selection + fallback, stdio entry point, sentinel error lines, `start`-argument parsing
 - `weather.py` -- merge chain, hourly assembly, POP mapping, unit conversions (orchestration)
+- `air_quality.py` -- WRF-Chem pollutant merge + daily AQI by local calendar day (orchestration)
 - `geosphere_api.py` -- pure async client for the GeoSphere Dataset API
-- `openmeteo_api.py` -- pure async client for Open-Meteo (current/hourly/daily)
-- `condition.py` -- pure condition derivation (ported from ha-geosphere-next)
-- `format.py` -- emoji-markdown renderers for the three tools
+- `openmeteo_api.py` -- pure async client for Open-Meteo (current/hourly/daily/air quality)
+- `condition.py` -- pure condition derivation, incl. the CAPE/CIN thunder gate (ported from ha-geosphere-next)
+- `outlook.py` -- pure storm-outlook derivation over the hourly rows (ported from ha-geosphere-next)
+- `format.py` -- emoji-markdown renderers for the five tools
 - `const.py` -- most constants (URLs, resource IDs, parameter lists, thresholds, WMO->condition map)
 
-Data flow: MCP tool call -> `server.py` handler. GeoSphere path goes through `weather.py`
-(-> `geosphere_api` -> derived via `condition.py`); on out-of-domain or for daily, `server.py` calls
-`openmeteo_api` directly. `server.py` then normalizes + renders via `format.py` -> markdown string.
+Data flow: MCP tool call -> `server.py` handler. GeoSphere path goes through `weather.py` or
+`air_quality.py` (-> `geosphere_api` -> derived via `condition.py` / `outlook.py`); on out-of-domain or
+for daily, `server.py` calls `openmeteo_api` directly. `server.py` then normalizes + renders via
+`format.py` -> markdown string.
 
 See [Architecture](docs/tech/ARCHITECTURE.md) for module boundaries and data flow detail.
 
@@ -68,12 +73,13 @@ See [Tech Stack](docs/tech/TECH-STACK.md) for full detail.
 See [Conventions](docs/tech/CONVENTIONS.md) for naming tables and full rules.
 
 ## Business Domain
-Weather MCP gateway. Three tools -- `get_current_weather`, `get_hourly_forecast`, `get_daily_forecast` --
-match the OpenWeatherMap server surface they replace. GeoSphere Austria's gridded datasets (AROME ~60 h,
-INCA analysis/nowcast, C-LAEF ensemble) drive current + hourly for Austria and the Alps; points outside
-coverage fall back to Open-Meteo automatically, and daily is always Open-Meteo (worldwide, 1-16 days).
-A shared Home Assistant-style condition vocabulary is derived physically on the GeoSphere path and mapped
-from WMO codes on the Open-Meteo path.
+Weather MCP gateway. Five tools: `get_current_weather`, `get_hourly_forecast` and `get_daily_forecast`
+match the OpenWeatherMap server surface they replace; `get_storm_outlook` and `get_air_quality` are
+additions. GeoSphere Austria's gridded datasets (AROME ~60 h, INCA analysis/nowcast, C-LAEF ensemble,
+WRF-Chem air quality) drive everything but daily for Austria and the Alps; points outside coverage fall
+back to Open-Meteo automatically, and daily is always Open-Meteo (worldwide, 1-16 days). A shared Home
+Assistant-style condition vocabulary is derived physically on the GeoSphere path and mapped from WMO codes
+on the Open-Meteo path.
 
 See [Domain Overview](docs/domain/OVERVIEW.md) for the concept catalogue, API surfaces, and glossary; it
 indexes the per-concept files on data sources, condition derivation, and the tool/output contract.
@@ -90,6 +96,10 @@ indexes the per-concept files on data sources, condition derivation, and the too
   "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
 - Several merged fields (dew point, CAPE, global radiation, hourly wind bearing) are computed and then
   dropped in normalization -- surfacing them is a `format.py` change only
+- Open-Meteo's forecast endpoint has CAPE but no convective inhibition, so the storm outlook silently
+  degrades to CAPE-only thunder gating outside GeoSphere coverage (the rendered output says so)
+- GeoSphere and Open-Meteo report the European AQI on two different scales (1-6 band vs 0-100+ numeric);
+  `format.py` reconciles them to the band, and a new pollutant must be added on both paths at once
 
 ## Detailed Guides
 - [Technical Context](docs/tech/README.md) -- architecture, tech stack, conventions, testing
