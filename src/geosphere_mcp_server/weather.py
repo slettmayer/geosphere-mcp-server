@@ -446,14 +446,26 @@ async def async_fetch_hourly_forecast(
     """
     now = now or datetime.now(UTC)
 
+    # The first hour the assembly will keep: the hour in progress, or the
+    # caller's `start` when that is later.
+    window_start = now.replace(minute=0, second=0, microsecond=0)
+    if start is not None and start > window_start:
+        window_start = start
+
     # One hour of history, so the hour already under way has a predecessor for
     # the accumulation deltas and survives assembly — see HOURLY_LOOKBACK_HOURS.
     # Anchored to the top of the hour, not to `now`: the API rounds `start` up
     # to the next whole stamp, so `now - 1h` at 19:33 would yield 19:00 and the
     # in-progress hour would again be the predecessor-less first step.
-    series_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(
+    series_start = window_start.replace(minute=0, second=0, microsecond=0) - timedelta(
         hours=HOURLY_LOOKBACK_HOURS
     )
+    # And no further than the caller asked for: `hours=6` has no use for the
+    # other ~54 h of the AROME horizon. The bound carries an hour of slack so
+    # rounding at either end cannot clip the last requested hour. The storm
+    # outlook asks for AROME_MAX_HOURS, so its scan still spans the full
+    # horizon.
+    series_end = window_start + timedelta(hours=max(hours, 1))
 
     requests = [
         async_get_timeseries(
@@ -463,6 +475,7 @@ async def async_fetch_hourly_forecast(
             latitude,
             longitude,
             start=series_start,
+            end=series_end,
         )
     ]
     if include_ensemble:
@@ -474,6 +487,7 @@ async def async_fetch_hourly_forecast(
                 latitude,
                 longitude,
                 start=series_start,
+                end=series_end,
             )
         )
     results = await asyncio.gather(*requests, return_exceptions=True)

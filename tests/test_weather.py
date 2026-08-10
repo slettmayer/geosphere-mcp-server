@@ -521,3 +521,48 @@ def test_merge_current_gates_thunder_on_the_current_hour() -> None:
     merged = merge_current_conditions(None, None, trimmed, 48.219, 16.362, NOW)
     assert merged["cin_jkg"] == -5.0
     assert merged["condition"] == "lightning"
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
+    """`hours=N` must not pull the whole ~60 h horizon and discard most of it."""
+    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(None, 48.219, 16.362, hours=6, now=NOW)
+
+    top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
+    for call in mock.await_args_list:
+        assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
+        # One hour of slack past the requested window, so rounding at either
+        # end cannot clip the last hour the caller asked for.
+        assert call.kwargs["end"] == top_of_hour + timedelta(hours=6)
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
+    """A `start` in the future moves the whole fetched window with it."""
+    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    later = NOW.replace(minute=0, second=0, microsecond=0) + timedelta(hours=10)
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(
+            None, 48.219, 16.362, hours=4, start=later, now=NOW
+        )
+
+    for call in mock.await_args_list:
+        assert call.kwargs["start"] == later - timedelta(hours=1)
+        assert call.kwargs["end"] == later + timedelta(hours=4)
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> None:
+    """A `start` before now must not drag the window backwards."""
+    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    earlier = NOW - timedelta(hours=8)
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(
+            None, 48.219, 16.362, hours=3, start=earlier, now=NOW
+        )
+
+    top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
+    for call in mock.await_args_list:
+        assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)

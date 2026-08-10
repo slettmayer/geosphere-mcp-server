@@ -48,6 +48,11 @@ version being cut, so you never rename that heading by hand. See
   fix above and it aligns the GeoSphere path with the Open-Meteo path, which always included the current
   hour, and with `ha-geosphere-next`. The leading hour's precipitation figure covers the whole hour,
   including the part already elapsed.
+- Changed: the hourly AROME and C-LAEF requests are now bounded to the window actually asked for
+  instead of pulling the full ~60 h horizon every time. `hours=6` fetches 8 hourly steps rather than
+  ~57, and an explicit `start` moves the fetched window with it. The bound carries an hour of slack at
+  each end (one for the accumulation predecessor, one so rounding cannot clip the last requested hour).
+  `get_storm_outlook` asks for the full horizon, so its thunderstorm scan is unaffected.
 - Fixed: the current condition no longer reads cloud cover, CAPE and CIN from the hour *after* now. The
   AROME snapshot used for the fallback chain skipped index 0, copying the hourly path's need for an
   accumulation predecessor -- but every field it reads is instantaneous, and the API trims the series to
