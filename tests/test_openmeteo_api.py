@@ -11,6 +11,7 @@ from geosphere_mcp_server.openmeteo_api import (
     OpenMeteoApiError,
     OpenMeteoConnectionError,
     OpenMeteoTimeoutError,
+    async_get_air_quality,
     async_get_current,
     async_get_daily,
     async_get_hourly,
@@ -88,6 +89,22 @@ SAMPLE_DAILY = {
         "weather_code": [2, 61],
         "temperature_2m_max": [27.0, 25.0],
         "temperature_2m_min": [18.0, 17.0],
+    },
+}
+
+SAMPLE_AIR_QUALITY = {
+    "latitude": 38.72,
+    "longitude": -9.14,
+    "timezone": "Europe/Lisbon",
+    "utc_offset_seconds": 3600,
+    "hourly_units": {"pm10": "μg/m³"},
+    "hourly": {
+        "time": ["2026-07-22T14:00", "2026-07-22T15:00"],
+        "european_aqi": [31, 44],
+        "nitrogen_dioxide": [12.0, 14.0],
+        "ozone": [88.0, 92.0],
+        "pm10": [19.0, 21.0],
+        "pm2_5": [9.0, 11.0],
     },
 }
 
@@ -206,6 +223,44 @@ async def test_async_get_daily_date_range_replaces_forecast_days() -> None:
     assert params["start_date"] == "2026-07-25"
     assert params["end_date"] == "2026-07-26"
     assert "forecast_days" not in params
+
+
+# --- async_get_air_quality ---
+
+
+@pytest.mark.asyncio
+async def test_async_get_air_quality_success() -> None:
+    """A successful air-quality fetch returns the raw body."""
+    session = _make_session(json_data=SAMPLE_AIR_QUALITY)
+
+    result = await async_get_air_quality(session, 38.72, -9.14)
+
+    assert result["hourly"]["european_aqi"] == [31, 44]
+
+
+@pytest.mark.asyncio
+async def test_async_get_air_quality_builds_params_and_uses_its_own_host() -> None:
+    """Air quality lives on a different host and asks for the four pollutants."""
+    session = _make_session(json_data=SAMPLE_AIR_QUALITY)
+
+    await async_get_air_quality(session, 38.72, -9.14)
+
+    url = session.get.call_args.args[0]
+    assert url.startswith("https://air-quality-api.open-meteo.com/")
+    params = session.get.call_args.kwargs["params"]
+    assert params["timezone"] == "auto"
+    assert params["forecast_days"] == "3"
+    for variable in ("european_aqi", "nitrogen_dioxide", "ozone", "pm10", "pm2_5"):
+        assert variable in params["hourly"]
+
+
+@pytest.mark.asyncio
+async def test_async_get_air_quality_timeout() -> None:
+    """A timeout surfaces as OpenMeteoTimeoutError, not a bare TimeoutError."""
+    session = _make_session(raise_error=TimeoutError())
+
+    with pytest.raises(OpenMeteoTimeoutError):
+        await async_get_air_quality(session, 38.72, -9.14)
 
 
 # --- Error handling ---

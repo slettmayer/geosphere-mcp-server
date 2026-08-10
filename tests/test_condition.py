@@ -15,38 +15,69 @@ from geosphere_mcp_server.condition import (
     derive_current_condition,
     dew_point_from_t_rh,
     is_night,
+    is_thunder,
     wind_from_components,
 )
+from geosphere_mcp_server.const import CAP_CIN_JKG, THUNDER_CAPE_JKG
+
+# --- is_thunder ---
+
+
+@pytest.mark.parametrize(
+    ("cape", "cin", "expected"),
+    [
+        (None, None, False),
+        (0.0, 0.0, False),
+        # Below the CAPE threshold, inhibition is irrelevant.
+        (THUNDER_CAPE_JKG - 1, 0.0, False),
+        (THUNDER_CAPE_JKG, 0.0, True),
+        # A missing cin counts as uncapped, so the gate cannot suppress it --
+        # this is the Open-Meteo path, whose endpoint has no inhibition.
+        (1500.0, None, True),
+        # Weak inhibition passes, a strong lid suppresses.
+        (1500.0, -10.0, True),
+        (1500.0, -200.0, False),
+        # The boundary itself is exclusive: exactly -CAP_CIN_JKG is capped.
+        (1500.0, -CAP_CIN_JKG, False),
+        (1500.0, -CAP_CIN_JKG + 0.1, True),
+    ],
+)
+def test_is_thunder(cape, cin, expected) -> None:
+    assert is_thunder(cape, cin) is expected
+
 
 # --- derive_condition ---
 
 
 @pytest.mark.parametrize(
-    ("precip", "snow", "tcc", "cape", "gust", "night", "expected"),
+    ("precip", "snow", "tcc", "cape", "cin", "gust", "night", "expected"),
     [
         # clear / cloud buckets
-        (0.0, 0.0, 0.0, 0.0, 0.0, False, "sunny"),
-        (0.0, 0.0, 0.0, 0.0, 0.0, True, "clear-night"),
-        (0.0, 0.0, 12.5, None, None, False, "sunny"),
-        (0.0, 0.0, 40.0, 0.0, 0.0, False, "partlycloudy"),
-        (0.0, 0.0, 62.5, 0.0, 0.0, False, "partlycloudy"),
-        (0.0, 0.0, 80.0, 0.0, 0.0, True, "cloudy"),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, "sunny"),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, True, "clear-night"),
+        (0.0, 0.0, 12.5, None, None, None, False, "sunny"),
+        (0.0, 0.0, 40.0, 0.0, 0.0, 0.0, False, "partlycloudy"),
+        (0.0, 0.0, 62.5, 0.0, 0.0, 0.0, False, "partlycloudy"),
+        (0.0, 0.0, 80.0, 0.0, 0.0, 0.0, True, "cloudy"),
         # precipitation
-        (0.5, 0.0, 90.0, 0.0, 0.0, False, "rainy"),
-        (4.0, 0.0, 90.0, 0.0, 0.0, False, "pouring"),
-        (0.5, 0.0, 90.0, 1500.0, 0.0, False, "lightning-rainy"),
-        (0.5, 0.5, 90.0, 0.0, 0.0, False, "snowy"),
-        (1.0, 0.3, 90.0, 0.0, 0.0, False, "snowy-rainy"),
+        (0.5, 0.0, 90.0, 0.0, 0.0, 0.0, False, "rainy"),
+        (4.0, 0.0, 90.0, 0.0, 0.0, 0.0, False, "pouring"),
+        (0.5, 0.0, 90.0, 1500.0, 0.0, 0.0, False, "lightning-rainy"),
+        (0.5, 0.5, 90.0, 0.0, 0.0, 0.0, False, "snowy"),
+        (1.0, 0.3, 90.0, 0.0, 0.0, 0.0, False, "snowy-rainy"),
         # dry thunder / wind
-        (0.0, 0.0, 80.0, 1500.0, 0.0, False, "lightning"),
-        (0.0, 0.0, 30.0, 0.0, 16.0, False, "windy"),
-        (0.0, 0.0, 80.0, 0.0, 16.0, False, "windy-variant"),
+        (0.0, 0.0, 80.0, 1500.0, 0.0, 0.0, False, "lightning"),
+        (0.0, 0.0, 30.0, 0.0, 0.0, 16.0, False, "windy"),
+        (0.0, 0.0, 80.0, 0.0, 0.0, 16.0, False, "windy-variant"),
         # missing cloud data
-        (0.0, 0.0, None, 0.0, 0.0, False, None),
+        (0.0, 0.0, None, 0.0, 0.0, 0.0, False, None),
+        # A strong cap demotes both thunder branches to their non-thunder peers.
+        (0.5, 0.0, 90.0, 1500.0, -200.0, 0.0, False, "rainy"),
+        (0.0, 0.0, 80.0, 1500.0, -200.0, 0.0, False, "cloudy"),
     ],
 )
-def test_derive_condition(precip, snow, tcc, cape, gust, night, expected) -> None:
-    assert derive_condition(precip, snow, tcc, cape, gust, night) == expected
+def test_derive_condition(precip, snow, tcc, cape, cin, gust, night, expected) -> None:
+    assert derive_condition(precip, snow, tcc, cape, cin, gust, night) == expected
 
 
 # --- derive_current_condition ---
@@ -63,6 +94,7 @@ def test_current_condition_pt_override_rain() -> None:
             wind_speed=3.0,
             cloud_coverage=10.0,  # cloud says clear, pt wins
             cape=0.0,
+            cin=0.0,
             gust_speed=5.0,
             night=False,
         )
@@ -80,6 +112,7 @@ def test_current_condition_pt_override_snow_by_temperature() -> None:
             wind_speed=3.0,
             cloud_coverage=100.0,
             cape=0.0,
+            cin=0.0,
             gust_speed=5.0,
             night=False,
         )
@@ -97,6 +130,7 @@ def test_current_condition_no_precip_falls_through() -> None:
             wind_speed=3.0,
             cloud_coverage=5.0,
             cape=0.0,
+            cin=0.0,
             gust_speed=5.0,
             night=False,
         )
@@ -114,6 +148,7 @@ def test_current_condition_fog() -> None:
             wind_speed=0.5,
             cloud_coverage=100.0,
             cape=0.0,
+            cin=0.0,
             gust_speed=1.0,
             night=False,
         )
@@ -132,6 +167,7 @@ def test_current_condition_rate_triggers_precip_without_pt() -> None:
             wind_speed=3.0,
             cloud_coverage=100.0,
             cape=0.0,
+            cin=0.0,
             gust_speed=5.0,
             night=False,
         )

@@ -12,9 +12,11 @@ from __future__ import annotations
 import pytest
 
 from geosphere_mcp_server.server import (
+    get_air_quality,
     get_current_weather,
     get_daily_forecast,
     get_hourly_forecast,
+    get_storm_outlook,
 )
 
 VIENNA = (48.2208, 16.3738)
@@ -45,6 +47,22 @@ async def test_hourly_forecast_vienna_uses_geosphere() -> None:
     result = await get_hourly_forecast(*VIENNA, hours=6)
     _assert_rendered(result)
     assert "AROME" in result
+
+
+@pytest.mark.asyncio
+async def test_storm_outlook_vienna_uses_geosphere() -> None:
+    result = await get_storm_outlook(*VIENNA)
+    _assert_rendered(result)
+    assert "AROME" in result
+    # The GeoSphere path has convective inhibition, so no CAPE-only caveat.
+    assert "no convective inhibition" not in result
+
+
+@pytest.mark.asyncio
+async def test_air_quality_vienna_uses_geosphere() -> None:
+    result = await get_air_quality(*VIENNA)
+    _assert_rendered(result)
+    assert "WRF-Chem" in result
 
 
 @pytest.mark.asyncio
@@ -85,6 +103,21 @@ async def test_hourly_forecast_lisbon_falls_back_to_openmeteo() -> None:
     result = await get_hourly_forecast(*LISBON, hours=6)
     _assert_rendered(result)
     assert "Open-Meteo" in result
+
+
+@pytest.mark.asyncio
+async def test_storm_outlook_lisbon_falls_back_to_openmeteo() -> None:
+    result = await get_storm_outlook(*LISBON)
+    _assert_rendered(result)
+    assert "Open-Meteo" in result
+    assert "no convective inhibition" in result
+
+
+@pytest.mark.asyncio
+async def test_air_quality_lisbon_falls_back_to_openmeteo() -> None:
+    result = await get_air_quality(*LISBON)
+    _assert_rendered(result)
+    assert "Open-Meteo (CAMS)" in result
 
 
 @pytest.mark.asyncio

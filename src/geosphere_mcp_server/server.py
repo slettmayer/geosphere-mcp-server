@@ -1,9 +1,10 @@
 """MCP server exposing GeoSphere Austria + Open-Meteo weather tools.
 
-Three tools mirror the OpenWeatherMap MCP surface they replace
+Three of the tools mirror the OpenWeatherMap MCP surface they replace
 (``get_current_weather`` / ``get_hourly_forecast`` / ``get_daily_forecast``)
-so existing agent-prompt routing transfers unchanged. Current and hourly try
-the high-resolution GeoSphere path first and transparently fall back to
+so existing agent-prompt routing transfers unchanged; ``get_storm_outlook``
+and ``get_air_quality`` are additions. Every tool except the daily forecast
+tries the high-resolution GeoSphere path first and transparently falls back to
 Open-Meteo when the point is outside GeoSphere coverage; daily is always
 Open-Meteo. Tools never raise — every failure resolves to a short markdown
 error line.
@@ -19,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 import aiohttp
 from mcp.server import MCPServer
 
-from geosphere_mcp_server import __version__, openmeteo_api, weather
+from geosphere_mcp_server import __version__, air_quality, openmeteo_api, weather
 from geosphere_mcp_server import format as fmt
 from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
@@ -53,8 +54,10 @@ mcp = MCPServer(
         "back to Open-Meteo, and each response states its source. Use "
         "get_current_weather for conditions now, get_hourly_forecast for the "
         "next hours (up to ~60 h on GeoSphere, 48 h on the Open-Meteo "
-        "fallback), and get_daily_forecast for a 1–16 day outlook worldwide "
-        "(by a day count or an explicit start_date/end_date range)."
+        "fallback), get_daily_forecast for a 1–16 day outlook worldwide "
+        "(by a day count or an explicit start_date/end_date range), "
+        "get_storm_outlook for peak gusts and thunderstorm timing, and "
+        "get_air_quality for pollutant concentrations and the European AQI."
     ),
 )
 
@@ -213,6 +216,90 @@ async def get_hourly_forecast(
                     body, latitude, longitude, fallback_hours, start=start_dt
                 )
             return fmt.render_hourly(data)
+
+    return await _guarded(work, note_daily=True)
+
+
+@mcp.tool()
+async def get_storm_outlook(latitude: float, longitude: float) -> str:
+    """Get the severe-weather outlook for a location: gusts and thunderstorms.
+
+    Reports the peak wind gust within the next hour and the next 12 hours,
+    whether a thunderstorm is expected within the next hour, when the next
+    thunderstorm is expected across the whole forecast horizon, and the peak
+    CAPE over the next 12 hours. Deliberately reports no severity verdict —
+    what counts as dangerous is the caller's judgement.
+
+    High-resolution GeoSphere AROME data (CAPE gated by convective inhibition)
+    is used inside its Austria/Alps coverage; elsewhere the tool falls back to
+    Open-Meteo, which publishes no inhibition and therefore judges thunder on
+    CAPE alone. The response states which source served it.
+
+    Horizons round up to whole hours: the "next hour" window covers the hour
+    already under way plus the next one. A thunderstorm timestamp at or before
+    the current time means one is already in progress.
+
+    Args:
+        latitude: Decimal latitude (e.g. 48.2208 for Vienna). Geocode city
+            names to coordinates yourself.
+        longitude: Decimal longitude (e.g. 16.3738 for Vienna).
+    """
+
+    async def work() -> str:
+        async with aiohttp.ClientSession() as session:
+            try:
+                assembled = await weather.async_fetch_hourly_forecast(
+                    session,
+                    latitude,
+                    longitude,
+                    hours=AROME_MAX_HOURS,
+                    # The ensemble only adds precipitation probability, which
+                    # the outlook does not report — skip the request.
+                    include_ensemble=False,
+                )
+                data = fmt.normalize_outlook_geosphere(assembled, latitude, longitude)
+            except GeoSphereOutOfDomainError:
+                body = await openmeteo_api.async_get_hourly(
+                    session, latitude, longitude, hours=OPENMETEO_MAX_HOURS
+                )
+                data = fmt.normalize_outlook_openmeteo(body, latitude, longitude)
+            return fmt.render_outlook(data)
+
+    return await _guarded(work, note_daily=True)
+
+
+@mcp.tool()
+async def get_air_quality(latitude: float, longitude: float) -> str:
+    """Get air quality for a location: pollutants now and the AQI outlook.
+
+    Reports current NO₂, O₃, PM10 and PM2.5 surface concentrations plus the
+    European Air Quality Index (1-6 EEA bands) for today, tomorrow and in two
+    days.
+
+    GeoSphere's WRF-Chem forecast (3 km) serves Austria and the Alps; elsewhere
+    the tool falls back to Open-Meteo's CAMS air-quality data. Both are model
+    forecasts, not station measurements, and the two models will not agree
+    numerically. The response states which source served it.
+
+    Args:
+        latitude: Decimal latitude (e.g. 48.2208 for Vienna). Geocode city
+            names to coordinates yourself.
+        longitude: Decimal longitude (e.g. 16.3738 for Vienna).
+    """
+
+    async def work() -> str:
+        async with aiohttp.ClientSession() as session:
+            try:
+                merged = await air_quality.async_fetch_air_quality(
+                    session, latitude, longitude
+                )
+                data = fmt.normalize_air_quality_geosphere(merged, latitude, longitude)
+            except GeoSphereOutOfDomainError:
+                body = await openmeteo_api.async_get_air_quality(
+                    session, latitude, longitude
+                )
+                data = fmt.normalize_air_quality_openmeteo(body, latitude, longitude)
+            return fmt.render_air_quality(data)
 
     return await _guarded(work, note_daily=True)
 

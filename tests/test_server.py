@@ -8,12 +8,12 @@ and returns it undecorated rather than wrapping it.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from geosphere_mcp_server import openmeteo_api, weather
+from geosphere_mcp_server import air_quality, openmeteo_api, weather
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
@@ -21,9 +21,11 @@ from geosphere_mcp_server.geosphere_api import (
 )
 from geosphere_mcp_server.openmeteo_api import OpenMeteoTimeoutError
 from geosphere_mcp_server.server import (
+    get_air_quality,
     get_current_weather,
     get_daily_forecast,
     get_hourly_forecast,
+    get_storm_outlook,
 )
 
 LAT, LON = 48.2208, 16.3738
@@ -349,3 +351,165 @@ async def test_daily_end_before_start_returns_error() -> None:
         )
     assert out.startswith("⚠️ end_date")
     om.assert_not_awaited()
+
+
+# --- get_storm_outlook ---
+
+
+# The tools call the outlook with the real clock, so the fixtures are anchored
+# to it. Two identical consecutive hours are used rather than one, so an hour
+# rolling over mid-test still leaves a matching hour inside the window.
+def _now_hours(count: int = 2) -> list[datetime]:
+    """The current top of the hour and the ``count - 1`` hours after it, UTC."""
+    top = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    return [top + timedelta(hours=offset) for offset in range(count)]
+
+
+SAMPLE_OUTLOOK_ASSEMBLED = {
+    "reference_time": datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+    "sources": ["AROME"],
+    "hourly": [
+        {
+            "time": when,
+            "condition": "lightning-rainy",
+            "wind_gust_ms": 22.0,
+            "cape_jkg": 1700.0,
+            "cin_jkg": -5.0,
+            "precipitation_mm": 3.0,
+        }
+        for when in _now_hours()
+    ],
+}
+
+SAMPLE_OPENMETEO_OUTLOOK_HOURLY = {
+    "timezone": "UTC",
+    "timezone_abbreviation": "UTC",
+    "utc_offset_seconds": 0,
+    "hourly": {
+        # utc_offset_seconds is 0, so these naive local stamps are UTC.
+        "time": [when.isoformat()[:16] for when in _now_hours()],
+        "weather_code": [95, 95],
+        "wind_gusts_10m": [19.0, 19.0],
+        "cape": [2100.0, 2100.0],
+        "precipitation": [4.0, 4.0],
+    },
+}
+
+
+async def test_storm_outlook_geosphere_happy_path() -> None:
+    fetch = AsyncMock(return_value=SAMPLE_OUTLOOK_ASSEMBLED)
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        out = await get_storm_outlook(LAT, LON)
+    assert out.splitlines()[0] == "# Storm Outlook for 48.2208, 16.3738"
+    assert "💨 Max gust next 1 h: 22 m/s" in out
+    assert "⛈️ Thunderstorm expected next 1 h: yes" in out
+    assert "Source: GeoSphere (AROME)" in out
+
+
+async def test_storm_outlook_skips_the_ensemble_request() -> None:
+    """The outlook reports no probability, so the second dataset is not fetched."""
+    fetch = AsyncMock(return_value=SAMPLE_OUTLOOK_ASSEMBLED)
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        await get_storm_outlook(LAT, LON)
+    assert fetch.await_args.kwargs["include_ensemble"] is False
+
+
+async def test_storm_outlook_out_of_domain_falls_back_to_openmeteo() -> None:
+    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_OUTLOOK_HOURLY)
+    with (
+        patch.object(weather, "async_fetch_hourly_forecast", fetch),
+        patch.object(openmeteo_api, "async_get_hourly", om),
+    ):
+        out = await get_storm_outlook(38.7, -9.1)
+    assert "Source: Open-Meteo" in out
+    assert "💨 Max gust next 1 h: 19 m/s" in out
+    # The fallback source has no inhibition and must say so.
+    assert "no convective inhibition" in out
+    om.assert_awaited_once()
+
+
+async def test_storm_outlook_timeout_returns_warning() -> None:
+    fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        out = await get_storm_outlook(LAT, LON)
+    assert out == "⚠️ Timeout fetching weather data"
+
+
+async def test_storm_outlook_rate_limit_returns_warning() -> None:
+    fetch = AsyncMock(side_effect=GeoSphereRateLimitError("429", retry_after=30))
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        out = await get_storm_outlook(LAT, LON)
+    assert "⚠️ GeoSphere rate limit exceeded (retry in 30s)" in out
+
+
+# --- get_air_quality ---
+
+SAMPLE_AIR_QUALITY = {
+    "observed_at": datetime(2026, 7, 15, 14, 0, tzinfo=UTC),
+    "pollutants": {
+        "nitrogen_dioxide": 18.0,
+        "ozone": 92.0,
+        "pm10": 21.0,
+        "pm2_5": 12.0,
+    },
+    "aqi_band_today": 2,
+    "aqi_band_tomorrow": 3,
+    "aqi_band_in_2_days": 2,
+    "aqi_value_today": None,
+    "aqi_value_tomorrow": None,
+    "aqi_value_in_2_days": None,
+    "sources": ["WRF-Chem", "daily AQI"],
+}
+
+SAMPLE_OPENMETEO_AIR_QUALITY = {
+    "timezone": "UTC",
+    "timezone_abbreviation": "UTC",
+    "utc_offset_seconds": 0,
+    "hourly": {
+        # Anchored to the real clock so "today" resolves to the current day.
+        "time": [when.isoformat()[:16] for when in _now_hours(1)],
+        "european_aqi": [44],
+        "nitrogen_dioxide": [14.0],
+        "ozone": [70.0],
+        "pm10": [21.0],
+        "pm2_5": [11.0],
+    },
+}
+
+
+async def test_air_quality_geosphere_happy_path() -> None:
+    fetch = AsyncMock(return_value=SAMPLE_AIR_QUALITY)
+    with patch.object(air_quality, "async_fetch_air_quality", fetch):
+        out = await get_air_quality(LAT, LON)
+    assert "# Air Quality at 48.2208, 16.3738" in out
+    assert "2 (fair) today · 3 (moderate) tomorrow · 2 (fair) in 2 days" in out
+    assert "NO₂ 18 µg/m³" in out
+    assert "📡 Source: GeoSphere (WRF-Chem + daily AQI, 3 km)" in out
+
+
+async def test_air_quality_out_of_domain_falls_back_to_openmeteo() -> None:
+    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_AIR_QUALITY)
+    with (
+        patch.object(air_quality, "async_fetch_air_quality", fetch),
+        patch.object(openmeteo_api, "async_get_air_quality", om),
+    ):
+        out = await get_air_quality(38.7, -9.1)
+    assert "📡 Source: Open-Meteo (CAMS)" in out
+    assert "3 (moderate, index 44) today" in out
+    om.assert_awaited_once()
+
+
+async def test_air_quality_timeout_returns_warning() -> None:
+    fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
+    with patch.object(air_quality, "async_fetch_air_quality", fetch):
+        out = await get_air_quality(LAT, LON)
+    assert out == "⚠️ Timeout fetching weather data"
+
+
+async def test_air_quality_unexpected_error_returns_warning() -> None:
+    fetch = AsyncMock(side_effect=ValueError("boom"))
+    with patch.object(air_quality, "async_fetch_air_quality", fetch):
+        out = await get_air_quality(LAT, LON)
+    assert out == "⚠️ No weather data available"

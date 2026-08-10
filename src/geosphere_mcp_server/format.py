@@ -14,15 +14,26 @@ and are emitted verbatim (e.g. ``partlycloudy``).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from geosphere_mcp_server.const import AROME_MAX_HOURS, wmo_to_condition
-
-# GeoSphere covers Austria + the Alpine region, all within CET/CEST.
-GEOSPHERE_TZ = "Europe/Vienna"
-
+from geosphere_mcp_server.const import (
+    AROME_MAX_HOURS,
+    GEOSPHERE_TZ,
+    OUTLOOK_LONG_HORIZON_HOURS,
+    OUTLOOK_SHORT_HORIZON_HOURS,
+    aqi_band,
+    aqi_label,
+    wmo_to_condition,
+)
+from geosphere_mcp_server.outlook import (
+    max_cape,
+    max_gust,
+    next_thunderstorm,
+    thunderstorm_outlook,
+)
 
 # --- Number / value formatting helpers ---
 
@@ -289,6 +300,54 @@ def normalize_hourly_geosphere(
     }
 
 
+def openmeteo_hourly_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build the full hourly row list from a raw Open-Meteo hourly body.
+
+    Rows carry naive **local** timestamps (the API is queried with
+    ``timezone=auto``) and the same keys the GeoSphere path produces, so the
+    hourly renderer and :mod:`outlook` can consume either source. No filtering
+    or truncation happens here — the callers apply their own windows.
+    """
+    hourly = body.get("hourly") or {}
+    times = hourly.get("time") or []
+
+    def _col(name: str) -> list[Any]:
+        return hourly.get(name) or []
+
+    def _at(column: list[Any], index: int) -> Any:
+        return column[index] if index < len(column) else None
+
+    temps = _col("temperature_2m")
+    codes = _col("weather_code")
+    precips = _col("precipitation")
+    probs = _col("precipitation_probability")
+    winds = _col("wind_speed_10m")
+    gusts = _col("wind_gusts_10m")
+    capes = _col("cape")
+
+    rows: list[dict[str, Any]] = []
+    for i, raw in enumerate(times):
+        when = _parse_local(raw)
+        if when is None:
+            continue
+        rows.append(
+            {
+                "time": when,
+                "condition": wmo_to_condition(_at(codes, i)),
+                "temperature_c": _at(temps, i),
+                "precipitation_mm": _at(precips, i),
+                "precipitation_probability_pct": _at(probs, i),
+                "wind_speed_ms": _at(winds, i),
+                "wind_gust_ms": _at(gusts, i),
+                "cape_jkg": _at(capes, i),
+                # This endpoint publishes no convective inhibition; a missing
+                # value reads as uncapped (see condition.is_thunder).
+                "cin_jkg": None,
+            }
+        )
+    return rows
+
+
 def normalize_hourly_openmeteo(
     body: dict[str, Any],
     latitude: float,
@@ -303,41 +362,14 @@ def normalize_hourly_openmeteo(
     and truncates to ``hours``.
     """
     now = now or datetime.now(UTC)
-    hourly = body.get("hourly") or {}
-    times = hourly.get("time") or []
     offset = int(body.get("utc_offset_seconds") or 0)
 
     cutoff = _to_local_naive(now, offset).replace(minute=0, second=0, microsecond=0)
     if start is not None:
         cutoff = max(cutoff, _to_local_naive(start, offset))
 
-    def _col(name: str) -> list[Any]:
-        return hourly.get(name) or []
-
-    temps = _col("temperature_2m")
-    codes = _col("weather_code")
-    precips = _col("precipitation")
-    probs = _col("precipitation_probability")
-    winds = _col("wind_speed_10m")
-
-    entries: list[dict[str, Any]] = []
-    for i, raw in enumerate(times):
-        when = _parse_local(raw)
-        if when is None or when < cutoff:
-            continue
-        code = codes[i] if i < len(codes) else None
-        entries.append(
-            {
-                "time": when,
-                "condition": wmo_to_condition(code),
-                "temperature_c": temps[i] if i < len(temps) else None,
-                "precipitation_mm": precips[i] if i < len(precips) else None,
-                "precipitation_probability_pct": (probs[i] if i < len(probs) else None),
-                "wind_speed_ms": winds[i] if i < len(winds) else None,
-            }
-        )
-        if len(entries) >= max(hours, 1):
-            break
+    entries = [row for row in openmeteo_hourly_rows(body) if row["time"] >= cutoff]
+    entries = entries[: max(hours, 1)]
 
     return {
         "latitude": latitude,
@@ -390,6 +422,363 @@ def render_hourly(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append(data["note"])
 
+    return "\n".join(lines)
+
+
+# --- Storm outlook ---
+
+
+def _outlook(
+    rows: list[dict[str, Any]],
+    now: datetime,
+    localize: Callable[[datetime], datetime] | None = None,
+) -> dict[str, Any]:
+    """Run every outlook derivation over one hourly series.
+
+    ``rows`` and ``now`` must share a timezone convention (both aware, or both
+    naive local). ``localize`` optionally maps the resulting timestamps into the
+    zone the renderer prints.
+    """
+    gust_short, gust_short_at = max_gust(rows, OUTLOOK_SHORT_HORIZON_HOURS, now)
+    gust_long, gust_long_at = max_gust(rows, OUTLOOK_LONG_HORIZON_HOURS, now)
+    storm_at, storm_cape = next_thunderstorm(rows, now)
+
+    def _when(value: datetime | None) -> datetime | None:
+        if value is None or localize is None:
+            return value
+        return localize(value)
+
+    return {
+        "short_horizon_hours": OUTLOOK_SHORT_HORIZON_HOURS,
+        "long_horizon_hours": OUTLOOK_LONG_HORIZON_HOURS,
+        "max_gust_short_ms": gust_short,
+        "max_gust_short_at": _when(gust_short_at),
+        "max_gust_long_ms": gust_long,
+        "max_gust_long_at": _when(gust_long_at),
+        "thunderstorm_short": thunderstorm_outlook(
+            rows, OUTLOOK_SHORT_HORIZON_HOURS, now
+        ),
+        "next_thunderstorm_at": _when(storm_at),
+        "next_thunderstorm_cape_jkg": storm_cape,
+        "max_cape_long_jkg": max_cape(rows, OUTLOOK_LONG_HORIZON_HOURS, now),
+        "hours_available": len(rows),
+    }
+
+
+def normalize_outlook_geosphere(
+    assembled: dict[str, Any],
+    latitude: float,
+    longitude: float,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fold an assembled GeoSphere hourly forecast into the uniform outlook shape.
+
+    The derivation runs on the aware UTC rows; only the reported timestamps are
+    localized to Vienna, so no comparison ever crosses a zone.
+    """
+    now = now or datetime.now(UTC)
+    tz = ZoneInfo(GEOSPHERE_TZ)
+    rows = assembled.get("hourly", [])
+    data = _outlook(rows, now, localize=lambda when: when.astimezone(tz))
+    sources = assembled.get("sources") or ["AROME"]
+    reference = assembled.get("reference_time")
+    reference_local = reference.astimezone(tz) if reference is not None else None
+    return {
+        **data,
+        "latitude": latitude,
+        "longitude": longitude,
+        "model": "AROME",
+        "reference_time": reference_local,
+        "tz_id": GEOSPHERE_TZ,
+        "tz_abbr": reference_local.tzname() if reference_local is not None else None,
+        "source": f"GeoSphere ({' + '.join(sources)})",
+        "has_inhibition": True,
+    }
+
+
+def normalize_outlook_openmeteo(
+    body: dict[str, Any],
+    latitude: float,
+    longitude: float,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fold a raw Open-Meteo hourly body into the uniform outlook shape.
+
+    Open-Meteo rows are naive local, so ``now`` is converted to the point's
+    local time before the derivation compares anything.
+    """
+    now = now or datetime.now(UTC)
+    offset = int(body.get("utc_offset_seconds") or 0)
+    rows = openmeteo_hourly_rows(body)
+    data = _outlook(rows, _to_local_naive(now, offset))
+    return {
+        **data,
+        "latitude": latitude,
+        "longitude": longitude,
+        "model": "Open-Meteo",
+        "reference_time": None,
+        "tz_id": body.get("timezone"),
+        "tz_abbr": body.get("timezone_abbreviation"),
+        "source": "Open-Meteo",
+        # No convective inhibition on this endpoint: thunder gates on CAPE
+        # alone, which over-calls storms under a capped atmosphere.
+        "has_inhibition": False,
+    }
+
+
+def _stamp(when: datetime | None) -> str | None:
+    """Render a timestamp as ``Day YYYY-MM-DD HH:MM`` for outlook lines."""
+    return None if when is None else f"{when:%a %Y-%m-%d %H:%M}"
+
+
+def _tristate(value: bool | None) -> str:
+    """Render the tri-state thunderstorm outlook."""
+    if value is None:
+        return "unknown (no usable forecast hours)"
+    return "yes" if value else "no"
+
+
+def render_outlook(data: dict[str, Any]) -> str:
+    """Render the uniform storm-outlook dict as compact emoji markdown."""
+    short = data["short_horizon_hours"]
+    long = data["long_horizon_hours"]
+    lines = [
+        f"# Storm Outlook for {_coords(data['latitude'], data['longitude'])}",
+        "",
+    ]
+
+    header = f"{data['model']} model"
+    reference = data.get("reference_time")
+    if reference is not None:
+        header += f", reference {reference:%Y-%m-%d %H:%M}"
+        if data.get("tz_abbr"):
+            header += f" {data['tz_abbr']}"
+    header += f" · Source: {data['source']}"
+    lines.append(header)
+    lines.append("")
+
+    if not data.get("hours_available"):
+        lines.append("No forecast hours available for the outlook window.")
+        return "\n".join(lines)
+
+    for label, value_key, time_key in (
+        (f"next {short} h", "max_gust_short_ms", "max_gust_short_at"),
+        (f"next {long} h", "max_gust_long_ms", "max_gust_long_at"),
+    ):
+        gust = _round_int(data.get(value_key))
+        if gust is None:
+            lines.append(f"💨 Max gust {label}: unknown")
+            continue
+        at = _stamp(data.get(time_key))
+        suffix = f" (at {at})" if at is not None else ""
+        lines.append(f"💨 Max gust {label}: {gust} m/s{suffix}")
+
+    lines.append(
+        f"⛈️ Thunderstorm expected next {short} h: "
+        f"{_tristate(data.get('thunderstorm_short'))}"
+    )
+
+    storm_at = _stamp(data.get("next_thunderstorm_at"))
+    if storm_at is None:
+        lines.append("⚡ Next thunderstorm: none in the forecast horizon")
+    else:
+        cape = _round_int(data.get("next_thunderstorm_cape_jkg"))
+        suffix = f" (CAPE {cape} J/kg)" if cape is not None else ""
+        lines.append(f"⚡ Next thunderstorm: {storm_at}{suffix}")
+
+    cape_max = _round_int(data.get("max_cape_long_jkg"))
+    if cape_max is not None:
+        lines.append(f"🌡️ Max CAPE next {long} h: {cape_max} J/kg")
+
+    tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
+    if tz_line is not None:
+        lines.append(tz_line)
+
+    lines.append("")
+    note = (
+        f'Horizons round up to whole hours: the "{short} h" window covers the '
+        "hour already under way plus the next one. A thunderstorm timestamp at "
+        "or before now means one is already in progress."
+    )
+    if not data.get("has_inhibition"):
+        note += (
+            " This source publishes no convective inhibition, so thunder is "
+            "judged on CAPE alone and may over-call storms under a capped "
+            "atmosphere."
+        )
+    lines.append(note)
+
+    return "\n".join(lines)
+
+
+# --- Air quality ---
+
+# Display order and label for the four pollutants both sources publish.
+_POLLUTANT_LABELS = (
+    ("nitrogen_dioxide", "NO₂"),
+    ("ozone", "O₃"),
+    ("pm10", "PM10"),
+    ("pm2_5", "PM2.5"),
+)
+
+
+def normalize_air_quality_geosphere(
+    merged: dict[str, Any],
+    latitude: float,
+    longitude: float,
+) -> dict[str, Any]:
+    """Fold an :func:`air_quality.merge_air_quality` dict into the uniform shape."""
+    tz = ZoneInfo(GEOSPHERE_TZ)
+    observed = merged.get("observed_at")
+    observed_local = observed.astimezone(tz) if observed is not None else None
+    sources = merged.get("sources") or ["WRF-Chem"]
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "pollutants": merged.get("pollutants") or {},
+        "days": [
+            {
+                "label": label,
+                "band": merged.get(f"aqi_band_{key}"),
+                "value": merged.get(f"aqi_value_{key}"),
+            }
+            for key, label in (
+                ("today", "today"),
+                ("tomorrow", "tomorrow"),
+                ("in_2_days", "in 2 days"),
+            )
+        ],
+        "observed_at": observed_local,
+        "tz_id": GEOSPHERE_TZ,
+        "tz_abbr": observed_local.tzname() if observed_local is not None else None,
+        "source": f"GeoSphere ({' + '.join(sources)}, 3 km)",
+    }
+
+
+def normalize_air_quality_openmeteo(
+    body: dict[str, Any],
+    latitude: float,
+    longitude: float,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fold a raw Open-Meteo air-quality body into the uniform shape.
+
+    Concentrations are read at the hour nearest to the point's local ``now``.
+    This API publishes no daily index, so each day's figure is the **maximum**
+    of that local day's hourly European AQI — banded with the published EEA
+    thresholds so it reads like the GeoSphere band index.
+    """
+    now = now or datetime.now(UTC)
+    hourly = body.get("hourly") or {}
+    offset = int(body.get("utc_offset_seconds") or 0)
+    local_now = _to_local_naive(now, offset)
+
+    times = [_parse_local(raw) for raw in hourly.get("time") or []]
+
+    def _col(name: str) -> list[Any]:
+        return hourly.get(name) or []
+
+    index: int | None = None
+    valid = [(i, when) for i, when in enumerate(times) if when is not None]
+    if valid:
+        index = min(valid, key=lambda pair: abs((pair[1] - local_now).total_seconds()))[
+            0
+        ]
+
+    pollutants: dict[str, float | None] = {}
+    for key, _ in _POLLUTANT_LABELS:
+        column = _col(key)
+        pollutants[key] = (
+            column[index] if index is not None and index < len(column) else None
+        )
+
+    aqi_column = _col("european_aqi")
+    today = local_now.date()
+    per_day: dict[int, float] = {}
+    for i, when in valid:
+        value = aqi_column[i] if i < len(aqi_column) else None
+        if value is None:
+            continue
+        offset_days = (when.date() - today).days
+        if offset_days in per_day:
+            per_day[offset_days] = max(per_day[offset_days], value)
+        else:
+            per_day[offset_days] = value
+
+    observed = times[index] if index is not None else None
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "pollutants": pollutants,
+        "days": [
+            {
+                "label": label,
+                "band": aqi_band(per_day.get(offset_days)),
+                "value": per_day.get(offset_days),
+            }
+            for offset_days, label in ((0, "today"), (1, "tomorrow"), (2, "in 2 days"))
+        ],
+        "observed_at": observed,
+        "tz_id": body.get("timezone"),
+        "tz_abbr": body.get("timezone_abbreviation"),
+        "source": "Open-Meteo (CAMS)",
+    }
+
+
+def _aqi_day_text(day: dict[str, Any]) -> str | None:
+    """Render one AQI day as ``2 (fair) today``, or None when unknown.
+
+    The leading figure is always the 1-6 EEA band, so both sources read alike;
+    the underlying numeric index is appended only where the source has one
+    (Open-Meteo), because GeoSphere publishes the band directly.
+    """
+    band = day.get("band")
+    label = aqi_label(band)
+    if label is None:
+        return None
+    value = day.get("value")
+    detail = f"{label}, index {round(value)}" if value is not None else label
+    return f"{band} ({detail}) {day['label']}"
+
+
+def render_air_quality(data: dict[str, Any]) -> str:
+    """Render the uniform air-quality dict as compact emoji markdown."""
+    lines = [
+        f"# Air Quality at {_coords(data['latitude'], data['longitude'])}",
+        "",
+    ]
+
+    days = [text for text in map(_aqi_day_text, data.get("days", [])) if text]
+    if days:
+        lines.append(f"🏷️ European AQI: {' · '.join(days)}")
+
+    concentrations = [
+        f"{label} {round(value)} µg/m³"
+        for key, label in _POLLUTANT_LABELS
+        if (value := (data.get("pollutants") or {}).get(key)) is not None
+    ]
+    if concentrations:
+        observed = _hm(data.get("observed_at"))
+        heading = "🌫️ Concentrations"
+        if observed is not None:
+            heading += f" ({observed})"
+        lines.append(f"{heading}: {' · '.join(concentrations)}")
+
+    if not days and not concentrations:
+        lines.append("No air-quality data available for this location.")
+        return "\n".join(lines)
+
+    tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
+    if tz_line is not None:
+        lines.append(tz_line)
+    lines.append(f"📡 Source: {data['source']}")
+
+    lines.append("")
+    lines.append(
+        "AQI bands are the European (EEA) scale: 1 good, 2 fair, 3 moderate, "
+        "4 poor, 5 very poor, 6 extremely poor. These are model forecasts, not "
+        "station measurements."
+    )
     return "\n".join(lines)
 
 

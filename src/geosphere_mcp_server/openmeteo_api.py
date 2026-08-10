@@ -17,6 +17,9 @@ from typing import Any
 import aiohttp
 
 from geosphere_mcp_server.const import (
+    OPENMETEO_AIR_QUALITY_BASE_URL,
+    OPENMETEO_AIR_QUALITY_DAYS,
+    OPENMETEO_AIR_QUALITY_VARIABLES,
     OPENMETEO_API_BASE_URL,
     OPENMETEO_CURRENT_DAILY_VARIABLES,
     OPENMETEO_CURRENT_VARIABLES,
@@ -115,6 +118,29 @@ async def async_get_hourly(
         "hourly": ",".join(OPENMETEO_HOURLY_VARIABLES),
         "wind_speed_unit": OPENMETEO_WIND_SPEED_UNIT,
         "forecast_days": str(forecast_days),
+        "timezone": "auto",
+    }
+    return await _async_get(session, params, base_url)
+
+
+async def async_get_air_quality(
+    session: aiohttp.ClientSession,
+    latitude: float,
+    longitude: float,
+    base_url: str = OPENMETEO_AIR_QUALITY_BASE_URL,
+) -> dict[str, Any]:
+    """Fetch the hourly air-quality forecast worldwide (CAMS, keyless).
+
+    A different host from the weather endpoints, same request/response shape.
+    Returns the raw body containing ``hourly``, ``hourly_units``, ``timezone``
+    and coordinate fields. Unlike GeoSphere this API publishes no daily index,
+    so the per-day values are derived from the hourly series downstream.
+    """
+    params = {
+        "latitude": str(latitude),
+        "longitude": str(longitude),
+        "hourly": ",".join(OPENMETEO_AIR_QUALITY_VARIABLES),
+        "forecast_days": str(OPENMETEO_AIR_QUALITY_DAYS),
         "timezone": "auto",
     }
     return await _async_get(session, params, base_url)

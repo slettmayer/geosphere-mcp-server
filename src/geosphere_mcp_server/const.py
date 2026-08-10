@@ -10,13 +10,17 @@ from __future__ import annotations
 
 GEOSPHERE_API_BASE_URL = "https://dataset.api.hub.geosphere.at/v1"
 GEOSPHERE_TIMEOUT = 30
+# GeoSphere covers Austria + the Alpine region, all within CET/CEST. Used to
+# render its UTC stamps and to match its daily values to a calendar day.
+GEOSPHERE_TZ = "Europe/Vienna"
 
-# Datasets (mode, resource id). Air-quality / WRF-Chem datasets are out of
-# scope for this server and deliberately omitted.
+# Datasets (mode, resource id).
 DATASET_AROME = ("forecast", "nwp-v1-1h-2500m")
 DATASET_ENSEMBLE = ("forecast", "ensemble-v1-1h-2500m")
 DATASET_NOWCAST = ("forecast", "nowcast-v1-15min-1km")
 DATASET_INCA = ("historical", "inca-v1-1h-1km")
+DATASET_CHEM = ("forecast", "chem-v2-1h-3km")
+DATASET_CHEM_AQI = ("forecast", "chem_aqi-v1-1d-3km")
 
 # AROME hourly point forecast parameters.
 AROME_PARAMETERS = (
@@ -32,12 +36,26 @@ AROME_PARAMETERS = (
     "snowlmt",
     "grad",
     "cape",
+    "cin",
 )
 # C-LAEF ensemble precipitation percentiles (per-hour amounts, kg m-2; the
 # API exposes only p10/p50/p90 — no member counts or true probabilities).
 ENSEMBLE_PARAMETERS = ("rr_p10", "rr_p50", "rr_p90")
 NOWCAST_PARAMETERS = ("t2m", "td", "rh2m", "rr", "pt", "dd", "ff", "fx")
 INCA_PARAMETERS = ("T2M", "TD2M", "RH2M", "RR", "P0", "GL", "UU", "VV")
+# WRF-Chem surface concentrations (µg/m³) and the daily European AQI (1-6).
+CHEM_PARAMETERS = ("no2surf", "o3surf", "pm10surf", "pm25surf")
+CHEM_AQI_PARAMETERS = ("aqi",)
+# Pollutant key -> WRF-Chem parameter name. The keys are the uniform names used
+# across air_quality.py and format.py, and match the Open-Meteo variables.
+CHEM_POLLUTANTS = {
+    "nitrogen_dioxide": "no2surf",
+    "ozone": "o3surf",
+    "pm10": "pm10surf",
+    "pm2_5": "pm25surf",
+}
+# Horizon of the WRF-Chem hourly pollutant forecast (hours).
+CHEM_MAX_HOURS = 73
 
 # How old the newest cached INCA analysis may get before a re-fetch (seconds).
 INCA_MAX_AGE_SECONDS = 55 * 60
@@ -54,6 +72,13 @@ POP_DRY_PCT = 0
 
 # Condition-derivation thresholds (see condition.py).
 THUNDER_CAPE_JKG = 1000.0
+# Convective inhibition cap. AROME publishes `cin` as NEGATIVE J/kg: 0.0 means
+# uncapped, more negative means a stronger lid. CAPE only counts as thunder
+# potential when inhibition is weaker than this magnitude. 50 J/kg is a
+# standard boundary for weak inhibition; discrimination against real capped
+# situations is unconfirmed. A missing `cin` counts as uncapped, so sources
+# without it (Open-Meteo) keep the pre-CIN, CAPE-only behaviour.
+CAP_CIN_JKG = 50.0
 PRECIP_MIN_MM = 0.1
 POURING_MM_PER_H = 4.0
 WINDY_GUST_MS = 15.0
@@ -75,6 +100,11 @@ PT_NO_PRECIPITATION = 255
 
 # Horizon of the AROME hourly forecast (hours). Used to clamp the hourly tool.
 AROME_MAX_HOURS = 60
+
+# Forecast-outlook horizons (see outlook.py). The window rounds up to whole
+# hourly steps, so an N-hour horizon spans the in-progress hour plus N more.
+OUTLOOK_SHORT_HORIZON_HOURS = 1
+OUTLOOK_LONG_HORIZON_HOURS = 12
 
 # --- Open-Meteo API (worldwide fallback + always-on daily forecast) ---
 
@@ -114,6 +144,10 @@ OPENMETEO_HOURLY_VARIABLES = (
     "wind_speed_10m",
     "wind_direction_10m",
     "wind_gusts_10m",
+    # Drives the storm outlook on the fallback path. The general forecast
+    # endpoint publishes no convective inhibition, so that gate degrades to
+    # CAPE-only there (see condition.is_thunder).
+    "cape",
 )
 
 OPENMETEO_DAILY_VARIABLES = (
@@ -132,6 +166,55 @@ OPENMETEO_DAILY_VARIABLES = (
     "sunset",
     "uv_index_max",
 )
+
+# --- Open-Meteo Air Quality API (worldwide air-quality fallback) ---
+
+OPENMETEO_AIR_QUALITY_BASE_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+# The four pollutants WRF-Chem publishes, plus the European AQI. Named to match
+# CHEM_POLLUTANTS so both source paths normalize to the same keys.
+OPENMETEO_AIR_QUALITY_VARIABLES = (
+    "european_aqi",
+    "nitrogen_dioxide",
+    "ozone",
+    "pm10",
+    "pm2_5",
+)
+# Days of hourly air quality to request; three cover today/tomorrow/in 2 days.
+OPENMETEO_AIR_QUALITY_DAYS = 3
+
+# --- European Air Quality Index ---
+
+# EEA band index (1-6) -> label. GeoSphere's `aqi` parameter is already this
+# index; Open-Meteo publishes the underlying 0-100+ numeric value instead.
+AQI_BAND_LABELS = {
+    1: "good",
+    2: "fair",
+    3: "moderate",
+    4: "poor",
+    5: "very poor",
+    6: "extremely poor",
+}
+# Upper bounds of the published EEA numeric bands, in band order. The last band
+# is open-ended, so a value above the final bound falls into band 6.
+AQI_NUMERIC_BAND_BOUNDS = (20.0, 40.0, 60.0, 80.0, 100.0)
+
+
+def aqi_band(value: float | None) -> int | None:
+    """Map an Open-Meteo numeric European AQI to its EEA band index (1-6)."""
+    if value is None:
+        return None
+    for index, bound in enumerate(AQI_NUMERIC_BAND_BOUNDS, start=1):
+        if value <= bound:
+            return index
+    return len(AQI_NUMERIC_BAND_BOUNDS) + 1
+
+
+def aqi_label(band: int | None) -> str | None:
+    """Label for an EEA band index (1-6); None for unknown or out-of-range."""
+    if band is None:
+        return None
+    return AQI_BAND_LABELS.get(int(band))
+
 
 # --- Shared condition vocabulary ---
 # Home Assistant condition strings, used as plain literals to keep this

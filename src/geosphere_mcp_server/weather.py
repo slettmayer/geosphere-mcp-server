@@ -159,6 +159,7 @@ def assemble_hourly_forecast(
         snow = _diff(arome.series("snow_acc"), i)
         cloud = _percent(arome.value_at("tcc", i))
         cape = arome.value_at("cape", i)
+        cin = arome.value_at("cin", i)
         temperature = arome.value_at("t2m", i)
         humidity = arome.value_at("rh2m", i)
         hourly.append(
@@ -169,6 +170,7 @@ def assemble_hourly_forecast(
                     snow,
                     cloud,
                     cape,
+                    cin,
                     gust_speed,
                     is_night(latitude, longitude, ts),
                 ),
@@ -184,6 +186,7 @@ def assemble_hourly_forecast(
                 "snow_limit_m": arome.value_at("snowlmt", i),
                 "precipitation_probability_pct": pop_by_ts.get(ts),
                 "cape_jkg": cape,
+                "cin_jkg": cin,
                 "global_radiation_wm2": arome.value_at("grad", i),
             }
         )
@@ -233,6 +236,7 @@ def _arome_current(
         "wind_gust_speed": gust_speed,
         "cloud_coverage": _percent(arome.value_at("tcc", index)),
         "cape": arome.value_at("cape", index),
+        "cin": arome.value_at("cin", index),
         "snow_limit": arome.value_at("snowlmt", index),
     }
 
@@ -250,7 +254,7 @@ def merge_current_conditions(
     Per-field preference (ported from GeoSphereCurrentCoordinator._merge):
     temp/humidity/wind speed+bearing = INCA -> nowcast -> AROME; dew point =
     INCA -> nowcast; gust = nowcast -> AROME; pressure (P0 Pa->hPa) and global
-    radiation = INCA only; cloud/CAPE = AROME; 1-h precip = INCA RR else the
+    radiation = INCA only; cloud/CAPE/CIN = AROME; 1-h precip = INCA RR else the
     sum of the last four 15-min nowcast rr buckets at/before now; precip type
     from nowcast pt (255 = none).
     """
@@ -296,6 +300,7 @@ def merge_current_conditions(
     gust = chain(now_value("fx"), arome_field("wind_gust_speed"))
     cloud = arome_field("cloud_coverage")
     cape = arome_field("cape")
+    cin = arome_field("cin")
 
     p0, _ = inca_latest("P0")
     rr_1h, observed_at = inca_latest("RR")
@@ -337,6 +342,7 @@ def merge_current_conditions(
         "global_radiation_wm2": inca_latest("GL")[0],
         "snow_limit_m": arome_field("snow_limit"),
         "cape_jkg": cape,
+        "cin_jkg": cin,
         "condition": derive_current_condition(
             precipitation_type=precipitation_type,
             precipitation_rate_mm_h=rate_mm_h,
@@ -345,6 +351,7 @@ def merge_current_conditions(
             wind_speed=wind_speed,
             cloud_coverage=cloud,
             cape=cape,
+            cin=cin,
             gust_speed=gust,
             night=night,
         ),
@@ -418,31 +425,39 @@ async def async_fetch_hourly_forecast(
     hours: int = 24,
     start: datetime | None = None,
     now: datetime | None = None,
+    include_ensemble: bool = True,
 ) -> dict[str, Any]:
     """Fetch AROME (+ C-LAEF ensemble) concurrently and assemble the hourly forecast.
 
-    Ensemble failure just omits precipitation probability. Raises
+    Ensemble failure just omits precipitation probability. Pass
+    ``include_ensemble=False`` to skip that request entirely — the storm
+    outlook does not report probability and should not spend the call. Raises
     :class:`GeoSphereOutOfDomainError` only when AROME is out of domain (caller
     falls back to Open-Meteo); other AROME errors propagate. The result carries
     a ``sources`` list.
     """
     now = now or datetime.now(UTC)
 
-    arome_res, ensemble_res = await asyncio.gather(
+    requests = [
         async_get_timeseries(
             session, *DATASET_AROME, AROME_PARAMETERS, latitude, longitude
-        ),
-        async_get_timeseries(
-            session, *DATASET_ENSEMBLE, ENSEMBLE_PARAMETERS, latitude, longitude
-        ),
-        return_exceptions=True,
+        )
+    ]
+    if include_ensemble:
+        requests.append(
+            async_get_timeseries(
+                session, *DATASET_ENSEMBLE, ENSEMBLE_PARAMETERS, latitude, longitude
+            )
+        )
+    results = await asyncio.gather(*requests, return_exceptions=True)
+
+    if isinstance(results[0], BaseException):
+        raise results[0]
+    arome: GeoSphereResponse = results[0]
+
+    ensemble = (
+        _optional_response(results[1], "C-LAEF ensemble") if include_ensemble else None
     )
-
-    if isinstance(arome_res, BaseException):
-        raise arome_res
-    arome: GeoSphereResponse = arome_res
-
-    ensemble = _optional_response(ensemble_res, "C-LAEF ensemble")
 
     assembled = assemble_hourly_forecast(
         arome, ensemble, latitude, longitude, now, hours=hours, start=start
