@@ -32,9 +32,8 @@ cancelling a flight.
 | `next_thunderstorm` | First storm hour and that hour's CAPE | The **whole** series |
 | `thunderstorm_outlook` | Tri-state `True` / `False` / `None` | The given horizon |
 | `series_is_decidable` | Whether any hour ahead can be judged at all | At/after now |
-| `hour_at` | The row covering "now" | The in-progress hour |
 
-The tool calls these at two fixed horizons — `OUTLOOK_SHORT_HORIZON_HOURS` (1 h) and
+The horizon-scoped ones are called at two fixed horizons — `OUTLOOK_SHORT_HORIZON_HOURS` (1 h) and
 `OUTLOOK_LONG_HORIZON_HOURS` (12 h). There is no horizon argument.
 
 `next_thunderstorm` deliberately ignores the horizon: "no storm for two days" and "storm in 40 hours" are
@@ -79,7 +78,7 @@ Every window semantic above rests on the series' first entry being the hour alre
 **not** come for free: the GeoSphere API trims the forecast to the current hour, and
 `assemble_hourly_forecast` skips the first step because an accumulated parameter has no predecessor to
 difference against. Left alone, those two facts cancel the in-progress hour out entirely — the 1 h window
-collapses to a single stamp, `hour_at` always returns `None`, and a storm happening right now is invisible.
+collapses to a single stamp and a storm happening right now is invisible.
 
 `async_fetch_hourly_forecast` therefore requests `HOURLY_LOOKBACK_HOURS` (1) of history, so the current
 hour arrives with a predecessor and a real precipitation delta. The lookback is anchored to the **top of

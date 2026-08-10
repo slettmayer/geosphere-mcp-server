@@ -64,7 +64,6 @@ Functions (all pure, all threshold-free — what counts as "too windy" is the ca
 | `max_cape(rows, hours, now)` | peak CAPE J/kg within the horizon |
 | `next_thunderstorm(rows, now)` | `(first storm hour, its CAPE)` over the whole series |
 | `thunderstorm_outlook(rows, hours, now)` | tri-state `True` / `False` / `None` |
-| `hour_at(rows, now)` | the in-progress hour's row |
 
 Two semantics carried over verbatim from the HA original, both deliberate:
 

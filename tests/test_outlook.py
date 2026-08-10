@@ -10,10 +10,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from geosphere_mcp_server.outlook import (
-    hour_at,
     max_cape,
     max_gust,
     next_thunderstorm,
+    series_is_decidable,
     thunderstorm_outlook,
 )
 
@@ -188,26 +188,15 @@ def test_rows_without_a_timestamp_are_skipped() -> None:
     assert max_gust(rows, 1, NOW) == (4.0, datetime(2026, 7, 15, 16, 0, tzinfo=UTC))
 
 
-def test_hour_at_selects_the_in_progress_hour() -> None:
-    """NOW is 16:30; the hour stamped 16:00 is the one covering it."""
-    rows = [_hour(0, cape=100.0), _hour(1, cape=200.0)]
-    selected = hour_at(rows, NOW)
-    assert selected is not None
-    assert selected["time"] == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
-    assert selected["cape_jkg"] == 100.0
-
-
-def test_hour_at_follows_the_clock() -> None:
-    """Later in the day the same series yields the hour then in progress."""
-    rows = [_hour(offset, cape=float(offset)) for offset in range(6)]
-    selected = hour_at(rows, NOW + timedelta(hours=3))
-    assert selected is not None
-    assert selected["time"] == datetime(2026, 7, 15, 19, 0, tzinfo=UTC)
-    assert selected["cape_jkg"] == 3.0
-
-
-def test_hour_at_returns_none_without_a_match() -> None:
-    """An empty series, one that aged out, and one not yet reached."""
-    assert hour_at([], NOW) is None
-    assert hour_at([_hour(-3), _hour(-2)], NOW) is None
-    assert hour_at([_hour(2), _hour(3)], NOW) is None
+def test_series_is_decidable() -> None:
+    """The guard that stops an unreadable series rendering as an all-clear."""
+    assert series_is_decidable([_hour(0, condition="cloudy")], NOW) is True
+    # CAPE alone is enough to judge an hour.
+    assert series_is_decidable([_hour(0, cape=10.0)], NOW) is True
+    # Neither a condition nor CAPE anywhere ahead.
+    assert series_is_decidable([_hour(0), _hour(5)], NOW) is False
+    assert series_is_decidable([], NOW) is False
+    # Past hours do not count, however readable they are.
+    assert series_is_decidable([_hour(-3, condition="sunny")], NOW) is False
+    # Unlike the windowed outlook, the scan reaches the whole series.
+    assert series_is_decidable([_hour(40, condition="sunny")], NOW) is True

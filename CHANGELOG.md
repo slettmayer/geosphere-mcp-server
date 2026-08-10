@@ -39,8 +39,8 @@ version being cut, so you never rename that heading by hand. See
 - Fixed: the hourly forecast (and with it the storm outlook) no longer drops the hour already under way.
   The API trims the forecast to the current hour and the first step has no predecessor for the
   accumulation deltas, so that hour was being skipped -- which silently broke every outlook window: the
-  "next 1 h" window held one stamp instead of two, `hour_at` never matched, and a thunderstorm forecast
-  for the current hour was invisible. One hour of history is now requested alongside the forecast,
+  "next 1 h" window held one stamp instead of two, and a thunderstorm forecast for the current hour was
+  invisible. One hour of history is now requested alongside the forecast,
   anchored to the top of the hour rather than to `now` (the API rounds `start` up to the next whole
   stamp, so `now - 1h` at 15:30 would come back as 15:00 and change nothing).
 - Fixed: `⚡ Next thunderstorm` now reports `unknown (no usable forecast hours)` instead of a confident
