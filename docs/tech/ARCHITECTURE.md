@@ -88,8 +88,8 @@ One module per responsibility. No sub-packages.
 - No I/O, no HTTP, no MCP/HA imports
 
 **`outlook.py` (Pure Derivation)**
-- Owns: `max_gust`, `max_cape`, `next_thunderstorm`, `thunderstorm_outlook`, `series_is_decidable`, and
-  the round-up window they share
+- Owns: the round-up `window`, the window readers `max_gust` / `max_cape` / `thunderstorm_outlook`, the
+  full-series `scan_thunderstorm` (storm hour, its CAPE, and whether the scan counts), and `horizon_hours`
 - Reads the hourly **row dicts** both source paths produce, through `.get`, so one implementation serves
   GeoSphere and Open-Meteo and a source missing a key degrades rather than raising
 - Depends only on `condition.is_thunder` and `const.py`; no I/O, no MCP/HA imports

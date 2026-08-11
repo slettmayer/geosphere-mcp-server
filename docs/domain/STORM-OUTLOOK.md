@@ -23,20 +23,24 @@ The outlook answers the two questions an hourly table makes a caller work for: *
 severity verdict, because what counts as dangerous depends on whether the caller is closing a skylight or
 cancelling a flight.
 
-### The Five Derivations
+### The Derivations
 
-| Function | Reports | Horizon |
-|----------|---------|---------|
-| `max_gust` | Peak gust (m/s) and the hour it falls in | The given horizon |
-| `max_cape` | Peak CAPE (J/kg) | The given horizon |
-| `next_thunderstorm` | First storm hour and that hour's CAPE | The **whole** series |
-| `thunderstorm_outlook` | Tri-state `True` / `False` / `None` | The given horizon |
-| `series_is_decidable` | Whether any hour ahead can be judged at all | At/after now |
+`window(rows, hours, now)` slices the series once; the three window readers below take the slice rather
+than re-deriving it, so `format._outlook` walks a series three times (two windows plus the full scan)
+instead of six.
 
-The horizon-scoped ones are called at two fixed horizons — `OUTLOOK_SHORT_HORIZON_HOURS` (1 h) and
-`OUTLOOK_LONG_HORIZON_HOURS` (12 h). There is no horizon argument.
+| Function | Reports | Input |
+|----------|---------|-------|
+| `max_gust` | Peak gust (m/s) and the hour it falls in | A window |
+| `max_cape` | Peak CAPE (J/kg) | A window |
+| `thunderstorm_outlook` | Tri-state `True` / `False` / `None` | A window |
+| `scan_thunderstorm` | First storm hour, its CAPE, and whether the scan counts | The **whole** series |
+| `horizon_hours` | How far ahead the series still reaches | The **whole** series |
 
-`next_thunderstorm` deliberately ignores the horizon: "no storm for two days" and "storm in 40 hours" are
+Windows are cut at two fixed horizons — `OUTLOOK_SHORT_HORIZON_HOURS` (1 h) and
+`OUTLOOK_LONG_HORIZON_HOURS` (12 h).
+
+`scan_thunderstorm` deliberately ignores the horizon: "no storm for two days" and "storm in 40 hours" are
 both useful answers, and truncating the scan would turn the second into the first.
 
 ### Window Semantics
@@ -51,7 +55,7 @@ spans `hours + 1` stamps. A "1 hour" window covers the in-progress hour plus the
 an event up to ~2 h out. A caller that needs a strict "within the next 60 minutes" answer must compare the
 returned timestamps itself.
 
-**`next_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
+**`scan_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
 one already under way. That is the encoding of "a storm is in progress". Lead-time arithmetic downstream
 must clamp a non-positive lead time to zero rather than assume the timestamp is in the future.
 
@@ -92,10 +96,20 @@ hour is *decidable* when it carries either a derived condition or a CAPE value; 
 nothing about thunder, and answering "no storm" there would be a guess rather than an answer. This makes a
 data gap distinguishable from genuine calm.
 
-`next_thunderstorm` needs the same distinction but cannot express it: it returns `(None, None)` both for
-"no storm in the horizon" and for "nothing here can be read". `series_is_decidable` supplies the missing
-bit, and the renderer consults it before printing an all-clear — otherwise a response could declare the
-window `unknown` on one line and assert a confident 60-hour all-clear on the next.
+`scan_thunderstorm` needs the same distinction and returns it as a third element, because the first two
+are `(None, None)` both for "no storm in the horizon" and for "nothing here can be read". The renderer
+consults it before printing an all-clear — otherwise a response could declare the window `unknown` on one
+line and assert a confident 60-hour all-clear on the next. It comes out of the *same* pass as the storm
+hour rather than a second one, so the two answers cannot drift apart: an hour the scan just judged as a
+storm is by construction an hour it counts as readable.
+
+### An All-Clear Names Its Horizon
+
+The two paths hand the outlook series of quite different lengths — AROME runs ~60 h, while the Open-Meteo
+fallback counts forecast days from *local midnight*, so 48 h requested at 20:00 leaves only ~28 h ahead.
+`get_storm_outlook` therefore asks the fallback for `OUTLOOK_FALLBACK_HOURS` (72 h, three days), which
+keeps at least 48 h ahead at any hour of the day, and `horizon_hours` measures what actually came back so
+the renderer can print `none in the next {N} h` rather than an unqualified "forecast horizon".
 
 ### Both Source Paths, One Implementation
 

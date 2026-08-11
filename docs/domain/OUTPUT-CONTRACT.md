@@ -110,7 +110,9 @@ Per-field emoji, like current weather. The header carries model, reference time,
 `💨 Max gust next 1 h` and `💨 Max gust next 12 h` render as `{N} m/s (at {Day} {YYYY-MM-DD} {HH:MM})`, or
 `unknown` when the window holds no gust value. `⛈️ Thunderstorm expected next 1 h` is tri-state: `yes`,
 `no`, or `unknown (no usable forecast hours)`. `⚡ Next thunderstorm` renders the stamp and that hour's
-CAPE, `none in the forecast horizon` when the series is readable and calm, or
+CAPE, `none in the next {N} h` when the series is readable and calm — naming the horizon actually
+scanned, which is ~60 h on AROME but only what remains of three days from local midnight on the fallback —
+or
 `unknown (no usable forecast hours)` when no hour ahead can be judged at all. `🌡️ Max CAPE next 12 h` is omitted when unavailable. A
 `🕐 Timezone` line closes the block.
 
@@ -127,7 +129,9 @@ numeric index. A day whose value is unknown is omitted rather than rendered as a
 `🌫️ Concentrations ({HH:MM})` joins the four pollutants with ` · `. Then `🕐 Timezone`, a
 `📡 Source: ...` line, and a trailing note giving the six EEA band names and stating that these are model
 forecasts rather than station measurements. With neither AQI nor concentrations available the body is
-`No air-quality data available for this location.` See [AIR-QUALITY.md](AIR-QUALITY.md).
+`No air-quality data available for this location.` — still followed by the `📡 Source:` line, because which
+source drew the blank is what tells the caller whether asking elsewhere is worth anything; the band legend
+is dropped there, having no figures left to explain. See [AIR-QUALITY.md](AIR-QUALITY.md).
 
 ### Values Computed but Never Rendered
 Several merged and assembled fields are dropped during normalization and never appear in any output.
@@ -146,7 +150,8 @@ rate-limit retry policy.
 |-----------|------|
 | Rate limit, retry-after known | `⚠️ GeoSphere rate limit exceeded (retry in {N}s)` |
 | Rate limit, no retry-after | `⚠️ GeoSphere rate limit exceeded (retry shortly)` |
-| Any of the above on current/hourly | gains the suffix `— get_daily_forecast still works (Open-Meteo).` |
+| Any of the above on current / hourly / storm outlook | gains the suffix `— get_daily_forecast still works (Open-Meteo).` |
+| Rate limit on air quality | no such suffix: the daily forecast carries no air-quality data |
 | Timeout against either upstream API | `⚠️ Timeout fetching weather data` |
 | Anything else, including non-timeout network failures | `⚠️ No weather data available` |
 

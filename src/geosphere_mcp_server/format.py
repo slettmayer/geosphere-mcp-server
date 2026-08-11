@@ -1,4 +1,4 @@
-"""Markdown renderers for the three weather tools.
+"""Markdown renderers for the five weather tools.
 
 Pure functions, no I/O. Each tool has exactly one renderer; a small
 normalization step folds the two source-path shapes (the GeoSphere-path dicts
@@ -20,6 +20,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from geosphere_mcp_server.const import (
+    AIR_QUALITY_POLLUTANTS,
     AROME_MAX_HOURS,
     GEOSPHERE_TZ,
     OUTLOOK_LONG_HORIZON_HOURS,
@@ -29,11 +30,12 @@ from geosphere_mcp_server.const import (
     wmo_to_condition,
 )
 from geosphere_mcp_server.outlook import (
+    horizon_hours,
     max_cape,
     max_gust,
-    next_thunderstorm,
-    series_is_decidable,
+    scan_thunderstorm,
     thunderstorm_outlook,
+    window,
 )
 
 # --- Number / value formatting helpers ---
@@ -446,10 +448,18 @@ def _outlook(
     ``rows`` and ``now`` must share a timezone convention (both aware, or both
     naive local). ``localize`` optionally maps the resulting timestamps into the
     zone the renderer prints.
+
+    Each horizon is windowed once and read from, rather than every derivation
+    re-walking the series for itself.
     """
-    gust_short, gust_short_at = max_gust(rows, OUTLOOK_SHORT_HORIZON_HOURS, now)
-    gust_long, gust_long_at = max_gust(rows, OUTLOOK_LONG_HORIZON_HOURS, now)
-    storm_at, storm_cape = next_thunderstorm(rows, now)
+    short_window = window(rows, OUTLOOK_SHORT_HORIZON_HOURS, now)
+    long_window = window(rows, OUTLOOK_LONG_HORIZON_HOURS, now)
+    gust_short, gust_short_at = max_gust(short_window)
+    gust_long, gust_long_at = max_gust(long_window)
+    # The third element separates "no storm ahead" from "nothing readable
+    # here"; without it the renderer would print a confident all-clear over an
+    # unreadable series.
+    storm_at, storm_cape, storm_decidable = scan_thunderstorm(rows, now)
 
     def _when(value: datetime | None) -> datetime | None:
         if value is None or localize is None:
@@ -463,17 +473,16 @@ def _outlook(
         "max_gust_short_at": _when(gust_short_at),
         "max_gust_long_ms": gust_long,
         "max_gust_long_at": _when(gust_long_at),
-        "thunderstorm_short": thunderstorm_outlook(
-            rows, OUTLOOK_SHORT_HORIZON_HOURS, now
-        ),
+        "thunderstorm_short": thunderstorm_outlook(short_window),
         "next_thunderstorm_at": _when(storm_at),
         "next_thunderstorm_cape_jkg": storm_cape,
-        # next_thunderstorm returns (None, None) both for "no storm ahead" and
-        # for "nothing here can be read"; without this the renderer would print
-        # a confident all-clear over an unreadable series.
-        "next_thunderstorm_decidable": series_is_decidable(rows, now),
-        "max_cape_long_jkg": max_cape(rows, OUTLOOK_LONG_HORIZON_HOURS, now),
+        "next_thunderstorm_decidable": storm_decidable,
+        "max_cape_long_jkg": max_cape(long_window),
         "hours_available": len(rows),
+        # How far ahead the all-clear above actually reaches. AROME runs ~60 h;
+        # the Open-Meteo fallback counts its days from local midnight, so its
+        # horizon shrinks as the day wears on.
+        "scanned_horizon_hours": horizon_hours(rows, now),
     }
 
 
@@ -587,10 +596,14 @@ def render_outlook(data: dict[str, Any]) -> str:
     )
 
     storm_at = _stamp(data.get("next_thunderstorm_at"))
+    scanned = data.get("scanned_horizon_hours")
     if storm_at is None and not data.get("next_thunderstorm_decidable"):
         lines.append("⚡ Next thunderstorm: unknown (no usable forecast hours)")
     elif storm_at is None:
-        lines.append("⚡ Next thunderstorm: none in the forecast horizon")
+        # Name the horizon the all-clear covers — it is ~60 h on AROME but only
+        # what is left of three days from local midnight on the fallback.
+        span = f"next {scanned} h" if scanned else "forecast horizon"
+        lines.append(f"⚡ Next thunderstorm: none in the {span}")
     else:
         cape = _round_int(data.get("next_thunderstorm_cape_jkg"))
         suffix = f" (CAPE {cape} J/kg)" if cape is not None else ""
@@ -616,13 +629,9 @@ def render_outlook(data: dict[str, Any]) -> str:
 
 # --- Air quality ---
 
-# Display order and label for the four pollutants both sources publish.
-_POLLUTANT_LABELS = (
-    ("nitrogen_dioxide", "NO₂"),
-    ("ozone", "O₃"),
-    ("pm10", "PM10"),
-    ("pm2_5", "PM2.5"),
-)
+# Display order and label for the four pollutants both sources publish, from
+# the same table that builds each source's request parameters.
+_POLLUTANT_LABELS = tuple((key, label) for key, label, _ in AIR_QUALITY_POLLUTANTS)
 
 
 def normalize_air_quality_geosphere(
@@ -643,7 +652,9 @@ def normalize_air_quality_geosphere(
             {
                 "label": label,
                 "band": merged.get(f"aqi_band_{key}"),
-                "value": merged.get(f"aqi_value_{key}"),
+                # GeoSphere publishes the EEA band directly and no underlying
+                # numeric index, so there is never a figure to append here.
+                "value": None,
             }
             for key, label in (
                 ("today", "today"),
@@ -767,21 +778,25 @@ def render_air_quality(data: dict[str, Any]) -> str:
             heading += f" ({observed})"
         lines.append(f"{heading}: {' · '.join(concentrations)}")
 
-    if not days and not concentrations:
+    empty = not days and not concentrations
+    if empty:
         lines.append("No air-quality data available for this location.")
-        return "\n".join(lines)
+    else:
+        tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
+        if tz_line is not None:
+            lines.append(tz_line)
 
-    tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
-    if tz_line is not None:
-        lines.append(tz_line)
+    # Named even when nothing came back: which source drew the blank is what
+    # tells the caller whether retrying or asking elsewhere is worth anything.
     lines.append(f"📡 Source: {data['source']}")
 
-    lines.append("")
-    lines.append(
-        "AQI bands are the European (EEA) scale: 1 good, 2 fair, 3 moderate, "
-        "4 poor, 5 very poor, 6 extremely poor. These are model forecasts, not "
-        "station measurements."
-    )
+    if not empty:
+        lines.append("")
+        lines.append(
+            "AQI bands are the European (EEA) scale: 1 good, 2 fair, 3 moderate, "
+            "4 poor, 5 very poor, 6 extremely poor. These are model forecasts, "
+            "not station measurements."
+        )
     return "\n".join(lines)
 
 

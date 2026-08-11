@@ -32,6 +32,10 @@ Four surface concentrations in µg/m³, the intersection of what both sources pu
 | `pm10` | PM10 | `pm10surf` | `pm10` |
 | `pm2_5` | PM2.5 | `pm25surf` | `pm2_5` |
 
+That table is literally `AIR_QUALITY_POLLUTANTS` in `const.py`, and the uniform key is deliberately also
+the Open-Meteo variable name, so one tuple derives `CHEM_POLLUTANTS`, `CHEM_PARAMETERS`,
+`OPENMETEO_AIR_QUALITY_VARIABLES`, and the renderer's labels. Nothing here is hand-synced.
+
 Neither path reports CO, SO₂, NH₃, pollen, or UV index, though Open-Meteo has some of them — the tool
 reports the set both sources can serve, so its output does not change shape with the caller's coordinate.
 
@@ -45,12 +49,15 @@ alike:
 
 | Band | Label | Numeric range |
 |------|-------|---------------|
-| 1 | good | 0-20 |
-| 2 | fair | 20-40 |
-| 3 | moderate | 40-60 |
-| 4 | poor | 60-80 |
-| 5 | very poor | 80-100 |
-| 6 | extremely poor | above 100 |
+| 1 | good | 0 to <20 |
+| 2 | fair | 20 to <40 |
+| 3 | moderate | 40 to <60 |
+| 4 | poor | 60 to <80 |
+| 5 | very poor | 80 to <100 |
+| 6 | extremely poor | 100 and above |
+
+Each band is **half-open**: the bound belongs to the band above it, so an index of exactly 20 is `fair`,
+not `good`. `AQI_NUMERIC_BAND_BOUNDS` holds the upper bounds and `aqi_band` compares with `<`.
 
 The two sources publish **different halves of this table**, which is the only real complexity in the
 feature:
@@ -100,7 +107,7 @@ request.
 - Air quality adds two requests per call against the shared GeoSphere budget (5 req/s, 240 req/h).
 
 ## Extension Guidelines
-- New pollutant: add it to `CHEM_PARAMETERS`, `CHEM_POLLUTANTS`, `OPENMETEO_AIR_QUALITY_VARIABLES`, and
-  `format._POLLUTANT_LABELS` — a pollutant only one source has needs a decision about the output shape
-  first.
+- New pollutant: add one row to `AIR_QUALITY_POLLUTANTS` in `const.py` — every request parameter list and
+  the renderer's labels derive from it. A pollutant only one source has needs a decision about the output
+  shape first.
 - Never inline a band threshold: they live in `AQI_NUMERIC_BAND_BOUNDS` and `AQI_BAND_LABELS`.

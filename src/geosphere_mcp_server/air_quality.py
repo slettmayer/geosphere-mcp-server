@@ -43,13 +43,11 @@ def merge_air_quality(
     """Merge the WRF-Chem pollutant series and the daily AQI into one dict.
 
     Pollutant concentrations (µg/m³) are read at the forecast hour nearest to
-    ``now``; the full hourly series per pollutant is kept under ``forecast``.
-    The daily AQI is the EEA band index (1-6) for today / tomorrow / in 2 days,
-    matched by local calendar day — the daily stamps are 00:00 UTC, which is
-    the previous day in the Alpine zone for part of the year.
+    ``now``. The daily AQI is the EEA band index (1-6) for today / tomorrow /
+    in 2 days, matched by local calendar day — the daily stamps are 00:00 UTC,
+    which is the previous day in the Alpine zone for part of the year.
     """
     pollutants: dict[str, float | None] = dict.fromkeys(CHEM_POLLUTANTS)
-    forecast: dict[str, list[tuple[datetime, float | None]]] = {}
     observed_at: datetime | None = None
 
     if chem.timestamps:
@@ -60,9 +58,6 @@ def merge_air_quality(
         observed_at = chem.timestamps[index]
         for key, parameter in CHEM_POLLUTANTS.items():
             pollutants[key] = chem.value_at(parameter, index)
-            forecast[key] = list(
-                zip(chem.timestamps, chem.series(parameter), strict=True)
-            )
 
     bands: dict[int, int] = {}
     if aqi is not None:
@@ -78,14 +73,11 @@ def merge_air_quality(
         "grid_latitude": chem.grid_latitude,
         "grid_longitude": chem.grid_longitude,
         "pollutants": pollutants,
-        "forecast": forecast,
-        # EEA band index (1-6), not the numeric index Open-Meteo publishes.
+        # EEA band index (1-6). GeoSphere publishes no underlying numeric
+        # index, so unlike the Open-Meteo path there is no value to pair here.
         "aqi_band_today": bands.get(0),
         "aqi_band_tomorrow": bands.get(1),
         "aqi_band_in_2_days": bands.get(2),
-        "aqi_value_today": None,
-        "aqi_value_tomorrow": None,
-        "aqi_value_in_2_days": None,
     }
 
 

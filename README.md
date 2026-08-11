@@ -18,7 +18,7 @@ Output is compact emoji-markdown with metric units — built for smart-home and 
 |-------|-----------------------|-----------------------|----------------------|---------------------|-------------------|
 | Austria | GeoSphere INCA + nowcast + AROME | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) | GeoSphere AROME, CAPE gated by CIN | GeoSphere WRF-Chem (3 km) |
 | Alps (non-AT) | GeoSphere AROME only | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) | GeoSphere AROME, CAPE gated by CIN | GeoSphere WRF-Chem (3 km) |
-| Rest of world | Open-Meteo | Open-Meteo (≤48 h) | Open-Meteo (1–16 days) | Open-Meteo, CAPE only | Open-Meteo (CAMS) |
+| Rest of world | Open-Meteo | Open-Meteo (≤48 h) | Open-Meteo (1–16 days) | Open-Meteo, CAPE gated by CIN | Open-Meteo (CAMS) |
 
 Coverage is detected automatically: the server tries GeoSphere first and falls back to Open-Meteo when the point is outside the AROME grid — no bounding box to configure. The daily forecast always uses Open-Meteo (GeoSphere publishes no forecasts beyond ~60 h).
 
@@ -180,6 +180,7 @@ Two behaviours are worth knowing before you build on this:
 
 - **Horizons round up to whole hours.** The window starts at the top of the current hour, so the "next 1 h" figure covers the hour already under way *plus* the next one, and can report an event up to ~2 h out. Compare the returned timestamps yourself if you need a strict 60-minute answer.
 - **`Next thunderstorm` can be in the past**, by up to 59 minutes, when the storm hour is the one already under way. That means a storm is in progress — clamp a negative lead time to zero rather than assuming the stamp is in the future.
+- **An all-clear names its horizon** (`none in the next 54 h`). That horizon is not the same on both paths: AROME runs ~60 h, while the Open-Meteo fallback counts forecast days from local midnight, so it is asked for three days and reports whatever that leaves ahead — at least 48 h. It is not an all-clear beyond the stated span.
 
 A thunderstorm hour is one whose derived condition is `lightning`/`lightning-rainy`, *or* one where CAPE ≥ 1000 J/kg with weak inhibition **and** precipitation is forecast — the second branch catches thundersnow and hours with missing cloud data, and requires precipitation so that a dry high-CAPE afternoon does not raise a signal. `Thunderstorm expected` and `Next thunderstorm` both report `unknown` rather than a confident answer when the forecast holds no usable hour. Both sources supply convective inhibition, so the gate works on either path — Open-Meteo reports it as a positive magnitude and the server normalizes the sign.
 

@@ -10,11 +10,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from geosphere_mcp_server.outlook import (
+    horizon_hours,
     max_cape,
     max_gust,
-    next_thunderstorm,
-    series_is_decidable,
+    scan_thunderstorm,
     thunderstorm_outlook,
+    window,
 )
 
 NOW = datetime(2026, 7, 15, 16, 30, tzinfo=UTC)
@@ -44,7 +45,7 @@ def _hour(
 def test_max_gust_includes_the_in_progress_hour() -> None:
     """NOW is 16:30 but the 16:00 hour is still in progress and must count."""
     rows = [_hour(0, gust=20.0), _hour(1, gust=5.0)]
-    value, when = max_gust(rows, 1, NOW)
+    value, when = max_gust(window(rows, 1, NOW))
     assert value == 20.0
     assert when == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
 
@@ -52,53 +53,56 @@ def test_max_gust_includes_the_in_progress_hour() -> None:
 def test_max_gust_respects_the_window() -> None:
     """A bigger gust beyond the horizon must not leak into a short window."""
     rows = [_hour(0, gust=5.0), _hour(1, gust=9.0), _hour(6, gust=30.0)]
-    assert max_gust(rows, 1, NOW)[0] == 9.0
-    assert max_gust(rows, 12, NOW)[0] == 30.0
+    assert max_gust(window(rows, 1, NOW))[0] == 9.0
+    assert max_gust(window(rows, 12, NOW))[0] == 30.0
 
 
 def test_max_gust_skips_past_hours_and_none_values() -> None:
     rows = [_hour(-3, gust=40.0), _hour(0, gust=None), _hour(1, gust=7.0)]
-    assert max_gust(rows, 12, NOW) == (7.0, datetime(2026, 7, 15, 17, 0, tzinfo=UTC))
+    assert max_gust(window(rows, 12, NOW)) == (
+        7.0,
+        datetime(2026, 7, 15, 17, 0, tzinfo=UTC),
+    )
 
 
 def test_max_gust_empty_window_returns_none() -> None:
-    assert max_gust([], 12, NOW) == (None, None)
-    assert max_gust([_hour(0, gust=None)], 12, NOW) == (None, None)
+    assert max_gust(window([], 12, NOW)) == (None, None)
+    assert max_gust(window([_hour(0, gust=None)], 12, NOW)) == (None, None)
 
 
 def test_max_cape() -> None:
     rows = [_hour(0, cape=100.0), _hour(2, cape=1200.0), _hour(20, cape=3000.0)]
-    assert max_cape(rows, 12, NOW) == 1200.0
-    assert max_cape([], 12, NOW) is None
+    assert max_cape(window(rows, 12, NOW)) == 1200.0
+    assert max_cape(window([], 12, NOW)) is None
 
 
-def test_next_thunderstorm_returns_first_lightning_hour_and_its_cape() -> None:
+def test_scan_thunderstorm_returns_first_lightning_hour_and_its_cape() -> None:
     rows = [
         _hour(0, condition="cloudy", cape=100.0),
         _hour(4, condition="lightning-rainy", cape=1800.0),
         _hour(6, condition="lightning", cape=2500.0),
     ]
-    when, cape = next_thunderstorm(rows, NOW)
+    when, cape, _ = scan_thunderstorm(rows, NOW)
     assert when == datetime(2026, 7, 15, 20, 0, tzinfo=UTC)
     assert cape == 1800.0
 
 
-def test_next_thunderstorm_scans_the_whole_horizon() -> None:
+def test_scan_thunderstorm_scans_the_whole_horizon() -> None:
     """Not window-limited — a storm 40 h out is still reported."""
     rows = [_hour(0, condition="sunny"), _hour(40, condition="lightning")]
-    assert next_thunderstorm(rows, NOW)[0] == datetime(2026, 7, 17, 8, 0, tzinfo=UTC)
+    assert scan_thunderstorm(rows, NOW)[0] == datetime(2026, 7, 17, 8, 0, tzinfo=UTC)
 
 
-def test_next_thunderstorm_ignores_past_hours() -> None:
+def test_scan_thunderstorm_ignores_past_hours() -> None:
     rows = [_hour(-5, condition="lightning"), _hour(3, condition="cloudy")]
-    assert next_thunderstorm(rows, NOW) == (None, None)
+    assert scan_thunderstorm(rows, NOW)[:2] == (None, None)
 
 
-def test_next_thunderstorm_none_when_calm() -> None:
-    assert next_thunderstorm([_hour(0, condition="sunny")], NOW) == (None, None)
+def test_scan_thunderstorm_none_when_calm() -> None:
+    assert scan_thunderstorm([_hour(0, condition="sunny")], NOW)[:2] == (None, None)
 
 
-def test_next_thunderstorm_includes_the_in_progress_hour() -> None:
+def test_scan_thunderstorm_includes_the_in_progress_hour() -> None:
     """A storm in the hour already under way must not be skipped.
 
     NOW is 16:30 and the in-progress hour is stamped 16:00, so a naive
@@ -106,7 +110,7 @@ def test_next_thunderstorm_includes_the_in_progress_hour() -> None:
     then deliberately in the past.
     """
     rows = [_hour(0, condition="lightning", cape=1600.0), _hour(3, condition="cloudy")]
-    when, cape = next_thunderstorm(rows, NOW)
+    when, cape, _ = scan_thunderstorm(rows, NOW)
     assert when == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
     assert when < NOW
     assert cape == 1600.0
@@ -119,13 +123,13 @@ def test_thundersnow_is_detected_despite_the_snowy_condition() -> None:
     thundersnow hour — the condition string alone would miss it.
     """
     rows = [_hour(0, condition="snowy", cape=1500.0, cin=0.0, precipitation=0.8)]
-    assert next_thunderstorm(rows, NOW)[0] == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
+    assert scan_thunderstorm(rows, NOW)[0] == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
 
 
 def test_thunder_is_detected_when_cloud_cover_is_missing() -> None:
     """`derive_condition` returns None without `tcc`, hiding a real storm."""
     rows = [_hour(0, condition=None, cape=1500.0, cin=0.0, precipitation=0.5)]
-    assert thunderstorm_outlook(rows, 1, NOW) is True
+    assert thunderstorm_outlook(window(rows, 1, NOW)) is True
 
 
 def test_dry_high_cape_without_precipitation_is_not_a_storm() -> None:
@@ -134,14 +138,14 @@ def test_dry_high_cape_without_precipitation_is_not_a_storm() -> None:
         _hour(0, condition="partlycloudy", cape=2500.0, cin=0.0, precipitation=0.0),
         _hour(1, condition="sunny", cape=3000.0, cin=0.0, precipitation=None),
     ]
-    assert thunderstorm_outlook(rows, 1, NOW) is False
-    assert next_thunderstorm(rows, NOW) == (None, None)
+    assert thunderstorm_outlook(window(rows, 1, NOW)) is False
+    assert scan_thunderstorm(rows, NOW)[:2] == (None, None)
 
 
 def test_capped_cape_with_precipitation_is_not_a_storm() -> None:
     """A strong lid (cin <= -50) blocks convection even with rain falling."""
     rows = [_hour(0, condition="snowy", cape=2500.0, cin=-80.0, precipitation=1.0)]
-    assert thunderstorm_outlook(rows, 1, NOW) is False
+    assert thunderstorm_outlook(window(rows, 1, NOW)) is False
 
 
 def test_missing_cin_key_reads_as_uncapped() -> None:
@@ -152,24 +156,24 @@ def test_missing_cin_key_reads_as_uncapped() -> None:
         "cape_jkg": 1500.0,
         "precipitation_mm": 0.5,
     }
-    assert thunderstorm_outlook([row], 1, NOW) is True
+    assert thunderstorm_outlook(window([row], 1, NOW)) is True
 
 
 def test_thunderstorm_outlook_is_unknown_without_usable_hours() -> None:
     """An empty or undecidable window must not read as a confident "no storm"."""
-    assert thunderstorm_outlook([], 1, NOW) is None
+    assert thunderstorm_outlook(window([], 1, NOW)) is None
     # Hours exist but carry neither a condition nor CAPE.
-    assert thunderstorm_outlook([_hour(0), _hour(1)], 1, NOW) is None
+    assert thunderstorm_outlook(window([_hour(0), _hour(1)], 1, NOW)) is None
     # Only hours outside the window -> nothing to judge.
-    assert thunderstorm_outlook([_hour(6, condition="sunny")], 1, NOW) is None
+    assert thunderstorm_outlook(window([_hour(6, condition="sunny")], 1, NOW)) is None
 
 
 def test_thunderstorm_outlook_distinguishes_no_storm_from_no_data() -> None:
     rows = [_hour(0, condition="cloudy"), _hour(5, condition="lightning")]
-    assert thunderstorm_outlook(rows, 1, NOW) is False
-    assert thunderstorm_outlook(rows, 12, NOW) is True
+    assert thunderstorm_outlook(window(rows, 1, NOW)) is False
+    assert thunderstorm_outlook(window(rows, 12, NOW)) is True
     # CAPE alone (no derived condition) is still a decidable hour.
-    assert thunderstorm_outlook([_hour(0, cape=10.0)], 1, NOW) is False
+    assert thunderstorm_outlook(window([_hour(0, cape=10.0)], 1, NOW)) is False
 
 
 def test_window_rounds_up_to_whole_hourly_steps() -> None:
@@ -179,24 +183,59 @@ def test_window_rounds_up_to_whole_hourly_steps() -> None:
     while 18:00 is not — an event up to ~2 h out can surface in a 1 h window.
     """
     rows = [_hour(0, gust=1.0), _hour(1, gust=2.0), _hour(2, gust=99.0)]
-    assert max_gust(rows, 1, NOW) == (2.0, datetime(2026, 7, 15, 17, 0, tzinfo=UTC))
+    assert max_gust(window(rows, 1, NOW)) == (
+        2.0,
+        datetime(2026, 7, 15, 17, 0, tzinfo=UTC),
+    )
 
 
 def test_rows_without_a_timestamp_are_skipped() -> None:
     """A malformed row must not crash the comparison."""
     rows = [{"time": None, "wind_gust_ms": 99.0}, _hour(0, gust=4.0)]
-    assert max_gust(rows, 1, NOW) == (4.0, datetime(2026, 7, 15, 16, 0, tzinfo=UTC))
+    assert max_gust(window(rows, 1, NOW)) == (
+        4.0,
+        datetime(2026, 7, 15, 16, 0, tzinfo=UTC),
+    )
 
 
-def test_series_is_decidable() -> None:
+def test_scan_thunderstorm_reports_decidability() -> None:
     """The guard that stops an unreadable series rendering as an all-clear."""
-    assert series_is_decidable([_hour(0, condition="cloudy")], NOW) is True
+    assert scan_thunderstorm([_hour(0, condition="cloudy")], NOW)[2] is True
     # CAPE alone is enough to judge an hour.
-    assert series_is_decidable([_hour(0, cape=10.0)], NOW) is True
+    assert scan_thunderstorm([_hour(0, cape=10.0)], NOW)[2] is True
     # Neither a condition nor CAPE anywhere ahead.
-    assert series_is_decidable([_hour(0), _hour(5)], NOW) is False
-    assert series_is_decidable([], NOW) is False
+    assert scan_thunderstorm([_hour(0), _hour(5)], NOW)[2] is False
+    assert scan_thunderstorm([], NOW)[2] is False
     # Past hours do not count, however readable they are.
-    assert series_is_decidable([_hour(-3, condition="sunny")], NOW) is False
+    assert scan_thunderstorm([_hour(-3, condition="sunny")], NOW)[2] is False
     # Unlike the windowed outlook, the scan reaches the whole series.
-    assert series_is_decidable([_hour(40, condition="sunny")], NOW) is True
+    assert scan_thunderstorm([_hour(40, condition="sunny")], NOW)[2] is True
+
+
+def test_scan_thunderstorm_is_decidable_when_it_finds_a_storm() -> None:
+    """A found storm is by definition a readable hour — the flag must agree.
+
+    The two answers came from separate passes before, so an all-clear could be
+    rendered over a series the same scan had just judged.
+    """
+    assert scan_thunderstorm([_hour(0, condition="lightning")], NOW)[2] is True
+
+
+def test_dry_high_cape_under_heavy_cloud_still_counts() -> None:
+    """The other side of the precipitation guard, and deliberately so.
+
+    `derive_condition` only returns "lightning" once cloud cover corroborates
+    the CAPE/CIN gate, so this hour is a plausible pre-storm hour rather than
+    the routine dry-convective afternoon branch (b) suppresses.
+    """
+    rows = [_hour(0, condition="lightning", cape=2500.0, cin=0.0, precipitation=0.0)]
+    assert thunderstorm_outlook(window(rows, 1, NOW)) is True
+
+
+def test_horizon_hours_measures_what_an_all_clear_covers() -> None:
+    """NOW is 16:30, so a series ending at 20:00 leaves 3.5 h -> 4."""
+    assert horizon_hours([_hour(0), _hour(4)], NOW) == 4
+    # A series already behind us has no horizon left, never a negative one.
+    assert horizon_hours([_hour(-5)], NOW) == 0
+    assert horizon_hours([], NOW) is None
+    assert horizon_hours([{"time": None}], NOW) is None

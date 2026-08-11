@@ -43,19 +43,22 @@ AROME_PARAMETERS = (
 ENSEMBLE_PARAMETERS = ("rr_p10", "rr_p50", "rr_p90")
 NOWCAST_PARAMETERS = ("t2m", "td", "rh2m", "rr", "pt", "dd", "ff", "fx")
 INCA_PARAMETERS = ("T2M", "TD2M", "RH2M", "RR", "P0", "GL", "UU", "VV")
+# The four pollutants both air-quality sources publish, in display order:
+# (uniform key, display label, WRF-Chem parameter name). The uniform key is
+# deliberately also the Open-Meteo air-quality variable name, so this one table
+# drives the request parameters of both sources and the renderer's labels — the
+# lists below are derived, never hand-synced.
+AIR_QUALITY_POLLUTANTS = (
+    ("nitrogen_dioxide", "NO₂", "no2surf"),
+    ("ozone", "O₃", "o3surf"),
+    ("pm10", "PM10", "pm10surf"),
+    ("pm2_5", "PM2.5", "pm25surf"),
+)
+# Pollutant key -> WRF-Chem parameter name.
+CHEM_POLLUTANTS = {key: parameter for key, _, parameter in AIR_QUALITY_POLLUTANTS}
 # WRF-Chem surface concentrations (µg/m³) and the daily European AQI (1-6).
-CHEM_PARAMETERS = ("no2surf", "o3surf", "pm10surf", "pm25surf")
+CHEM_PARAMETERS = tuple(CHEM_POLLUTANTS.values())
 CHEM_AQI_PARAMETERS = ("aqi",)
-# Pollutant key -> WRF-Chem parameter name. The keys are the uniform names used
-# across air_quality.py and format.py, and match the Open-Meteo variables.
-CHEM_POLLUTANTS = {
-    "nitrogen_dioxide": "no2surf",
-    "ozone": "o3surf",
-    "pm10": "pm10surf",
-    "pm2_5": "pm25surf",
-}
-# Horizon of the WRF-Chem hourly pollutant forecast (hours).
-CHEM_MAX_HOURS = 73
 
 # How old the newest cached INCA analysis may get before a re-fetch (seconds).
 INCA_MAX_AGE_SECONDS = 55 * 60
@@ -112,6 +115,13 @@ HOURLY_LOOKBACK_HOURS = 1
 # hourly steps, so an N-hour horizon spans the in-progress hour plus N more.
 OUTLOOK_SHORT_HORIZON_HOURS = 1
 OUTLOOK_LONG_HORIZON_HOURS = 12
+# Hours the outlook asks Open-Meteo for. Larger than OPENMETEO_MAX_HOURS,
+# because that API counts forecast days from local midnight: 48 h requested at
+# 20:00 leaves only ~28 h ahead, and the outlook's "next thunderstorm" scan
+# reports an all-clear over whatever it was given. Three days keep at least
+# 48 h ahead at any time of day. The rendered horizon is measured from the
+# rows actually returned, so a short series still reports itself honestly.
+OUTLOOK_FALLBACK_HOURS = 72
 
 # --- Open-Meteo API (worldwide fallback + always-on daily forecast) ---
 
@@ -178,15 +188,10 @@ OPENMETEO_DAILY_VARIABLES = (
 # --- Open-Meteo Air Quality API (worldwide air-quality fallback) ---
 
 OPENMETEO_AIR_QUALITY_BASE_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
-# The four pollutants WRF-Chem publishes, plus the European AQI. Named to match
-# CHEM_POLLUTANTS so both source paths normalize to the same keys.
-OPENMETEO_AIR_QUALITY_VARIABLES = (
-    "european_aqi",
-    "nitrogen_dioxide",
-    "ozone",
-    "pm10",
-    "pm2_5",
-)
+# The European AQI plus the same four pollutants WRF-Chem publishes, whose
+# uniform keys are already the Open-Meteo variable names (see
+# AIR_QUALITY_POLLUTANTS), so both source paths normalize to the same keys.
+OPENMETEO_AIR_QUALITY_VARIABLES = ("european_aqi", *CHEM_POLLUTANTS)
 # Days of hourly air quality to request; three cover today/tomorrow/in 2 days.
 OPENMETEO_AIR_QUALITY_DAYS = 3
 
@@ -202,8 +207,10 @@ AQI_BAND_LABELS = {
     5: "very poor",
     6: "extremely poor",
 }
-# Upper bounds of the published EEA numeric bands, in band order. The last band
-# is open-ended, so a value above the final bound falls into band 6.
+# Upper bounds of the published EEA numeric bands, in band order. Each band is
+# half-open — the bound belongs to the band *above* it, so an index of exactly
+# 20 is "fair", not "good". The last band is open-ended, so a value at or above
+# the final bound falls into band 6.
 AQI_NUMERIC_BAND_BOUNDS = (20.0, 40.0, 60.0, 80.0, 100.0)
 
 
@@ -212,7 +219,7 @@ def aqi_band(value: float | None) -> int | None:
     if value is None:
         return None
     for index, bound in enumerate(AQI_NUMERIC_BAND_BOUNDS, start=1):
-        if value <= bound:
+        if value < bound:
             return index
     return len(AQI_NUMERIC_BAND_BOUNDS) + 1
 

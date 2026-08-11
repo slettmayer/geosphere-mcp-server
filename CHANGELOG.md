@@ -62,6 +62,37 @@ version being cut, so you never rename that heading by hand. See
   `none in the forecast horizon` when no forecast hour ahead can be judged. The underlying scan returns
   the same empty result for "no storm" and "nothing readable here", so a response could declare the
   window `unknown` on one line and assert a 60-hour all-clear on the next.
+- Fixed: a storm-outlook all-clear now names the horizon it covers (`none in the next 54 h`), and the
+  Open-Meteo fallback is asked for three days rather than 48 h. Open-Meteo counts forecast days from local
+  *midnight*, so a 48 h request at 20:00 left only ~28 h ahead and the scan reported an unqualified
+  all-clear over it. `OUTLOOK_FALLBACK_HOURS` keeps at least 48 h ahead at any hour of the day, and the
+  rendered span is measured from the rows that actually came back, so a short series still reports itself
+  honestly. AROME is unaffected at ~60 h.
+- Fixed: the European AQI bands are half-open, so an index of exactly 20 is now `fair` rather than `good`
+  (and likewise at 40/60/80/100). `aqi_band` compared with `<=`, which put every boundary value one band
+  too low.
+- Fixed: a rate-limited `get_air_quality` no longer suffixes `— get_daily_forecast still works
+  (Open-Meteo)`. That tool carries no air-quality data, so the pointer only bought the caller another
+  wasted call. The suffix stays on current / hourly / storm outlook, where it is true.
+- Fixed: `render_air_quality` now names its source even when neither concentrations nor an AQI came back.
+  Which source drew the blank is what tells a caller whether asking elsewhere is worth anything. The EEA
+  band legend is dropped in that case, having no figures left to explain.
+- Fixed: `merge_air_quality` no longer builds a full per-pollutant hourly series. Nothing downstream read
+  it, and it zipped the timestamp column against each value column with `strict=True` — so a response
+  whose columns disagreed in length would have raised rather than degraded.
+- Changed: `outlook.py` now takes windowing as the caller's job — `window()` is applied once per horizon
+  and handed to `max_gust` / `max_cape` / `thunderstorm_outlook` — and `series_is_decidable` is folded
+  into `scan_thunderstorm`, which returns the storm hour, its CAPE, and whether the scan counts from a
+  single pass. One outlook now walks the series three times instead of six, and the decidability answer
+  can no longer drift from the storm answer it qualifies.
+- Changed: the four pollutant lists (`CHEM_PARAMETERS`, `CHEM_POLLUTANTS`,
+  `OPENMETEO_AIR_QUALITY_VARIABLES`, `format._POLLUTANT_LABELS`) are now derived from one
+  `AIR_QUALITY_POLLUTANTS` table in `const.py` instead of being hand-synced. Adding a pollutant is one row.
+- Removed: the permanently-`None` `aqi_value_*` keys from `merge_air_quality` (GeoSphere publishes no
+  numeric index, so the renderer supplies the `None`), and the unreferenced `CHEM_MAX_HOURS` constant.
+- Docs: `outlook._is_lightning` states why only its CAPE/CIN branch requires precipitation — that
+  requirement substitutes for the cloud-cover corroboration the derived-condition branch already carries,
+  rather than being an inconsistency between the two. Behaviour is unchanged.
 
 ## 0.3.2 - 2026-08-07
 

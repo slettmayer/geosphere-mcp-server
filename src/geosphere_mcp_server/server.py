@@ -26,6 +26,7 @@ from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
     OPENMETEO_MAX_DAYS,
     OPENMETEO_MAX_HOURS,
+    OUTLOOK_FALLBACK_HOURS,
 )
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
@@ -235,6 +236,11 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
     convective inhibition, so CAPE is gated the same way on either path. The
     response states which source served it.
 
+    The horizon the thunderstorm scan covers is not the same on both paths —
+    ~60 h on AROME, and what remains of three days from local midnight on the
+    fallback (at least 48 h ahead). A "none in the next N h" answer names the
+    horizon it actually covered; it is not an all-clear beyond that.
+
     Horizons round up to whole hours: the "next hour" window covers the hour
     already under way plus the next one. A thunderstorm timestamp at or before
     the current time means one is already in progress.
@@ -260,7 +266,7 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
                 data = fmt.normalize_outlook_geosphere(assembled, latitude, longitude)
             except GeoSphereOutOfDomainError:
                 body = await openmeteo_api.async_get_hourly(
-                    session, latitude, longitude, hours=OPENMETEO_MAX_HOURS
+                    session, latitude, longitude, hours=OUTLOOK_FALLBACK_HOURS
                 )
                 data = fmt.normalize_outlook_openmeteo(body, latitude, longitude)
             return fmt.render_outlook(data)
@@ -301,7 +307,9 @@ async def get_air_quality(latitude: float, longitude: float) -> str:
                 data = fmt.normalize_air_quality_openmeteo(body, latitude, longitude)
             return fmt.render_air_quality(data)
 
-    return await _guarded(work, note_daily=True)
+    # No note_daily: get_daily_forecast carries no air-quality data, so
+    # pointing a rate-limited caller at it would only waste another call.
+    return await _guarded(work, note_daily=False)
 
 
 @mcp.tool()

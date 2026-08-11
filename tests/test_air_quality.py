@@ -79,8 +79,9 @@ def test_merge_reads_pollutants_at_the_nearest_hour() -> None:
         "pm10": 21.0,
         "pm2_5": 12.0,
     }
-    # The full series is kept for each pollutant.
-    assert len(merged["forecast"]["ozone"]) == 3
+    # Only the nearest hour is kept — nothing downstream reads a series, and
+    # keeping one meant zipping columns of unverified equal length.
+    assert "forecast" not in merged
 
 
 def test_merge_matches_the_daily_aqi_by_local_calendar_day() -> None:
@@ -88,8 +89,9 @@ def test_merge_matches_the_daily_aqi_by_local_calendar_day() -> None:
     assert merged["aqi_band_today"] == 2
     assert merged["aqi_band_tomorrow"] == 3
     assert merged["aqi_band_in_2_days"] == 2
-    # GeoSphere publishes the band directly, not an underlying numeric index.
-    assert merged["aqi_value_today"] is None
+    # GeoSphere publishes the band directly, so there is no numeric index key
+    # to carry; the renderer supplies the None.
+    assert "aqi_value_today" not in merged
 
 
 def test_merge_local_day_boundary() -> None:

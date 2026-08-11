@@ -13,7 +13,10 @@ both source paths. Rows are read through ``.get``: an Open-Meteo row carries no
 Gust values are returned in m/s, matching the rows themselves.
 
 Ported from ha-geosphere-next, where the same functions read ``HourlyForecast``
-dataclass attributes.
+dataclass attributes. The split differs there: here :func:`window` is applied
+once by the caller and handed to the window readers, and the thunderstorm scan
+returns its own decidability, so one series is walked three times rather than
+six.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from geosphere_mcp_server.const import PRECIP_MIN_MM
 _LIGHTNING_PREFIX = "lightning"
 
 
-def _window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
+def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
     """Hours from the top of the current hour through ``now + hours``.
 
     The series' first entry is the in-progress hour, stamped at the top of the
@@ -57,16 +60,25 @@ def _is_lightning(row: dict[str, Any]) -> bool:
 
     Two branches, because the derived condition alone misses real storms:
 
-    a) the derived condition starts with "lightning" — the model's own
-       judgement that convection is occurring, and the primary signal; or
+    a) the derived condition starts with "lightning" — the primary signal, and
+       already a *considered* thunder verdict: on the GeoSphere path
+       `derive_condition` only reaches it with cloud cover at or above
+       `WINDY_CLOUD_TCC_PCT` on top of the CAPE/CIN gate, and on the
+       Open-Meteo path it comes from the model's own WMO thunderstorm code; or
     b) the raw CAPE/CIN thunder predicate holds *and* the hour is forecast to
        produce precipitation. `derive_condition` returns `snowy` /
        `snowy-rainy` before it ever looks at thunder (thundersnow) and returns
        `None` when cloud cover is missing, so those hours would otherwise read
        as "no storm".
 
-    Branch (b) deliberately requires precipitation: dry convective CAPE under
-    low cloud is a routine summer afternoon and must not raise a storm signal.
+    Only branch (b) requires precipitation, and the asymmetry is deliberate
+    rather than an oversight: it is the substitute for the cloud-cover
+    corroboration branch (a) gets for free. Branch (b) fires precisely on the
+    hours whose cloud signal is absent or was consumed by a snow verdict, and
+    without a second signal a bare CAPE reading would raise a storm on every
+    routine dry-convective summer afternoon. A dry high-CAPE hour under heavy
+    cloud does still count, via branch (a) — that is a plausible pre-storm
+    hour, not a quiet one.
     """
     condition = row.get("condition")
     if condition is not None and condition.startswith(_LIGHTNING_PREFIX):
@@ -87,16 +99,14 @@ def _is_decidable(row: dict[str, Any]) -> bool:
     return row.get("condition") is not None or row.get("cape_jkg") is not None
 
 
-def max_gust(
-    rows: list[dict[str, Any]], hours: int, now: datetime
-) -> tuple[float | None, datetime | None]:
-    """Peak gust (m/s) within the horizon and the hour it falls in.
+def max_gust(rows: list[dict[str, Any]]) -> tuple[float | None, datetime | None]:
+    """Peak gust (m/s) over the given hours, and the hour it falls in.
 
-    The horizon rounds up to whole hourly steps — see :func:`_window`.
+    Takes an already-windowed series — see :func:`window`.
     """
     best_value: float | None = None
     best_time: datetime | None = None
-    for row in _window(rows, hours, now):
+    for row in rows:
         gust = row.get("wind_gust_ms")
         if gust is None:
             continue
@@ -106,23 +116,40 @@ def max_gust(
     return best_value, best_time
 
 
-def max_cape(rows: list[dict[str, Any]], hours: int, now: datetime) -> float | None:
-    """Peak CAPE (J/kg) within the horizon (rounds up to whole hourly steps)."""
-    values = [
-        row["cape_jkg"]
-        for row in _window(rows, hours, now)
-        if row.get("cape_jkg") is not None
-    ]
+def max_cape(rows: list[dict[str, Any]]) -> float | None:
+    """Peak CAPE (J/kg) over an already-windowed series."""
+    values = [row["cape_jkg"] for row in rows if row.get("cape_jkg") is not None]
     return max(values) if values else None
 
 
-def next_thunderstorm(
-    rows: list[dict[str, Any]], now: datetime
-) -> tuple[datetime | None, float | None]:
-    """First hour with thunder expected, and that hour's CAPE.
+def thunderstorm_outlook(rows: list[dict[str, Any]]) -> bool | None:
+    """Tri-state thunderstorm outlook over an already-windowed series.
 
-    Scans the full horizon rather than a window — "no storm for two days" and
+    ``True`` / ``False`` when the window holds hours that can be judged, and
+    ``None`` when it holds none at all or none that are decidable — so a data
+    gap is reported as "unknown" instead of a confident "no".
+    """
+    decidable = False
+    for row in rows:
+        if _is_lightning(row):
+            return True
+        decidable = decidable or _is_decidable(row)
+    return False if decidable else None
+
+
+def scan_thunderstorm(
+    rows: list[dict[str, Any]], now: datetime
+) -> tuple[datetime | None, float | None, bool]:
+    """First hour with thunder expected, its CAPE, and whether the scan counts.
+
+    Scans the full series rather than a window — "no storm for two days" and
     "storm in 40 hours" are both useful answers.
+
+    The third element is what separates "no storm ahead" from "nothing here can
+    be read": both return ``(None, None, ...)`` for the first two, and a caller
+    that reports an all-clear without it will assert one over an unreadable
+    series. Returning it from the same pass is what keeps the two answers from
+    drifting apart.
 
     The scan starts at the top of the *current* hour, so when the storm hour is
     the one already under way the returned timestamp is in the past — by up to
@@ -131,43 +158,25 @@ def next_thunderstorm(
     assuming the timestamp is always in the future.
     """
     start = now.replace(minute=0, second=0, microsecond=0)
+    decidable = False
     for row in rows:
         when = row.get("time")
         if when is None or when < start:
             continue
         if _is_lightning(row):
-            return when, row.get("cape_jkg")
-    return None, None
+            return when, row.get("cape_jkg"), True
+        decidable = decidable or _is_decidable(row)
+    return None, None, decidable
 
 
-def series_is_decidable(rows: list[dict[str, Any]], now: datetime) -> bool:
-    """True when any hour at/after ``now`` can be judged for thunder at all.
+def horizon_hours(rows: list[dict[str, Any]], now: datetime) -> int | None:
+    """Hours of forecast left ahead of ``now``, or None for an empty series.
 
-    The companion to :func:`next_thunderstorm`, which returns the same
-    ``(None, None)`` for "no storm in the horizon" and for "nothing here can be
-    read". A caller that reports the scan's result must consult this first, or
-    it will render a confident all-clear over an unreadable series.
+    What an all-clear actually covers: the two source paths hand the outlook
+    series of quite different lengths, so "none in the forecast horizon" is
+    only honest next to the horizon it was scanned over.
     """
-    start = now.replace(minute=0, second=0, microsecond=0)
-    return any(
-        _is_decidable(row)
-        for row in rows
-        if row.get("time") is not None and row["time"] >= start
-    )
-
-
-def thunderstorm_outlook(
-    rows: list[dict[str, Any]], hours: int, now: datetime
-) -> bool | None:
-    """Tri-state thunderstorm outlook for the horizon.
-
-    ``True`` / ``False`` when the window holds hours that can be judged, and
-    ``None`` when it holds none at all or none that are decidable — so a data
-    gap is reported as "unknown" instead of a confident "no".
-    """
-    window = _window(rows, hours, now)
-    if any(_is_lightning(row) for row in window):
-        return True
-    if not any(_is_decidable(row) for row in window):
+    times = [row["time"] for row in rows if row.get("time") is not None]
+    if not times:
         return None
-    return False
+    return max(0, round((max(times) - now).total_seconds() / 3600))

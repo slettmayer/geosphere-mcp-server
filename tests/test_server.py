@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from geosphere_mcp_server import air_quality, openmeteo_api, weather
+from geosphere_mcp_server.const import OPENMETEO_MAX_HOURS, OUTLOOK_FALLBACK_HOURS
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
@@ -429,6 +430,24 @@ async def test_storm_outlook_out_of_domain_falls_back_to_openmeteo() -> None:
     om.assert_awaited_once()
 
 
+async def test_storm_outlook_fallback_asks_for_more_than_the_hourly_cap() -> None:
+    """Open-Meteo counts forecast days from local midnight, not from now.
+
+    Asking for the hourly tool's 48 h leaves only ~28 h ahead by early evening,
+    and the thunderstorm scan would report an all-clear over that shortened
+    window. Three days keep at least 48 h ahead whatever the local hour.
+    """
+    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_OUTLOOK_HOURLY)
+    with (
+        patch.object(weather, "async_fetch_hourly_forecast", fetch),
+        patch.object(openmeteo_api, "async_get_hourly", om),
+    ):
+        await get_storm_outlook(38.7, -9.1)
+    assert om.await_args.kwargs["hours"] == OUTLOOK_FALLBACK_HOURS
+    assert OUTLOOK_FALLBACK_HOURS > OPENMETEO_MAX_HOURS
+
+
 async def test_storm_outlook_timeout_returns_warning() -> None:
     fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
     with patch.object(weather, "async_fetch_hourly_forecast", fetch):
@@ -499,6 +518,15 @@ async def test_air_quality_out_of_domain_falls_back_to_openmeteo() -> None:
     assert "📡 Source: Open-Meteo (CAMS)" in out
     assert "3 (moderate, index 44) today" in out
     om.assert_awaited_once()
+
+
+async def test_air_quality_rate_limit_does_not_point_at_the_daily_forecast() -> None:
+    """get_daily_forecast carries no air quality — the pointer would waste a call."""
+    fetch = AsyncMock(side_effect=GeoSphereRateLimitError("429", retry_after=30))
+    with patch.object(air_quality, "async_fetch_air_quality", fetch):
+        out = await get_air_quality(LAT, LON)
+    assert out == "⚠️ GeoSphere rate limit exceeded (retry in 30s)"
+    assert "get_daily_forecast" not in out
 
 
 async def test_air_quality_timeout_returns_warning() -> None:

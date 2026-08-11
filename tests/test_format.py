@@ -425,6 +425,30 @@ def test_render_outlook_reports_a_readable_calm_series_as_no_storm() -> None:
     assert "⛈️ Thunderstorm expected next 1 h: no" in out
 
 
+def test_render_outlook_names_the_horizon_an_all_clear_covers() -> None:
+    """ "No storm" over 4 h and over 60 h are different claims.
+
+    The two source paths hand the outlook series of quite different lengths —
+    AROME ~60 h, the Open-Meteo fallback whatever is left of three days from
+    local midnight — so the span has to be stated, not implied.
+    """
+    data = normalize_outlook_geosphere(
+        {
+            "sources": ["AROME"],
+            "hourly": [
+                _geosphere_hour(0, condition="cloudy", cape=100.0, cin=0.0),
+                _geosphere_hour(40, condition="cloudy", cape=100.0, cin=0.0),
+            ],
+        },
+        LAT,
+        LON,
+        now=NOW_OUTLOOK,
+    )
+    # NOW_OUTLOOK is 14:30 and the series ends at 06:00 the next day: 39.5 h.
+    assert data["scanned_horizon_hours"] == 40
+    assert "⚡ Next thunderstorm: none in the next 40 h" in render_outlook(data)
+
+
 def test_render_outlook_without_any_hours() -> None:
     out = render_outlook(
         normalize_outlook_geosphere({"hourly": []}, LAT, LON, now=NOW_OUTLOOK)
@@ -526,11 +550,16 @@ def test_render_air_quality_geosphere() -> None:
     assert "Source: GeoSphere (WRF-Chem + daily AQI, 3 km)" in out
 
 
-def test_render_air_quality_without_any_data() -> None:
+def test_render_air_quality_without_any_data_still_names_the_source() -> None:
+    """Which source drew the blank decides whether asking elsewhere is worth it."""
     data = normalize_air_quality_geosphere(
         {"pollutants": {}, "sources": ["WRF-Chem"]}, LAT, LON
     )
-    assert "No air-quality data available" in render_air_quality(data)
+    out = render_air_quality(data)
+    assert "No air-quality data available" in out
+    assert "📡 Source: GeoSphere (WRF-Chem, 3 km)" in out
+    # The band legend explains figures that are not there — leave it out.
+    assert "EEA" not in out
 
 
 SAMPLE_AIR_QUALITY_OPENMETEO = {
@@ -582,9 +611,14 @@ def test_render_air_quality_openmeteo_shows_the_numeric_index() -> None:
 
 @pytest.mark.parametrize(
     ("value", "band"),
-    [(0, 1), (20, 1), (20.1, 2), (40, 2), (60, 3), (80, 4), (100, 5), (100.1, 6)],
+    [(0, 1), (19.9, 1), (20, 2), (39.9, 2), (40, 3), (60, 4), (80, 5), (100, 6)],
 )
 def test_aqi_banding_thresholds(value, band) -> None:
+    """EEA bands are half-open: the bound belongs to the band above it.
+
+    An index of exactly 20 is "fair", not "good" — the published scale runs
+    0-20 good, 20-40 fair, and so on, with each boundary opening the next band.
+    """
     assert aqi_band(value) == band
 
 
