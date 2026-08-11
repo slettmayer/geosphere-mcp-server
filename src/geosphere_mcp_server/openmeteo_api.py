@@ -103,15 +103,23 @@ async def async_get_hourly(
     latitude: float,
     longitude: float,
     hours: int = 24,
+    lead_hours: float = 0.0,
     base_url: str = OPENMETEO_API_BASE_URL,
 ) -> dict[str, Any]:
     """Fetch the hourly forecast worldwide.
 
-    ``forecast_days`` is derived from ``hours`` (ceil to whole days). Returns
-    the raw Open-Meteo body containing ``hourly``, ``hourly_units``,
-    ``timezone`` and coordinate fields.
+    ``forecast_days`` is derived from ``hours`` (ceil to whole days). This API
+    counts its forecast days from **local midnight**, not from now, so a window
+    that starts later than now needs the days in between as well: pass
+    ``lead_hours`` — the hours between now and the caller's ``start`` — or the
+    requested window falls off the end of the response and the caller filters
+    every row away. Returns the raw Open-Meteo body containing ``hourly``,
+    ``hourly_units``, ``timezone`` and coordinate fields.
     """
-    forecast_days = max(1, math.ceil(max(hours, 1) / 24))
+    span = max(hours, 1) + max(lead_hours, 0.0)
+    # +1 day: the days are counted from local midnight, so the tail of the
+    # window would otherwise be clipped by however far into the day it is.
+    forecast_days = max(1, math.ceil(span / 24) + 1)
     params = {
         "latitude": str(latitude),
         "longitude": str(longitude),

@@ -25,11 +25,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from geosphere_mcp_server.condition import is_thunder
-from geosphere_mcp_server.const import PRECIP_MIN_MM
-
-# A condition string starting with this prefix means the derivation decided
-# thunder is likely ("lightning" and "lightning-rainy").
-_LIGHTNING_PREFIX = "lightning"
+from geosphere_mcp_server.const import CONDITION_LIGHTNING, PRECIP_MIN_MM
 
 
 def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
@@ -45,6 +41,12 @@ def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
     covers the current hour and the next one, and can report an event up to
     ~2 h ahead. Callers that need a strict "within the next 60 minutes" answer
     must compare timestamps themselves.
+
+    ``rows`` and ``now`` must share a **fixed-offset** zone — in practice both
+    UTC. ``now + timedelta`` is wall-clock arithmetic even on aware datetimes,
+    so passing times in a DST-observing zone would make the horizon 11 or 13
+    real hours across a transition. Callers whose source is local (Open-Meteo)
+    convert to UTC first and localize only what they render.
     """
     start = now.replace(minute=0, second=0, microsecond=0)
     end = now + timedelta(hours=hours)
@@ -81,7 +83,10 @@ def _is_lightning(row: dict[str, Any]) -> bool:
     hour, not a quiet one.
     """
     condition = row.get("condition")
-    if condition is not None and condition.startswith(_LIGHTNING_PREFIX):
+    # `lightning` is also the prefix of `lightning-rainy`, so one `startswith`
+    # catches both. Taken from const.py rather than restated here, so a rename
+    # of the condition vocabulary cannot leave this predicate matching nothing.
+    if condition is not None and condition.startswith(CONDITION_LIGHTNING):
         return True
     precipitation = row.get("precipitation_mm") or 0.0
     return (

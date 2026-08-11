@@ -141,23 +141,32 @@ def test_wmo_condition_map_covers_0_to_99() -> None:
 
 
 def _arome_forecast() -> GeoSphereResponse:
-    stamps = _ts((14, 0), (15, 0), (16, 0), (17, 0))
+    """Five stamps, 14:00-18:00. NOW is 15:30, so 15:00/16:00/17:00 are emitted.
+
+    The series runs one stamp past the last emitted hour on purpose: interval
+    parameters (`ugust`/`vgust`, the `rr_acc`/`snow_acc` accumulations) describe
+    the interval *ending* at their stamp, so the hour beginning at 17:00 reads
+    them from 18:00. The accumulations are laid out so the hour beginning
+    15:00 catches 1 mm of rain and the one beginning 17:00 catches 1 mm of
+    snow.
+    """
+    stamps = _ts((14, 0), (15, 0), (16, 0), (17, 0), (18, 0))
     return _response(
         "nwp-v1-1h-2500m",
         stamps,
         {
-            "t2m": [10.0, 11.0, 12.0, 13.0],
-            "rh2m": [80.0, 80.0, 80.0, 80.0],
-            "u10m": [0.0, 0.0, 0.0, 0.0],
-            "v10m": [-1.0, -2.0, -3.0, -4.0],
-            "ugust": [0.0, 0.0, 0.0, 0.0],
-            "vgust": [-2.0, -4.0, -6.0, -8.0],
-            "tcc": [0.1, 0.2, 0.5, 0.9],
-            "rr_acc": [0.0, 1.0, 3.0, 3.0],
-            "snow_acc": [0.0, 0.0, 0.0, 1.0],
-            "snowlmt": [2000.0, 2000.0, 2000.0, 1000.0],
-            "grad": [0.0, 100.0, 200.0, 0.0],
-            "cape": [0.0, 0.0, 0.0, 1500.0],
+            "t2m": [10.0, 11.0, 12.0, 13.0, 14.0],
+            "rh2m": [80.0, 80.0, 80.0, 80.0, 80.0],
+            "u10m": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "v10m": [-1.0, -2.0, -3.0, -4.0, -5.0],
+            "ugust": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "vgust": [-2.0, -4.0, -6.0, -8.0, -10.0],
+            "tcc": [0.1, 0.2, 0.5, 0.9, 0.9],
+            "rr_acc": [0.0, 0.0, 1.0, 3.0, 3.0],
+            "snow_acc": [0.0, 0.0, 0.0, 0.0, 1.0],
+            "snowlmt": [2000.0, 2000.0, 2000.0, 1000.0, 1000.0],
+            "grad": [0.0, 100.0, 200.0, 0.0, 0.0],
+            "cape": [0.0, 0.0, 0.0, 1500.0, 1500.0],
         },
         reference_time=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
     )
@@ -176,8 +185,12 @@ def _ensemble() -> GeoSphereResponse:
     )
 
 
-def test_assemble_hourly_skips_index_zero_and_past() -> None:
-    """Index 0 and hours before the current top-of-hour are dropped."""
+def test_assemble_hourly_drops_past_hours_and_the_successorless_last() -> None:
+    """Hours before the current top-of-hour go, and so does the final stamp.
+
+    The final stamp has no successor to read its interval fields from, so it
+    cannot be emitted; 14:00 precedes the cutoff.
+    """
     result = assemble_hourly_forecast(
         _arome_forecast(), _ensemble(), 48.219, 16.362, NOW
     )
@@ -192,14 +205,17 @@ def test_assemble_hourly_fields_and_diffs() -> None:
         _arome_forecast(), _ensemble(), 48.219, 16.362, NOW
     )
     first = result["hourly"][0]  # 15:00
-    assert first["temperature_c"] == 11.0
-    assert first["precipitation_mm"] == 1.0  # 1.0 - 0.0
+    assert first["temperature_c"] == 11.0  # instantaneous at the stamp
+    # Interval field, so it comes from the following stamp: 1.0 - 0.0.
+    assert first["precipitation_mm"] == 1.0
+    # Same for the gust: |vgust| at 16:00, not at 15:00.
+    assert first["wind_gust_ms"] == 6.0
     assert first["cloud_cover_pct"] == 20.0
     assert first["snow_limit_m"] == 2000.0
     assert first["global_radiation_wm2"] == 100.0
     assert first["dew_point_c"] is not None
 
-    third = result["hourly"][2]  # 17:00, snow accumulates -> snowy
+    third = result["hourly"][2]  # 17:00, snow accumulates by 18:00 -> snowy
     assert third["snow_mm"] == 1.0
     assert third["condition"] == "snowy"
     assert third["cape_jkg"] == 1500.0
@@ -533,9 +549,11 @@ async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     for call in mock.await_args_list:
         assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
-        # One hour of slack past the requested window, so rounding at either
-        # end cannot clip the last hour the caller asked for.
-        assert call.kwargs["end"] == top_of_hour + timedelta(hours=6)
+        # Two hours of slack past the requested window: one because the last
+        # hour's interval fields (gust, precipitation) live on the following
+        # stamp, and one so rounding at the boundary cannot clip that
+        # successor.
+        assert call.kwargs["end"] == top_of_hour + timedelta(hours=7)
 
 
 @pytest.mark.asyncio
@@ -550,7 +568,7 @@ async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
 
     for call in mock.await_args_list:
         assert call.kwargs["start"] == later - timedelta(hours=1)
-        assert call.kwargs["end"] == later + timedelta(hours=4)
+        assert call.kwargs["end"] == later + timedelta(hours=5)
 
 
 @pytest.mark.asyncio
@@ -566,3 +584,52 @@ async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> N
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     for call in mock.await_args_list:
         assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
+
+
+def test_assemble_hourly_interval_fields_come_from_the_next_stamp() -> None:
+    """Rain that fell before the stamp must not be reported at it.
+
+    AROME's `rr_acc` is accumulated since the run start and `ugust`/`vgust` are
+    the maximum "in the last forecast intervall", so both describe the interval
+    *ending* at their stamp. A row stamped T covers T..T+1h and has to read
+    them one step on; reading at T reports the hour that already ended.
+    """
+    arome = _response(
+        "nwp-v1-1h-2500m",
+        _ts((15, 0), (16, 0), (17, 0)),
+        {
+            "t2m": [20.0, 20.0, 20.0],
+            "tcc": [0.1, 0.1, 0.1],
+            # 5 mm fell between 14:00 and 15:00; nothing after.
+            "rr_acc": [5.0, 5.0, 5.0],
+            "snow_acc": [0.0, 0.0, 0.0],
+            "ugust": [0.0, 0.0, 0.0],
+            "vgust": [-30.0, -2.0, -2.0],
+        },
+    )
+    first = assemble_hourly_forecast(arome, None, 48.219, 16.362, NOW)["hourly"][0]
+    assert first["time"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+    # Reading rr_acc at index 1 would have differenced against the 14:00 total
+    # and reported 5 mm of rain for an hour that is dry.
+    assert first["precipitation_mm"] == 0.0
+    assert first["condition"] == "sunny"
+    # Likewise the 30 m/s gust belongs to 14:00-15:00, not to this hour.
+    assert first["wind_gust_ms"] == 2.0
+
+
+def test_arome_current_gust_covers_the_hour_in_progress() -> None:
+    """The gust is the one interval field in the current snapshot."""
+    trimmed = _response(
+        "nwp-v1-1h-2500m",
+        _ts((15, 0), (16, 0)),  # NOW is 15:30, so 15:00 is the hour under way
+        {
+            "t2m": [20.0, 20.0],
+            # The 15:00 stamp's gust peaked over 14:00-15:00 and is history;
+            # the hour in progress is the one ending at 16:00.
+            "ugust": [0.0, 0.0],
+            "vgust": [-30.0, -9.0],
+        },
+    )
+    current = weather._arome_current(trimmed, NOW)
+    assert current is not None
+    assert current["wind_gust_speed"] == 9.0

@@ -82,7 +82,10 @@ AQI failure logs a warning and keeps the concentrations. The `sources` list in t
 actually contributed, and the rendered source line shows it.
 
 An out-of-domain error on `chem` — and only on `chem` — triggers the Open-Meteo fallback, which is a single
-request.
+request. **So does an empty in-domain response**: the API answers HTTP 200 with an empty series rather than
+an error when a WRF-Chem run is stale or incomplete, so "inside the grid" and "has data" are separate
+questions. `format.air_quality_is_empty` decides the second one, and the tool falls through to CAMS —
+which is worldwide and would have answered — instead of dead-ending on a location the server can serve.
 
 ## Dependencies
 - GeoSphere `chem-v2-1h-3km` (pollutants, ~73 h hourly) and `chem_aqi-v1-1d-3km` (daily band)

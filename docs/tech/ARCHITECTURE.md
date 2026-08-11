@@ -98,7 +98,9 @@ One module per responsibility. No sub-packages.
 - Owns: the `normalize_*` functions (shape a GeoSphere or Open-Meteo payload into a render-ready dict)
   and the markdown renderers (`render_current`/`render_hourly`/`render_daily`/`render_outlook`/`render_air_quality`) for the five tools
 - Owns the timezone reconciliation the outlook needs: GeoSphere rows are aware UTC and Open-Meteo rows are
-  naive local, so each normalizer converts `now` into its own rows' convention before any comparison
+  naive local, so the Open-Meteo normalizer resolves its rows in the point's own zone and converts them to
+  UTC before the derivation compares or adds anything — `aware + timedelta` is wall-clock arithmetic, so
+  only UTC makes a stated horizon a true duration across a DST transition
 - The renderers are shared across both data paths, so presentation behaviour such as the hourly
   day-divider headers applies identically to GeoSphere and Open-Meteo results
 - Normalization is a narrowing step: several merged fields are deliberately not forwarded to the renderers

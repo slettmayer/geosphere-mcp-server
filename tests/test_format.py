@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -474,13 +475,51 @@ SAMPLE_OUTLOOK_OPENMETEO = {
 
 
 def test_normalize_outlook_openmeteo_uses_local_time() -> None:
-    """Open-Meteo rows are naive local, so `now` is converted before comparing."""
+    """Open-Meteo rows are naive local; they are made aware before comparing."""
     data = normalize_outlook_openmeteo(
         SAMPLE_OUTLOOK_OPENMETEO, LAT, LON, now=NOW_OUTLOOK
     )
     assert data["max_gust_short_ms"] == 14.0
     assert data["max_gust_long_ms"] == 26.0
-    assert data["next_thunderstorm_at"] == datetime(2026, 7, 15, 19, 0)
+    # Reported in the point's own zone, as an instant rather than a wall clock.
+    assert data["next_thunderstorm_at"] == datetime(
+        2026, 7, 15, 19, 0, tzinfo=ZoneInfo("Europe/Lisbon")
+    )
+
+
+def test_outlook_horizons_are_durations_not_wall_clock() -> None:
+    """A DST transition inside the window must not stretch or shrink it.
+
+    Europe/Lisbon springs forward at 01:00 on 2026-03-29, so the 01:00 label
+    does not exist and local labels run an hour ahead of elapsed time from
+    then on. The 11:00 label is 12.5 wall-clock hours after a 22:30 start but
+    only 11.5 *real* hours, so it belongs inside a 12-hour horizon. Naive
+    wall-clock arithmetic ends the window at the 10:30 label and drops it --
+    silently under-reporting the peak gust across every spring-forward night.
+    """
+    zone = ZoneInfo("Europe/Lisbon")
+    labels = [
+        "2026-03-28T22:00",
+        "2026-03-28T23:00",
+        "2026-03-29T00:00",
+        # 01:00 is skipped by the transition; 02:00 local is 01:00 UTC.
+        "2026-03-29T02:00",
+        "2026-03-29T03:00",
+        "2026-03-29T11:00",
+    ]
+    body = {
+        "timezone": "Europe/Lisbon",
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": labels,
+            "weather_code": [3] * len(labels),
+            "wind_gusts_10m": [1.0, 2.0, 3.0, 4.0, 5.0, 99.0],
+        },
+    }
+    now = datetime(2026, 3, 28, 22, 30, tzinfo=zone)
+    data = normalize_outlook_openmeteo(body, LAT, LON, now=now)
+    assert data["max_gust_long_ms"] == 99.0
+    assert data["max_gust_long_at"] == datetime(2026, 3, 29, 11, 0, tzinfo=zone)
 
 
 def test_openmeteo_rows_negate_the_inhibition_sign() -> None:

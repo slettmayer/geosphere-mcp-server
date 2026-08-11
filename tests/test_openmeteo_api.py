@@ -158,17 +158,33 @@ async def test_async_get_hourly_success() -> None:
 
 @pytest.mark.asyncio
 async def test_async_get_hourly_forecast_days_from_hours() -> None:
-    """forecast_days is the ceil of hours/24 (>=1)."""
+    """forecast_days is ceil(hours/24) plus a day of headroom.
+
+    The API counts forecast days from **local midnight**, not from now, so the
+    bare ceil under-delivers by however far into the day the call lands:
+    `hours=24` asked at 20:00 local returned a single day and therefore only
+    four hours ahead. The extra day covers the whole requested span whatever
+    the local hour; the caller truncates to `hours` anyway.
+    """
     session = _make_session(json_data=SAMPLE_HOURLY)
 
     await async_get_hourly(session, 38.72, -9.14, hours=30)
-    assert session.get.call_args.kwargs["params"]["forecast_days"] == "2"
+    assert session.get.call_args.kwargs["params"]["forecast_days"] == "3"
 
     await async_get_hourly(session, 38.72, -9.14, hours=24)
-    assert session.get.call_args.kwargs["params"]["forecast_days"] == "1"
+    assert session.get.call_args.kwargs["params"]["forecast_days"] == "2"
 
     await async_get_hourly(session, 38.72, -9.14, hours=1)
-    assert session.get.call_args.kwargs["params"]["forecast_days"] == "1"
+    assert session.get.call_args.kwargs["params"]["forecast_days"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_async_get_hourly_pays_for_a_future_start_in_days() -> None:
+    """A window starting two days out needs the days in between fetched too."""
+    session = _make_session(json_data=SAMPLE_HOURLY)
+
+    await async_get_hourly(session, 38.72, -9.14, hours=6, lead_hours=48)
+    assert session.get.call_args.kwargs["params"]["forecast_days"] == "4"
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -80,6 +80,19 @@ class GeoSphereResponse:
         return None
 
 
+def _stamp(when: datetime) -> str:
+    """Serialize a bound for the API, which reads naive stamps as UTC.
+
+    An aware datetime is converted to UTC first: formatting it directly would
+    drop the offset and turn, say, ``14:00+02:00`` into a request for
+    ``14:00Z`` — a window two hours off what the caller asked for. Naive
+    values are assumed to already be UTC, matching the API's own reading.
+    """
+    if when.tzinfo is not None:
+        when = when.astimezone(UTC)
+    return when.strftime("%Y-%m-%dT%H:%M")
+
+
 async def async_get_timeseries(
     session: aiohttp.ClientSession,
     mode: str,
@@ -104,9 +117,9 @@ async def async_get_timeseries(
         "output_format": "geojson",
     }
     if start is not None:
-        query["start"] = start.strftime("%Y-%m-%dT%H:%M")
+        query["start"] = _stamp(start)
     if end is not None:
-        query["end"] = end.strftime("%Y-%m-%dT%H:%M")
+        query["end"] = _stamp(end)
 
     try:
         async with asyncio.timeout(GEOSPHERE_TIMEOUT):

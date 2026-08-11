@@ -15,9 +15,9 @@ and are emitted verbatim (e.g. ``partlycloudy``).
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from geosphere_mcp_server.const import (
     AIR_QUALITY_POLLUTANTS,
@@ -516,6 +516,22 @@ def normalize_outlook_geosphere(
     }
 
 
+def _point_zone(body: dict[str, Any]) -> tzinfo:
+    """The point's timezone, for attaching to Open-Meteo's naive-local stamps.
+
+    Prefers the named zone the API returns, because only a named zone knows
+    where its DST transitions fall. Falls back to the fixed offset when the
+    name is missing or unknown to the system's tz database.
+    """
+    name = body.get("timezone")
+    if name:
+        try:
+            return ZoneInfo(str(name))
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return timezone(timedelta(seconds=int(body.get("utc_offset_seconds") or 0)))
+
+
 def normalize_outlook_openmeteo(
     body: dict[str, Any],
     latitude: float,
@@ -524,13 +540,28 @@ def normalize_outlook_openmeteo(
 ) -> dict[str, Any]:
     """Fold a raw Open-Meteo hourly body into the uniform outlook shape.
 
-    Open-Meteo rows are naive local, so ``now`` is converted to the point's
-    local time before the derivation compares anything.
+    Open-Meteo rows are naive local, and the derivation does real duration
+    arithmetic — ``now + 12 h``, and the hours left in the horizon. Doing that
+    on local wall-clock makes a stated horizon wrong across a DST transition:
+    the "next 12 h" would span 11 or 13 actual hours.
+
+    Note that attaching the zone is not on its own enough — ``aware + timedelta``
+    is *also* wall-clock arithmetic within that zone. The rows are therefore
+    resolved to instants and converted to UTC, where a timedelta is a true
+    duration, exactly like the GeoSphere path. Only the reported timestamps are
+    localized back for display.
     """
     now = now or datetime.now(UTC)
-    offset = int(body.get("utc_offset_seconds") or 0)
-    rows = openmeteo_hourly_rows(body)
-    data = _outlook(rows, _to_local_naive(now, offset))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    zone = _point_zone(body)
+    rows = [
+        {**row, "time": row["time"].replace(tzinfo=zone).astimezone(UTC)}
+        for row in openmeteo_hourly_rows(body)
+    ]
+    data = _outlook(
+        rows, now.astimezone(UTC), localize=lambda when: when.astimezone(zone)
+    )
     return {
         **data,
         "latitude": latitude,
@@ -737,6 +768,21 @@ def normalize_air_quality_openmeteo(
         "tz_abbr": body.get("timezone_abbreviation"),
         "source": "Open-Meteo (CAMS)",
     }
+
+
+def air_quality_is_empty(data: dict[str, Any]) -> bool:
+    """True when a normalized air-quality dict carries nothing to report.
+
+    The GeoSphere API answers HTTP 200 with an empty series — not an error —
+    when a run is stale or incomplete for a point that *is* inside the grid, so
+    "in domain" and "has data" are separate questions. Callers use this to fall
+    through to the worldwide source instead of dead-ending on a location the
+    server can in fact serve.
+    """
+    pollutants = data.get("pollutants") or {}
+    if any(value is not None for value in pollutants.values()):
+        return False
+    return all(day.get("band") is None for day in data.get("days") or [])
 
 
 def _aqi_day_text(day: dict[str, Any]) -> str | None:

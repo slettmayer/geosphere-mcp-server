@@ -104,11 +104,12 @@ PT_NO_PRECIPITATION = 255
 # Horizon of the AROME hourly forecast (hours). Used to clamp the hourly tool.
 AROME_MAX_HOURS = 60
 
-# Hours of history requested alongside the forecast. The API trims the series
-# to the current hour, and the first step has no predecessor for the
-# accumulation deltas, so without this the in-progress hour is unusable and
-# gets dropped — taking the outlook's "first entry is the hour under way"
-# contract with it (see outlook.py).
+# Hours of history requested alongside the forecast, so the series is
+# guaranteed to reach back to the hour already under way. Naming that hour as
+# `start` does not work: the API rounds `start` up to the next whole stamp, so
+# asking for 19:00 at 19:33 comes back starting 20:00 — dropping the
+# in-progress hour and with it the outlook's "first entry is the hour under
+# way" contract (see outlook.py). Assembly drops whatever precedes the cutoff.
 HOURLY_LOOKBACK_HOURS = 1
 
 # Forecast-outlook horizons (see outlook.py). The window rounds up to whole

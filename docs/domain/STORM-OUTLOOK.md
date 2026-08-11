@@ -78,16 +78,17 @@ convection is happening.
 
 ### The In-Progress Hour Is Not Free
 
-Every window semantic above rests on the series' first entry being the hour already under way. That does
-**not** come for free: the GeoSphere API trims the forecast to the current hour, and
-`assemble_hourly_forecast` skips the first step because an accumulated parameter has no predecessor to
-difference against. Left alone, those two facts cancel the in-progress hour out entirely — the 1 h window
-collapses to a single stamp and a storm happening right now is invisible.
+Every window semantic above rests on the series' first entry being the hour already under way, and that
+does **not** come for free. `async_fetch_hourly_forecast` requests `HOURLY_LOOKBACK_HOURS` (1) of history
+to guarantee the series reaches back that far. Naming the current hour as `start` does not work: the API
+rounds `start` up to the next whole stamp, so asking for 15:00 at 15:30 comes back starting 16:00 and the
+in-progress hour is gone — the 1 h window collapses to a single stamp and a storm happening right now is
+invisible. Assembly drops whatever precedes the cutoff.
 
-`async_fetch_hourly_forecast` therefore requests `HOURLY_LOOKBACK_HOURS` (1) of history, so the current
-hour arrives with a predecessor and a real precipitation delta. The lookback is anchored to the **top of
-the hour**, not to `now`: the API rounds `start` up to the next whole stamp, so `now - 1h` at 15:30 comes
-back as 15:00 and the problem returns unchanged.
+The row's precipitation is a *forward* delta (`rr_acc[i+1] - rr_acc[i]`), so the in-progress hour reports
+the rain still to fall in it rather than the rain that already fell — which matters here, because
+`_is_lightning`'s branch (b) corroborates CAPE with precipitation. Reading it backwards would let the
+outlook call a storm that had just ended.
 
 ### Tri-State Answers
 
@@ -127,8 +128,13 @@ A missing inhibition value still reads as uncapped, so a point where Open-Meteo 
 CAPE-only gating for those hours rather than failing.
 
 Timestamps differ between paths: GeoSphere rows are aware UTC and Open-Meteo rows are naive local. The
-normalizer in `format.py` converts `now` into whichever convention its rows use before any comparison, and
-only the *reported* timestamps are localized for display.
+Open-Meteo normalizer resolves its rows to instants in the point's own zone and converts them to **UTC**
+before the derivation touches them; only the *reported* timestamps are localized for display.
+
+Attaching the zone is not on its own enough. `aware + timedelta` is wall-clock arithmetic *within* that
+zone, so a 12-hour horizon spanning a DST transition would cover 11 or 13 real hours — on a
+spring-forward night the peak-gust scan silently loses an hour off the end. UTC has no transitions, so a
+timedelta there is a true duration. `outlook.window` documents this as a requirement on its callers.
 
 ## Dependencies
 - `outlook.py` depends only on `condition.is_thunder` and `PRECIP_MIN_MM` from `const.py`

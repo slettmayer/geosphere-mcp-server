@@ -93,6 +93,40 @@ version being cut, so you never rename that heading by hand. See
 - Docs: `outlook._is_lightning` states why only its CAPE/CIN branch requires precipitation — that
   requirement substitutes for the cloud-cover corroboration the derived-condition branch already carries,
   rather than being an inconsistency between the two. Behaviour is unchanged.
+- Fixed: **behaviour change.** Every hourly row's precipitation, snow and wind gust now describes the hour
+  the row is stamped for rather than the hour before it. AROME mixes two stampings and the assembly read
+  both at the same index: `t2m`, `rh2m`, wind, `tcc`, `cape`, `cin` are instantaneous at the stamp, but
+  `ugust`/`vgust` are the maximum "in the last forecast intervall" and `rr_acc`/`snow_acc` are
+  run-accumulations, so a delta spans the interval *ending* at the stamp. A row could therefore show rain
+  that had already stopped and the previous hour's gust peak — and because `_is_lightning` corroborates
+  CAPE with precipitation, `get_storm_outlook` could call a thunderstorm that was already over. Interval
+  parameters now come from the following step; the last forecast hour is dropped in exchange, having no
+  successor to read them from.
+- Fixed: the current conditions' AROME gust likewise came from the in-progress hour's stamp, whose gust
+  covered the hour before it. It now reads the successor, so `get_current_weather` outside the
+  nowcast/INCA grid reports the gust of the hour actually under way.
+- Fixed: a `start` with a non-UTC offset no longer requests the wrong window. `async_get_timeseries`
+  formatted the bound with `strftime`, dropping the offset, and the API reads naive stamps as UTC — so
+  `start="2026-08-11T15:00+02:00"` fetched from 15:00 UTC and the caller silently lost the first two
+  requested hours. Bounds are converted to UTC before serialization. The Open-Meteo path was already
+  correct, so this also removes a divergence between the two source paths.
+- Fixed: the Open-Meteo hourly fallback no longer returns nothing for a `start` in the future, and no
+  longer under-delivers late in the day. `forecast_days` was `ceil(hours / 24)` and that API counts days
+  from **local midnight**, not from now — so `hours=24` asked at 20:00 local yielded four hours, and a
+  `start` two days out fell off the end of the response entirely. The request now accounts for the lead
+  time to `start` and carries a day of headroom.
+- Fixed: the Open-Meteo storm outlook ran its window and horizon arithmetic on naive local wall-clock, so
+  a DST transition inside the window made the stated horizon 11 or 13 real hours — on a spring-forward
+  night the "next 12 h" peak-gust scan silently lost an hour off the end. Rows are now resolved to
+  instants in the point's own zone and compared in UTC, matching the GeoSphere path. (Attaching the zone
+  alone is not enough: `aware + timedelta` is wall-clock arithmetic within that zone.)
+- Fixed: `get_air_quality` falls back to Open-Meteo when an in-domain WRF-Chem response comes back empty,
+  not only when the point is out of domain. The API answers HTTP 200 with an empty series when a run is
+  stale or incomplete, so a location CAMS covers worldwide could dead-end on "No air-quality data
+  available".
+- Changed: `outlook._LIGHTNING_PREFIX` is gone in favour of `const.CONDITION_LIGHTNING`, which is the same
+  string. A rename of the condition vocabulary would have left the predicate matching nothing, and
+  `get_storm_outlook` reporting an all-clear through an actual storm.
 
 ## 0.3.2 - 2026-08-07
 

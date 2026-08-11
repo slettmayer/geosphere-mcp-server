@@ -541,3 +541,28 @@ async def test_air_quality_unexpected_error_returns_warning() -> None:
     with patch.object(air_quality, "async_fetch_air_quality", fetch):
         out = await get_air_quality(LAT, LON)
     assert out == "⚠️ No weather data available"
+
+
+async def test_air_quality_empty_in_domain_response_falls_back() -> None:
+    """A point inside the 3 km grid whose WRF-Chem run has no data.
+
+    The GeoSphere API answers 200 with an empty series rather than an error, so
+    only catching GeoSphereOutOfDomainError left the caller with "no data" for
+    a location CAMS covers worldwide.
+    """
+    empty = AsyncMock(
+        return_value={
+            "observed_at": None,
+            "pollutants": dict.fromkeys(("nitrogen_dioxide", "ozone", "pm10", "pm2_5")),
+            "sources": ["WRF-Chem"],
+        }
+    )
+    om = AsyncMock(return_value=SAMPLE_OPENMETEO_AIR_QUALITY)
+    with (
+        patch.object(air_quality, "async_fetch_air_quality", empty),
+        patch.object(openmeteo_api, "async_get_air_quality", om),
+    ):
+        out = await get_air_quality(LAT, LON)
+    om.assert_awaited_once()
+    assert "Open-Meteo (CAMS)" in out
+    assert "No air-quality data available" not in out

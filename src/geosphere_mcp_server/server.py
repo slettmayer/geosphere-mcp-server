@@ -210,8 +210,21 @@ async def get_hourly_forecast(
                     assembled, latitude, longitude, geosphere_hours
                 )
             except GeoSphereOutOfDomainError:
+                # Open-Meteo counts forecast days from local midnight, so a
+                # future `start` has to be paid for in days as well as hours —
+                # otherwise every returned row precedes the window and the
+                # normalizer filters the response down to nothing.
+                lead = 0.0
+                if start_dt is not None:
+                    lead = max(
+                        (start_dt - datetime.now(UTC)).total_seconds() / 3600, 0.0
+                    )
                 body = await openmeteo_api.async_get_hourly(
-                    session, latitude, longitude, hours=fallback_hours
+                    session,
+                    latitude,
+                    longitude,
+                    hours=fallback_hours,
+                    lead_hours=lead,
                 )
                 data = fmt.normalize_hourly_openmeteo(
                     body, latitude, longitude, fallback_hours, start=start_dt
@@ -295,12 +308,19 @@ async def get_air_quality(latitude: float, longitude: float) -> str:
 
     async def work() -> str:
         async with aiohttp.ClientSession() as session:
+            data = None
             try:
                 merged = await air_quality.async_fetch_air_quality(
                     session, latitude, longitude
                 )
                 data = fmt.normalize_air_quality_geosphere(merged, latitude, longitude)
             except GeoSphereOutOfDomainError:
+                pass
+            # An in-domain point can still come back empty: the API answers 200
+            # with an empty series when a WRF-Chem run is stale or incomplete.
+            # CAMS is worldwide and would have answered, so fall through rather
+            # than dead-end on a location the server can serve.
+            if data is None or fmt.air_quality_is_empty(data):
                 body = await openmeteo_api.async_get_air_quality(
                     session, latitude, longitude
                 )

@@ -37,10 +37,15 @@ treated as a coverage signal, not an error, and triggers the Open-Meteo fallback
 Resource IDs, the per-dataset parameter lists, and the 30 s request timeout live in `const.py`.
 `AROME_MAX_HOURS = 60` bounds the GeoSphere hourly horizon.
 
-Hourly requests carry both a `start` and an `end`: one hour of history (so the hour in progress has an
-accumulation predecessor) through one hour past the window the caller asked for. A 6-hour request
-therefore transfers 8 hourly steps rather than the full horizon. `get_storm_outlook` asks for
-`AROME_MAX_HOURS`, so its scan still spans everything AROME publishes.
+Hourly requests carry both a `start` and an `end`: one hour of history (so the series is guaranteed to
+reach the hour in progress, which the API's round-up of `start` would otherwise skip past) through two
+hours past the window the caller asked for — one because the last hour's interval parameters live on the
+following stamp, one so rounding at the boundary cannot clip that successor. A 6-hour request therefore
+transfers 9 hourly steps rather than the full horizon. `get_storm_outlook` asks for `AROME_MAX_HOURS`, so
+its scan still spans everything AROME publishes.
+
+Bounds are serialized as naive stamps, which the API reads as UTC, so an aware `start`/`end` is converted
+to UTC first — formatting it directly would drop the offset and shift the whole window.
 
 **No GeoSphere dataset forecast extends beyond ~60 h.** Long-range and daily forecasts always use
 Open-Meteo.

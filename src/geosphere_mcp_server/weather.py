@@ -138,26 +138,42 @@ def assemble_hourly_forecast(
 ) -> dict[str, Any]:
     """Assemble the per-hour AROME forecast (+ ensemble precip probability).
 
-    Skips index 0 (accumulated parameters have no predecessor step) and any
-    hour before the current top-of-hour. ``start`` filters to hours at/after a
-    given instant; ``hours`` truncates the result length.
+    A row stamped ``ts`` describes the hour *beginning* at ``ts``. AROME mixes
+    two stampings, and the dataset metadata is explicit about which is which:
+
+    * instantaneous AT the stamp — ``t2m``, ``rh2m``, ``u10m``/``v10m``,
+      ``tcc``, ``cape``, ``cin``, ``snowlmt``, ``grad``;
+    * the interval ENDING at the stamp — ``ugust``/``vgust`` ("... in the last
+      forecast intervall"), plus the ``rr_acc`` / ``snow_acc`` deltas, which
+      are accumulations since the run start, so ``acc[i] - acc[i-1]`` spans
+      ``(ts[i-1], ts[i]]``.
+
+    The interval fields covering the hour that *starts* at ``ts`` therefore
+    live one step later, at ``nxt``. Reading them at ``i`` would report the
+    hour that already ended — rain that has stopped, the previous hour's gust
+    peak, and a thunderstorm the outlook would then place in the future.
+
+    The final stamp has no successor and so cannot be emitted. Hours before
+    the current top-of-hour are dropped; ``start`` filters to hours at/after a
+    given instant, and ``hours`` truncates the result length.
     """
     pop_by_ts = _pop_by_timestamp(ensemble)
     cutoff = now.replace(minute=0, second=0, microsecond=0)
     hourly: list[dict[str, Any]] = []
 
-    for i in range(1, len(arome.timestamps)):
+    for i in range(len(arome.timestamps) - 1):
         ts = arome.timestamps[i]
         if ts < cutoff:
             continue
+        nxt = i + 1
         wind_speed, wind_bearing = wind_from_components(
             arome.value_at("u10m", i), arome.value_at("v10m", i)
         )
         gust_speed, _ = wind_from_components(
-            arome.value_at("ugust", i), arome.value_at("vgust", i)
+            arome.value_at("ugust", nxt), arome.value_at("vgust", nxt)
         )
-        precipitation = _diff(arome.series("rr_acc"), i)
-        snow = _diff(arome.series("snow_acc"), i)
+        precipitation = _diff(arome.series("rr_acc"), nxt)
+        snow = _diff(arome.series("snow_acc"), nxt)
         cloud = _percent(arome.value_at("tcc", i))
         cape = arome.value_at("cape", i)
         cin = arome.value_at("cin", i)
@@ -214,11 +230,17 @@ def _arome_current(
 ) -> dict[str, Any] | None:
     """AROME snapshot of the hour in progress, for the fallback chain.
 
-    Scans from index 0, unlike :func:`assemble_hourly_forecast`: every field
-    read here is instantaneous, so none of them needs a predecessor step. The
-    API trims the series to the current hour, so skipping index 0 would read
-    cloud, CAPE and CIN from the hour *after* now — and CIN gates the current
-    condition's thunder verdict.
+    Scans from index 0 for the hour already under way — the API trims the
+    series to the current hour, so starting at index 1 would read cloud, CAPE
+    and CIN from the hour *after* now, and CIN gates the current condition's
+    thunder verdict.
+
+    Every field here is instantaneous at the stamp except the gust:
+    ``ugust``/``vgust`` are the maximum over the interval *ending* at their
+    stamp, so the peak for the hour in progress is the one stamped an hour
+    later — see :func:`assemble_hourly_forecast` for the full convention. A
+    missing successor leaves the gust unknown rather than reporting the
+    previous hour's peak as the gust now.
     """
     if arome is None:
         return None
@@ -234,7 +256,7 @@ def _arome_current(
         arome.value_at("u10m", index), arome.value_at("v10m", index)
     )
     gust_speed, _ = wind_from_components(
-        arome.value_at("ugust", index), arome.value_at("vgust", index)
+        arome.value_at("ugust", index + 1), arome.value_at("vgust", index + 1)
     )
     return {
         "temperature": arome.value_at("t2m", index),
@@ -452,20 +474,20 @@ async def async_fetch_hourly_forecast(
     if start is not None and start > window_start:
         window_start = start
 
-    # One hour of history, so the hour already under way has a predecessor for
-    # the accumulation deltas and survives assembly — see HOURLY_LOOKBACK_HOURS.
-    # Anchored to the top of the hour, not to `now`: the API rounds `start` up
-    # to the next whole stamp, so `now - 1h` at 19:33 would yield 19:00 and the
-    # in-progress hour would again be the predecessor-less first step.
+    # One hour of history, so the series is guaranteed to reach back to the
+    # hour already under way — see HOURLY_LOOKBACK_HOURS. Naming that hour as
+    # `start` does not work: the API rounds `start` up to the next whole stamp,
+    # so asking for 19:00 at 19:33 comes back starting 20:00.
     series_start = window_start.replace(minute=0, second=0, microsecond=0) - timedelta(
         hours=HOURLY_LOOKBACK_HOURS
     )
     # And no further than the caller asked for: `hours=6` has no use for the
-    # other ~54 h of the AROME horizon. The bound carries an hour of slack so
-    # rounding at either end cannot clip the last requested hour. The storm
-    # outlook asks for AROME_MAX_HOURS, so its scan still spans the full
-    # horizon.
-    series_end = window_start + timedelta(hours=max(hours, 1))
+    # other ~54 h of the AROME horizon. Two hours of slack past the last
+    # requested hour: one because its interval fields (gust, precipitation)
+    # live on the *following* stamp, and one so rounding at the boundary
+    # cannot clip that successor. The storm outlook asks for AROME_MAX_HOURS,
+    # so its scan still spans the full horizon.
+    series_end = window_start + timedelta(hours=max(hours, 1) + 1)
 
     requests = [
         async_get_timeseries(
