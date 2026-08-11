@@ -97,6 +97,16 @@ On the GeoSphere path, each field is filled from a per-field fallback chain (por
 | Cloud cover, CAPE, CIN | AROME |
 | 1-hour precipitation | INCA `RR`, else the sum of the last four nowcast 15-min `rr` buckets |
 | Precipitation flag | nowcast `pt` (255 means none) |
+| Observation time (`observed_at`) | INCA `T2M` analysis -> INCA `RR` analysis -> `now` (nowcast) -> the AROME row's stamp |
+
+`observed_at` follows whichever source won, so it stays honest at every rung. It prefers the analysis
+behind the **temperature** because that is the field the reading is judged by; anchoring it to
+precipitation alone lets an analysis with no `RR` claim a fresher time than the temperature deserves. The
+15-min nowcast is current by construction, so `now` is right there. With neither, values come from the
+AROME row for the hour in progress, stamped at the top of that hour and up to an hour old — the staleness
+this timestamp exists to expose, so the row's own stamp is reported. INCA publishes ~30 min after the hour
+it analyses and serves the previous slice until the next appears, so `observed_at` can trail real time by
+~90 min.
 
 Two values are **derived rather than fetched**: apparent temperature ("feels like", Australian Bureau of
 Meteorology formula from temperature, humidity, and wind) and — on the hourly path only — dew point
@@ -117,10 +127,15 @@ Derived from the C-LAEF ensemble as a stepped value matched by **exact timestamp
 | p90 | 30 % | `POP_P90_WET_PCT` |
 | none | 0 % | `POP_DRY_PCT` |
 
-The ensemble series is keyed into a dict by timestamp and looked up with a plain exact-match lookup — there
-is no nearest-neighbour fallback, so a timestamp mismatch silently yields no probability. On the
-Open-Meteo path, `precipitation_probability` is used directly. An ensemble fetch failure omits the
-probability entirely and the forecast still renders.
+The percentiles are **interval** values, like AROME's accumulations and gusts: GeoSphere documents them as
+"the last forecast period", so a percentile stamped `T` covers `T-1h .. T`. `_pop_by_timestamp` therefore
+keys the dict by `ts - ENSEMBLE_STEP`, putting each probability on the forecast row that reports the
+matching amount. Reading them at their own stamp pairs every row's amount with the *previous* hour's
+probability.
+
+Lookup is then a plain exact-match on the shifted key — there is no nearest-neighbour fallback, so a
+timestamp mismatch silently yields no probability. On the Open-Meteo path, `precipitation_probability` is
+used directly. An ensemble fetch failure omits the probability entirely and the forecast still renders.
 
 ## Dependencies
 - `condition.py` depends only on `astral` and `const.py`

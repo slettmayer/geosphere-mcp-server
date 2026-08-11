@@ -102,9 +102,20 @@ version being cut, so you never rename that heading by hand. See
   CAPE with precipitation, `get_storm_outlook` could call a thunderstorm that was already over. Interval
   parameters now come from the following step; the last forecast hour is dropped in exchange, having no
   successor to read them from.
+- Fixed: **behaviour change.** Precipitation probability moved with the amount. The C-LAEF percentiles are
+  interval values just like `rr_acc` — GeoSphere documents them as "the last forecast period" — but only
+  the AROME fields were shifted, leaving every row's probability a stamp behind its own rain. A row could
+  show a dry hour at 95 %, or rain at 0 %, with the probability describing an hour that had already
+  passed.
 - Fixed: the current conditions' AROME gust likewise came from the in-progress hour's stamp, whose gust
   covered the hour before it. It now reads the successor, so `get_current_weather` outside the
   nowcast/INCA grid reports the gust of the hour actually under way.
+- Fixed: `observed_at` no longer misreports how old a reading is. It was anchored to the INCA
+  precipitation analysis alone, so a slice with no `RR` claimed `now` while an hour-old temperature was on
+  display; it now follows the analysis that supplied the *temperature*. Outside the nowcast/INCA grid it
+  reports the AROME row's own stamp rather than `now` — there every field comes from the forecast hour in
+  progress, stamped at the top of that hour, so at 14:59 the rendered "observed" time claimed 14:59 for
+  values describing 14:00.
 - Fixed: a `start` with a non-UTC offset no longer requests the wrong window. `async_get_timeseries`
   formatted the bound with `strftime`, dropping the offset, and the API reads naive stamps as UTC — so
   `start="2026-08-11T15:00+02:00"` fetched from 15:00 UTC and the caller silently lost the first two

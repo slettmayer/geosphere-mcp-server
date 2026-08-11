@@ -33,6 +33,7 @@ from geosphere_mcp_server.const import (
     DATASET_INCA,
     DATASET_NOWCAST,
     ENSEMBLE_PARAMETERS,
+    ENSEMBLE_STEP,
     HOURLY_LOOKBACK_HOURS,
     INCA_LOOKBACK_HOURS,
     INCA_PARAMETERS,
@@ -111,12 +112,19 @@ def _nearest_index(timestamps: list[datetime], when: datetime) -> int | None:
 def _pop_by_timestamp(
     ensemble: GeoSphereResponse | None,
 ) -> dict[datetime, int | None]:
-    """Map each ensemble hour to its stepped precipitation probability."""
+    """Map each forecast hour to its stepped precipitation probability.
+
+    The percentiles are interval values, like AROME's gust/min-max/accumulation
+    parameters: "Total amount of ... precipitation in the last forecast
+    period". The probability stamped `ts` therefore belongs to the hour
+    *ending* at `ts`, so it is keyed here by that hour's start -- one step back
+    -- which is the stamp of the row that reports the matching amount.
+    """
     pop: dict[datetime, int | None] = {}
     if ensemble is None:
         return pop
     for i, ts in enumerate(ensemble.timestamps):
-        pop[ts] = _precipitation_probability(
+        pop[ts - ENSEMBLE_STEP] = _precipitation_probability(
             ensemble.value_at("rr_p10", i),
             ensemble.value_at("rr_p50", i),
             ensemble.value_at("rr_p90", i),
@@ -259,6 +267,9 @@ def _arome_current(
         arome.value_at("ugust", index + 1), arome.value_at("vgust", index + 1)
     )
     return {
+        # The row's own stamp, so a merge with no INCA or nowcast behind it can
+        # report when these values are actually for instead of claiming `now`.
+        "time": arome.timestamps[index],
         "temperature": arome.value_at("t2m", index),
         "humidity": arome.value_at("rh2m", index),
         "wind_speed": wind_speed,
@@ -322,9 +333,8 @@ def merge_current_conditions(
     # INCA (observation-anchored hourly analysis) beats the 15-min nowcast for
     # thermodynamic fields and wind: the nowcast extrapolates from an analysis
     # ~2 h behind, lagging diurnal ramps by up to ~2 °C.
-    temperature = chain(
-        inca_latest("T2M")[0], now_value("t2m"), arome_field("temperature")
-    )
+    inca_t2m, inca_t2m_at = inca_latest("T2M")
+    temperature = chain(inca_t2m, now_value("t2m"), arome_field("temperature"))
     humidity = chain(inca_latest("RH2M")[0], now_value("rh2m"), arome_field("humidity"))
     wind_speed = chain(inca_wind_speed, now_value("ff"), arome_field("wind_speed"))
     gust = chain(now_value("fx"), arome_field("wind_gust_speed"))
@@ -333,7 +343,7 @@ def merge_current_conditions(
     cin = arome_field("cin")
 
     p0, _ = inca_latest("P0")
-    rr_1h, observed_at = inca_latest("RR")
+    rr_1h, rr_at = inca_latest("RR")
     if rr_1h is None and nowcast is not None:
         # Sum the last four 15-min nowcast buckets at/before now.
         past = [
@@ -349,8 +359,27 @@ def merge_current_conditions(
     rate_mm_h = nowcast_rr * 4.0 if nowcast_rr is not None else (rr_1h or 0.0)
     night = is_night(latitude, longitude, now)
 
+    # When these conditions actually describe, following whichever source won
+    # the chains above. INCA first, anchored to the analysis that supplied the
+    # temperature -- the field the reading is judged by -- rather than to
+    # precipitation, which can be absent while the thermodynamic fields are
+    # present and would then claim a fresher time than the temperature
+    # deserves. INCA publishes ~30 min after the hour it analyses and the
+    # previous slice is served until the next appears, so this can trail real
+    # time by ~90 min. The nowcast is current by construction, so `now` is
+    # honest for it. Outside the nowcast grid every field comes from an AROME
+    # row instead, stamped at the top of its hour and up to an hour old.
+    if inca_t2m_at is not None:
+        observed_at = inca_t2m_at
+    elif rr_at is not None:
+        observed_at = rr_at
+    elif nowcast is not None and nowcast.timestamps:
+        observed_at = now
+    else:
+        observed_at = arome_current.get("time", now) if arome_current else now
+
     return {
-        "observed_at": observed_at or now,
+        "observed_at": observed_at,
         "temperature_c": temperature,
         "apparent_temperature_c": apparent_temperature(
             temperature, humidity, wind_speed

@@ -173,14 +173,16 @@ def _arome_forecast() -> GeoSphereResponse:
 
 
 def _ensemble() -> GeoSphereResponse:
-    stamps = _ts((15, 0), (16, 0), (17, 0))
+    # Percentiles cover the hour *ending* at their stamp, so each one belongs
+    # to the forecast row an hour earlier: 16:00 -> row 15:00, and so on.
+    stamps = _ts((15, 0), (16, 0), (17, 0), (18, 0))
     return _response(
         "ensemble-v1-1h-2500m",
         stamps,
         {
-            "rr_p10": [0.0, 0.0, 0.5],  # 17:00 p10 wet -> 95
-            "rr_p50": [0.0, 0.5, 0.8],  # 16:00 p50 wet -> 70
-            "rr_p90": [0.0, 0.8, 0.9],  # 15:00 all dry -> 0
+            "rr_p10": [0.0, 0.0, 0.0, 0.5],  # 18:00 p10 wet -> row 17:00, 95
+            "rr_p50": [0.0, 0.0, 0.5, 0.8],  # 17:00 p50 wet -> row 16:00, 70
+            "rr_p90": [0.0, 0.0, 0.8, 0.9],  # 16:00 all dry -> row 15:00, 0
         },
     )
 
@@ -221,8 +223,14 @@ def test_assemble_hourly_fields_and_diffs() -> None:
     assert third["cape_jkg"] == 1500.0
 
 
-def test_assemble_hourly_pop_matched_by_timestamp() -> None:
-    """Precipitation probability is matched to the exact ensemble hour."""
+def test_assemble_hourly_pop_comes_from_the_next_ensemble_stamp() -> None:
+    """Probability is read one stamp on, so it describes the row's own hour.
+
+    The ensemble percentiles are interval values like AROME's accumulations,
+    covering the hour that *ends* at their stamp. Matching them to the row of
+    the same stamp would report the probability of the hour already gone --
+    and pair it with an amount from the hour the row is actually for.
+    """
     result = assemble_hourly_forecast(
         _arome_forecast(), _ensemble(), 48.219, 16.362, NOW
     )
@@ -319,6 +327,37 @@ def test_merge_arome_only_degraded() -> None:
     assert merged["global_radiation_wm2"] is None
     assert merged["snow_limit_m"] == 2000.0
     assert merged["is_precipitating"] is False
+    # AROME rows are stamped at the top of their hour, so at 15:30 these values
+    # are half an hour old. Claiming `now` would hide that.
+    assert merged["observed_at"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+
+
+def test_merge_observed_at_follows_the_temperature_not_precipitation() -> None:
+    """An INCA slice with temperature but no RR must not claim to be current.
+
+    `observed_at` used to come from the RR series alone, so an analysis whose
+    precipitation was absent reported `now` while the temperature on display
+    was an hour old -- the one case the timestamp exists to catch.
+    """
+    inca = _response(
+        "inca-v1-1h-1km",
+        _ts((13, 30), (14, 30)),
+        {"T2M": [9.0, 9.5], "RH2M": [70.0, 72.0], "RR": [None, None]},
+    )
+    merged = merge_current_conditions(
+        _nowcast(), inca, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["temperature_c"] == 9.5  # still the 14:30 analysis
+    assert merged["observed_at"] == datetime(2026, 7, 15, 14, 30, tzinfo=UTC)
+
+
+def test_merge_observed_at_is_now_when_only_the_nowcast_contributes() -> None:
+    """The 15-min nowcast is current by construction, so `now` is honest."""
+    merged = merge_current_conditions(
+        _nowcast(), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["temperature_c"] == 21.0  # nowcast at 15:30, not AROME
+    assert merged["observed_at"] == NOW
 
 
 def test_merge_nowcast_four_bucket_precip_sum() -> None:
