@@ -27,16 +27,36 @@ from typing import Any
 from geosphere_mcp_server.condition import is_thunder
 from geosphere_mcp_server.const import CONDITION_LIGHTNING, PRECIP_MIN_MM
 
+# Both source paths deliver hourly rows, so the hour a row describes runs from
+# its own stamp to one step later. Used to find the row covering `now` without
+# assuming anything about where the stamps sit on the clock — see `_from`.
+_STEP = timedelta(hours=1)
+
+
+def _from(now: datetime) -> datetime:
+    """Exclusive lower bound selecting the hour already under way, and later.
+
+    A row counts once its hour has not yet ended: ``row + _STEP > now``, i.e.
+    ``row > now - _STEP``. Deliberately *not* ``now.replace(minute=0)`` — that
+    assumes rows are stamped on whole UTC hours, which is only true of the
+    GeoSphere path. Open-Meteo stamps rows in the point's local hour, so after
+    the conversion to UTC a zone offset by :30 or :45 (India, Iran, Nepal,
+    Myanmar, central Australia, the Chatham Islands) puts every row half an
+    hour off the UTC grid. Flooring then lands *above* the in-progress row and
+    drops it — silently turning a storm under way into an all-clear.
+    """
+    return now - _STEP
+
 
 def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
-    """Hours from the top of the current hour through ``now + hours``.
+    """Hours from the one already under way through ``now + hours``.
 
-    The series' first entry is the in-progress hour, stamped at the top of the
-    hour and therefore earlier than ``now`` — it must still count.
+    The series' first entry is the in-progress hour, stamped at the start of
+    the hour and therefore earlier than ``now`` — it must still count.
 
-    The horizon therefore rounds *up* to whole hourly steps: the start floors
-    to the top of the current hour while the end stays at ``now + hours``, so an
-    ``hours``-hour window always spans ``hours + 1`` hourly stamps — the
+    The horizon therefore rounds *up* to whole hourly steps: the start reaches
+    back to the hour covering ``now`` while the end stays at ``now + hours``,
+    so an ``hours``-hour window always spans ``hours + 1`` hourly stamps — the
     in-progress hour plus the next ``hours``. A 1-hour window consequently
     covers the current hour and the next one, and can report an event up to
     ~2 h ahead. Callers that need a strict "within the next 60 minutes" answer
@@ -46,14 +66,15 @@ def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
     UTC. ``now + timedelta`` is wall-clock arithmetic even on aware datetimes,
     so passing times in a DST-observing zone would make the horizon 11 or 13
     real hours across a transition. Callers whose source is local (Open-Meteo)
-    convert to UTC first and localize only what they render.
+    convert to UTC first and localize only what they render. The stamps need
+    not align with the UTC hour grid, though — see :func:`_from`.
     """
-    start = now.replace(minute=0, second=0, microsecond=0)
+    start = _from(now)
     end = now + timedelta(hours=hours)
     return [
         row
         for row in rows
-        if row.get("time") is not None and start <= row["time"] <= end
+        if row.get("time") is not None and start < row["time"] <= end
     ]
 
 
@@ -156,17 +177,17 @@ def scan_thunderstorm(
     series. Returning it from the same pass is what keeps the two answers from
     drifting apart.
 
-    The scan starts at the top of the *current* hour, so when the storm hour is
-    the one already under way the returned timestamp is in the past — by up to
+    The scan starts at the hour already under way (see :func:`_from`), so when
+    the storm hour is that one the returned timestamp is in the past — by up to
     59 minutes. That is intentional: it means "storm in progress". Downstream
     lead-time math must treat a non-positive lead time as "now" rather than
     assuming the timestamp is always in the future.
     """
-    start = now.replace(minute=0, second=0, microsecond=0)
+    start = _from(now)
     decidable = False
     for row in rows:
         when = row.get("time")
-        if when is None or when < start:
+        if when is None or when <= start:
             continue
         if _is_lightning(row):
             return when, row.get("cape_jkg"), True

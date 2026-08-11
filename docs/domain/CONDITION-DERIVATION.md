@@ -38,6 +38,7 @@ live in `const.py`. The two functions deliberately apply different rules.
 | Precipitation counts as wet | >= 0.1 mm | `PRECIP_MIN_MM` |
 | Wet becomes `pouring` | >= 4.0 mm/h | `POURING_MM_PER_H` |
 | Thunder (with or without rain) | CAPE >= 1000 J/kg **and** CIN > -50 J/kg | `THUNDER_CAPE_JKG`, `CAP_CIN_JKG` |
+| Thunder on *observed* precipitation | CAPE >= 1000 J/kg alone (no CIN veto) | `THUNDER_CAPE_JKG` |
 | Dry `lightning` also needs cloud | >= 60 % | `WINDY_CLOUD_TCC_PCT` |
 | Gust makes it windy | >= 15 m/s | `WINDY_GUST_MS` |
 | `windy` vs `windy-variant` split at cloud | 60 % | `WINDY_CLOUD_TCC_PCT` |
@@ -52,10 +53,17 @@ Rain versus snow is split from AROME's **accumulated** `snow_acc` and `rr_acc` d
 minus snowfall), not from temperature. There is **no fog branch** — the hourly tool never returns `fog`.
 
 **The thunder gate (`is_thunder`).** CAPE measures how much energy convection *could* release; convective
-inhibition (CIN) measures the lid holding it down. High CAPE under a strong lid produces no storm, so both
-functions call `is_thunder(cape, cin)` rather than comparing CAPE alone. AROME publishes `cin` as a
+inhibition (CIN) measures the lid holding it down. High CAPE under a strong lid produces no storm, so the
+forecast paths call `is_thunder(cape, cin)` rather than comparing CAPE alone. AROME publishes `cin` as a
 **negative** value in J/kg — `0.0` is uncapped and more negative is a stronger lid — so the gate reads
 `cin > -CAP_CIN_JKG`.
+
+**One place deliberately skips the cap**: the precipitating branch of `derive_current_condition`. Its
+precipitation evidence is *observed* (INCA and the nowcast are anchored to measurements) while CAPE and
+CIN are AROME's forecast for the hour. Inhibition answers "can convection get started?", which the
+observation has already settled, so a modelled lid must not veto a storm that is visibly happening — that
+would render a thunderstorm in progress as plain `rainy`. Everywhere the verdict is forecast-driven end to
+end, including that same function's non-precipitating branch, the full gate applies.
 
 A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour a source
 leaves blank. Open-Meteo publishes inhibition too, but as a **positive magnitude**, so `format.py` negates
@@ -76,7 +84,8 @@ rain/snow rule:
 Snow versus rain is decided by temperature here because the nowcast precipitation-type code table is
 undocumented — it only signals *that* it is precipitating, not what kind. The fog heuristic can be
 switched off wholesale via the `FOG_HEURISTIC_ENABLED` flag in `const.py`. When it is not precipitating,
-the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone.
+the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone — and there the CIN cap
+does apply, since nothing observed contradicts it (see the thunder gate above).
 
 Day versus night (`sunny` vs `clear-night`) is resolved with `astral` on both derivation paths.
 

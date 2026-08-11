@@ -38,6 +38,10 @@ from geosphere_mcp_server.outlook import (
     window,
 )
 
+# Both source paths deliver hourly rows, so a row's hour runs from its stamp
+# to one step later — used to decide whether that hour has already ended.
+_HOUR = timedelta(hours=1)
+
 # --- Number / value formatting helpers ---
 
 
@@ -368,17 +372,33 @@ def normalize_hourly_openmeteo(
 ) -> dict[str, Any]:
     """Fold a raw Open-Meteo hourly body into the uniform hourly shape.
 
-    Filters to whole hours at/after the point's local ``now`` (or ``start``)
-    and truncates to ``hours``.
+    Keeps the hour already under way and everything after it — or from
+    ``start`` when that is later — and truncates to ``hours``.
+
+    Rows are matched as **instants**, resolved through the point's named zone
+    (:func:`_point_zone`), the same strategy the outlook path uses. Comparing
+    the local wall clock after shifting by the single current
+    ``utc_offset_seconds`` is what this replaces: that offset is wrong for
+    every stamp on the far side of a DST transition, so a window requested
+    shortly before one began an hour off what the caller asked for. Row stamps
+    stay naive-local in the output, which is what the renderer prints.
     """
     now = now or datetime.now(UTC)
-    offset = int(body.get("utc_offset_seconds") or 0)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    zone = _point_zone(body)
+    if start is not None and start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
 
-    cutoff = _to_local_naive(now, offset).replace(minute=0, second=0, microsecond=0)
-    if start is not None:
-        cutoff = max(cutoff, _to_local_naive(start, offset))
+    def keep(local: datetime) -> bool:
+        # To UTC before any arithmetic: `aware + timedelta` is wall-clock
+        # within the zone, so a transition would make this hour 0 or 2 h long.
+        when = local.replace(tzinfo=zone).astimezone(UTC)
+        if when + _HOUR <= now:
+            return False  # that hour has already ended
+        return start is None or when >= start
 
-    entries = [row for row in openmeteo_hourly_rows(body) if row["time"] >= cutoff]
+    entries = [row for row in openmeteo_hourly_rows(body) if keep(row["time"])]
     entries = entries[: max(hours, 1)]
 
     return {

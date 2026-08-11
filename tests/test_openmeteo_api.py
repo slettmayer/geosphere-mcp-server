@@ -188,6 +188,22 @@ async def test_async_get_hourly_pays_for_a_future_start_in_days() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_get_hourly_clamps_forecast_days_to_the_api_limit() -> None:
+    """A far-future `start` must not push the request past what the API allows.
+
+    `lead_hours` comes from a caller-supplied `start`, so nothing upstream
+    bounds it. Open-Meteo rejects forecast_days=17 outright ("Allowed range 0
+    to 16"), which would fail the whole call -- and print "no weather data
+    available" -- for a start it can in fact serve. Clamped, the request
+    returns what exists and the caller's own window filter comes up empty.
+    """
+    session = _make_session(json_data=SAMPLE_HOURLY)
+
+    await async_get_hourly(session, 38.72, -9.14, hours=24, lead_hours=336)
+    assert session.get.call_args.kwargs["params"]["forecast_days"] == "16"
+
+
+@pytest.mark.asyncio
 async def test_async_get_hourly_builds_params() -> None:
     """Hourly request includes the probability variable and m/s wind."""
     session = _make_session(json_data=SAMPLE_HOURLY)

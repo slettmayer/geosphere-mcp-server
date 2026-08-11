@@ -248,7 +248,10 @@ def _arome_current(
     stamp, so the peak for the hour in progress is the one stamped an hour
     later — see :func:`assemble_hourly_forecast` for the full convention. A
     missing successor leaves the gust unknown rather than reporting the
-    previous hour's peak as the gust now.
+    previous hour's peak as the gust now: that only happens when the run ends
+    at the current hour, and "unknown" beats a number that is known to be for
+    the wrong hour. Outside the nowcast grid there is no ``fx`` behind it, so
+    the gust and any windy verdict simply drop out until the next run lands.
     """
     if arome is None:
         return None
@@ -515,8 +518,11 @@ async def async_fetch_hourly_forecast(
     # requested hour: one because its interval fields (gust, precipitation)
     # live on the *following* stamp, and one so rounding at the boundary
     # cannot clip that successor. The storm outlook asks for AROME_MAX_HOURS,
-    # so its scan still spans the full horizon.
-    series_end = window_start + timedelta(hours=max(hours, 1) + 1)
+    # so its scan still spans the full horizon — where the slack buys nothing,
+    # since the run itself ends there and the assembly drops its successorless
+    # final stamp. `horizon_hours` reports what was actually scanned, so an
+    # all-clear stays honest about covering an hour less than the run.
+    series_end = window_start + timedelta(hours=max(hours, 1) + 2)
 
     requests = [
         async_get_timeseries(

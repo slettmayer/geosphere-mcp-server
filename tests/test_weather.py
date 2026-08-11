@@ -592,7 +592,7 @@ async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
         # hour's interval fields (gust, precipitation) live on the following
         # stamp, and one so rounding at the boundary cannot clip that
         # successor.
-        assert call.kwargs["end"] == top_of_hour + timedelta(hours=7)
+        assert call.kwargs["end"] == top_of_hour + timedelta(hours=8)
 
 
 @pytest.mark.asyncio
@@ -607,7 +607,7 @@ async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
 
     for call in mock.await_args_list:
         assert call.kwargs["start"] == later - timedelta(hours=1)
-        assert call.kwargs["end"] == later + timedelta(hours=5)
+        assert call.kwargs["end"] == later + timedelta(hours=6)
 
 
 @pytest.mark.asyncio

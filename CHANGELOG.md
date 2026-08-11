@@ -102,6 +102,28 @@ version being cut, so you never rename that heading by hand. See
   CAPE with precipitation, `get_storm_outlook` could call a thunderstorm that was already over. Interval
   parameters now come from the following step; the last forecast hour is dropped in exchange, having no
   successor to read them from.
+- Fixed: `get_storm_outlook` no longer reports an all-clear over a storm already under way outside
+  whole-hour timezones. The window anchored on `now` floored to the top of the UTC hour, which assumes
+  rows sit on that grid — true of GeoSphere, but Open-Meteo stamps rows in the point's *local* hour, so
+  after conversion a zone offset by :30 or :45 puts every row half an hour off it and the floor landed
+  above the in-progress row. In Mumbai a thunderstorm in progress with 30 m/s gusts rendered as "Max gust
+  next 1 h: 5 m/s" / "Thunderstorm expected next 1 h: no". The bound is now "the hour has not ended yet",
+  which needs no grid at all. Affects India, Sri Lanka, Nepal, Iran, Afghanistan, Myanmar, central and
+  South Australia and the Chatham Islands, on roughly half of all clock minutes
+- Fixed: a far-future `start` no longer fails the whole hourly call on the Open-Meteo path. `lead_hours`
+  is derived from the caller's `start` and nothing bounded it, so 14 days out computed `forecast_days=17`
+  and the API rejected the request outright ("Allowed range 0 to 16") — answering "no weather data
+  available" for a window it can in fact serve. Clamped to `OPENMETEO_MAX_DAYS`
+- Fixed: `get_hourly_forecast`'s Open-Meteo window is now matched through the point's *named* zone, as the
+  outlook path already was, instead of shifting `start` by the single current `utc_offset_seconds`. That
+  offset is wrong for every stamp on the far side of a DST transition, so a window requested shortly
+  before one began an hour off what the caller asked for
+- Changed: **behaviour change.** The convective-inhibition veto no longer applies to *observed*
+  precipitation. `derive_current_condition`'s precipitating branch takes its rain from INCA and the
+  nowcast — measurements — while CAPE and CIN are AROME's forecast for the hour; inhibition answers "can
+  convection get started?", which an observation has already settled. A modelled lid could therefore
+  render a thunderstorm visibly in progress as plain `rainy`. Forecast-driven paths, including the same
+  function's non-precipitating branch, keep the full gate
 - Fixed: **behaviour change.** Precipitation probability moved with the amount. The C-LAEF percentiles are
   interval values just like `rr_acc` — GeoSphere documents them as "the last forecast period" — but only
   the AROME fields were shifted, leaving every row's probability a stamp behind its own rain. A row could

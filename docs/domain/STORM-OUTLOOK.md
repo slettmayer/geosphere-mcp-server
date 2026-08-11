@@ -48,12 +48,20 @@ both useful answers, and truncating the scan would turn the second into the firs
 Two behaviours look like bugs and are not. Both are inherited from `ha-geosphere-next`, where the same
 functions back Home Assistant entities.
 
-**The horizon rounds up to whole hourly steps.** The window starts at the top of the *current* hour — the
-forecast series is stamped at the top of each hour, so the hour already under way is stamped up to 59
-minutes in the past and must still count — and ends at `now + hours`. An `hours`-hour window therefore
-spans `hours + 1` stamps. A "1 hour" window covers the in-progress hour plus the next one, and can report
-an event up to ~2 h out. A caller that needs a strict "within the next 60 minutes" answer must compare the
-returned timestamps itself.
+**The horizon rounds up to whole hourly steps.** The window starts at the hour already under way — the
+forecast series is stamped at the start of each hour, so that hour is stamped up to 59 minutes in the past
+and must still count — and ends at `now + hours`. An `hours`-hour window therefore spans `hours + 1`
+stamps. A "1 hour" window covers the in-progress hour plus the next one, and can report an event up to
+~2 h out. A caller that needs a strict "within the next 60 minutes" answer must compare the returned
+timestamps itself.
+
+The bound is `row > now - 1 h` (`outlook._from`), **not** `now` floored to the top of the hour. Flooring
+assumes rows sit on whole UTC hours, which only the GeoSphere path guarantees: Open-Meteo stamps rows in
+the point's local hour, so once resolved to UTC a zone offset by :30 or :45 — India, Sri Lanka, Nepal,
+Iran, Afghanistan, Myanmar, central and South Australia, the Chatham Islands — puts every row half an hour
+off that grid. The floor then lands *above* the in-progress row and drops it, so a storm already under way
+renders as a clean all-clear. Pinned by
+`tests/test_format.py::test_outlook_covers_the_current_hour_off_the_utc_grid`.
 
 **`scan_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
 one already under way. That is the encoding of "a storm is in progress". Lead-time arithmetic downstream

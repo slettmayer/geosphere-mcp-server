@@ -522,6 +522,76 @@ def test_outlook_horizons_are_durations_not_wall_clock() -> None:
     assert data["max_gust_long_at"] == datetime(2026, 3, 29, 11, 0, tzinfo=zone)
 
 
+def test_outlook_covers_the_current_hour_off_the_utc_grid() -> None:
+    """A zone offset by :30 must not lose the hour already under way.
+
+    Open-Meteo stamps rows in the point's local hour, so once resolved to UTC
+    a +05:30 zone puts every row at HH:30. Anchoring the window on
+    `now.replace(minute=0)` then lands *above* the in-progress row and drops
+    it -- turning a thunderstorm already under way into a clean all-clear
+    across India, Iran, Nepal, Myanmar, central Australia and the Chathams.
+    """
+    zone = ZoneInfo("Asia/Kolkata")
+    labels = ["2026-08-11T14:00", "2026-08-11T15:00", "2026-08-11T16:00"]
+    body = {
+        "timezone": "Asia/Kolkata",
+        "utc_offset_seconds": 19800,
+        "hourly": {
+            "time": labels,
+            # The storm is in the hour under way: 14:00 IST is 08:30 UTC.
+            "weather_code": [95, 3, 3],
+            "wind_gusts_10m": [30.0, 5.0, 5.0],
+            "precipitation": [5.0, 0.0, 0.0],
+            "cape": [3000.0, 0.0, 0.0],
+        },
+    }
+    now = datetime(2026, 8, 11, 9, 10, tzinfo=UTC)
+    data = normalize_outlook_openmeteo(body, LAT, LON, now=now)
+    assert data["max_gust_short_ms"] == 30.0
+    assert data["thunderstorm_short"] is True
+    assert data["next_thunderstorm_at"] == datetime(2026, 8, 11, 14, 0, tzinfo=zone)
+
+
+def test_hourly_window_uses_the_named_zone_across_a_transition() -> None:
+    """`start` must resolve through the zone, not through today's offset.
+
+    Europe/Vienna leaves DST at 03:00 on 2026-10-25, so stamps after it sit at
+    +01:00 while `utc_offset_seconds` still reports the +02:00 in force when
+    the request is made. Shifting `start` by that single offset picks the
+    window a whole hour off what the caller asked for.
+    """
+    labels = [
+        "2026-10-25T01:00",  # 2026-10-24T23:00Z, still +02:00
+        "2026-10-25T02:00",  # 00:00Z
+        "2026-10-25T03:00",  # 02:00Z, now +01:00
+        "2026-10-25T04:00",  # 03:00Z
+    ]
+    body = {
+        "timezone": "Europe/Vienna",
+        "utc_offset_seconds": 7200,
+        "hourly": {
+            "time": labels,
+            "temperature_2m": [10.0, 11.0, 12.0, 13.0],
+            "weather_code": [3] * len(labels),
+        },
+    }
+    now = datetime(2026, 10, 24, 20, 0, tzinfo=UTC)
+    data = normalize_hourly_openmeteo(
+        body,
+        LAT,
+        LON,
+        hours=2,
+        now=now,
+        start=datetime(2026, 10, 25, 2, 0, tzinfo=UTC),
+    )
+    # 02:00Z is the 03:00 local label. Shifting by +02:00 would have started
+    # the window at the 04:00 label instead.
+    assert [row["time"].isoformat() for row in data["hours"]] == [
+        "2026-10-25T03:00:00",
+        "2026-10-25T04:00:00",
+    ]
+
+
 def test_openmeteo_rows_negate_the_inhibition_sign() -> None:
     """Open-Meteo publishes CIN positive; is_thunder expects AROME's negative."""
     rows = openmeteo_hourly_rows(SAMPLE_OUTLOOK_OPENMETEO)

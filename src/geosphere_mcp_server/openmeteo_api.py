@@ -25,6 +25,7 @@ from geosphere_mcp_server.const import (
     OPENMETEO_CURRENT_VARIABLES,
     OPENMETEO_DAILY_VARIABLES,
     OPENMETEO_HOURLY_VARIABLES,
+    OPENMETEO_MAX_DAYS,
     OPENMETEO_TIMEOUT,
     OPENMETEO_WIND_SPEED_UNIT,
 )
@@ -119,7 +120,15 @@ async def async_get_hourly(
     span = max(hours, 1) + max(lead_hours, 0.0)
     # +1 day: the days are counted from local midnight, so the tail of the
     # window would otherwise be clipped by however far into the day it is.
-    forecast_days = max(1, math.ceil(span / 24) + 1)
+    #
+    # Clamped to OPENMETEO_MAX_DAYS: `lead_hours` comes from a caller-supplied
+    # `start`, so nothing upstream bounds it. Asking for 17 days is rejected
+    # outright ("Forecast days is invalid. Allowed range 0 to 16"), which would
+    # fail the whole call for a start the API can in fact serve. Clamping
+    # instead returns everything available and lets the caller's own window
+    # filter come up empty, which is the honest answer for a start past the
+    # horizon.
+    forecast_days = min(max(1, math.ceil(span / 24) + 1), OPENMETEO_MAX_DAYS)
     params = {
         "latitude": str(latitude),
         "longitude": str(longitude),
