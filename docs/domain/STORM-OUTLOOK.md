@@ -87,11 +87,13 @@ convection is happening.
 ### The In-Progress Hour Is Not Free
 
 Every window semantic above rests on the series' first entry being the hour already under way, and that
-does **not** come for free. `async_fetch_hourly_forecast` requests `HOURLY_LOOKBACK_HOURS` (1) of history
-to guarantee the series reaches back that far. Naming the current hour as `start` does not work: the API
-rounds `start` up to the next whole stamp, so asking for 15:00 at 15:30 comes back starting 16:00 and the
-in-progress hour is gone — the 1 h window collapses to a single stamp and a storm happening right now is
-invisible. Assembly drops whatever precedes the cutoff.
+does **not** come for free. An unbounded request begins well after the current hour, so
+`async_fetch_hourly_forecast` names an explicit `start`, anchored to the top of the hour and backed off by
+`HOURLY_LOOKBACK_HOURS` (1). The anchor is the load-bearing half: the API honours a `start` that lands
+exactly on a stamp but rounds a *mid-hour* one up to the next, so anchoring to `now` at 15:30 comes back
+starting 16:00 and the in-progress hour is gone — the 1 h window collapses to a single stamp and a storm
+happening right now is invisible. The lookback is margin on top of that. Assembly drops whatever precedes
+the cutoff.
 
 The row's precipitation is a *forward* delta (`rr_acc[i+1] - rr_acc[i]`), so the in-progress hour reports
 the rain still to fall in it rather than the rain that already fell — which matters here, because

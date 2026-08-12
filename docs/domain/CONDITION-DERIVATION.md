@@ -38,7 +38,7 @@ live in `const.py`. The two functions deliberately apply different rules.
 | Precipitation counts as wet | >= 0.1 mm | `PRECIP_MIN_MM` |
 | Wet becomes `pouring` | >= 4.0 mm/h | `POURING_MM_PER_H` |
 | Thunder (with or without rain) | CAPE >= 1000 J/kg **and** CIN > -50 J/kg | `THUNDER_CAPE_JKG`, `CAP_CIN_JKG` |
-| Thunder on *observed* precipitation | CAPE >= 1000 J/kg alone (no CIN veto) | `THUNDER_CAPE_JKG` |
+| Thunder on *observed* rain >= 4.0 mm/h | CAPE >= 1000 J/kg alone (CIN veto overridden) | `THUNDER_CAPE_JKG`, `POURING_MM_PER_H` |
 | Dry `lightning` also needs cloud | >= 60 % | `WINDY_CLOUD_TCC_PCT` |
 | Gust makes it windy | >= 15 m/s | `WINDY_GUST_MS` |
 | `windy` vs `windy-variant` split at cloud | 60 % | `WINDY_CLOUD_TCC_PCT` |
@@ -58,12 +58,19 @@ forecast paths call `is_thunder(cape, cin)` rather than comparing CAPE alone. AR
 **negative** value in J/kg — `0.0` is uncapped and more negative is a stronger lid — so the gate reads
 `cin > -CAP_CIN_JKG`.
 
-**One place deliberately skips the cap**: the precipitating branch of `derive_current_condition`. Its
-precipitation evidence is *observed* (INCA and the nowcast are anchored to measurements) while CAPE and
-CIN are AROME's forecast for the hour. Inhibition answers "can convection get started?", which the
-observation has already settled, so a modelled lid must not veto a storm that is visibly happening — that
-would render a thunderstorm in progress as plain `rainy`. Everywhere the verdict is forecast-driven end to
-end, including that same function's non-precipitating branch, the full gate applies.
+**One place can override the cap**: the precipitating branch of `derive_current_condition`, and only when
+the observed rate reaches `POURING_MM_PER_H`. Its precipitation evidence is *observed* (INCA and the
+nowcast are anchored to measurements) while CAPE and CIN are AROME's forecast for the hour. Inhibition
+answers "can convection get started?", which a downpour has already settled, so a modelled lid must not
+veto a storm that is visibly happening — that would render a thunderstorm in progress as plain `rainy`.
+
+The intensity qualifier is what keeps the override narrow. `precipitating` is true of drizzle, so
+overriding on *any* observed rain would promote high CAPE under a strong lid with light stratiform rain —
+a real frontal pattern, not a storm — to `lightning-rainy`, contradicting the hourly path's `rainy` for the
+same hour. Below that rate, and everywhere the verdict is forecast-driven end to end (including this
+function's non-precipitating branch), the full gate applies. The cost is a genuine storm raining more
+weakly than 4 mm/h under a modelled lid, which still reads as `rainy`; the alternative was a second rate
+constant with nothing to validate it against.
 
 A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour a source
 leaves blank. Open-Meteo publishes inhibition too, but as a **positive magnitude**, so `format.py` negates
@@ -105,17 +112,22 @@ On the GeoSphere path, each field is filled from a per-field fallback chain (por
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
 | Cloud cover, CAPE, CIN | AROME |
 | 1-hour precipitation | INCA `RR`, else the sum of the last four nowcast 15-min `rr` buckets |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x 4, else INCA `RR`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets. Not INCA `RR`, which is an hour *total* and would report rain that has already stopped |
 | Precipitation flag | nowcast `pt` (255 means none) |
-| Observation time (`observed_at`) | INCA `T2M` analysis -> INCA `RR` analysis -> `now` (nowcast) -> the AROME row's stamp |
+| Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
-`observed_at` follows whichever source won, so it stays honest at every rung. It prefers the analysis
-behind the **temperature** because that is the field the reading is judged by; anchoring it to
-precipitation alone lets an analysis with no `RR` claim a fresher time than the temperature deserves. The
-15-min nowcast is current by construction, so `now` is right there. With neither, values come from the
-AROME row for the hour in progress, stamped at the top of that hour and up to an hour old — the staleness
-this timestamp exists to expose, so the row's own stamp is reported. INCA publishes ~30 min after the hour
-it analyses and serves the previous slice until the next appears, so `observed_at` can trail real time by
-~90 min.
+`observed_at` reports the stamp of whichever source supplied the **temperature** — the field the reading
+is judged by — at every rung, so no other field's freshness can vouch for it. The INCA analysis behind the
+*precipitation* is deliberately not a rung: an analysis with no `RR` would claim a fresher time than the
+temperature deserves, and one with `RR` but no `T2M` would date a current nowcast temperature to an
+hour-old slice. Both directions are wrong.
+
+Where the nowcast supplies the temperature, the matched 15-min bucket's own stamp is reported rather than
+`now` — no source ever states `now`, and this timestamp exists to show the gap. With neither, values come
+from the AROME row for the hour in progress, stamped at the top of that hour and up to an hour old — the
+staleness this timestamp exists to expose, so the row's own stamp is reported, clamped to `now` because an
+observation time can never be in the future. INCA publishes ~30 min after the hour it analyses and serves
+the previous slice until the next appears, so `observed_at` can trail real time by ~90 min.
 
 Two values are **derived rather than fetched**: apparent temperature ("feels like", Australian Bureau of
 Meteorology formula from temperature, humidity, and wind) and — on the hourly path only — dew point
@@ -137,10 +149,16 @@ Derived from the C-LAEF ensemble as a stepped value matched by **exact timestamp
 | none | 0 % | `POP_DRY_PCT` |
 
 The percentiles are **interval** values, like AROME's accumulations and gusts: GeoSphere documents them as
-"the last forecast period", so a percentile stamped `T` covers `T-1h .. T`. `_pop_by_timestamp` therefore
-keys the dict by `ts - ENSEMBLE_STEP`, putting each probability on the forecast row that reports the
-matching amount. Reading them at their own stamp pairs every row's amount with the *previous* hour's
-probability.
+"the last forecast period", so a percentile stamped `T` covers the period *ending* at `T`.
+`_pop_by_timestamp` therefore keys the dict by the **preceding stamp**, putting each probability on the
+forecast row that reports the matching amount. Reading them at their own stamp pairs every row's amount
+with the *previous* hour's probability.
+
+The period start is read from the series rather than by subtracting a fixed step. Ensembles commonly
+coarsen along their horizon, and if C-LAEF ever does, a hardcoded 1 h step would miss every AROME row past
+the break and blank the probability across the whole forecast — silently, with nothing logged. The
+predecessor is correct at any cadence; index 0 (the run start, whose "last period" precedes the run) has
+no row to land on.
 
 Lookup is then a plain exact-match on the shifted key — there is no nearest-neighbour fallback, so a
 timestamp mismatch silently yields no probability. On the Open-Meteo path, `precipitation_probability` is

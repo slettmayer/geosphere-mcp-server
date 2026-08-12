@@ -33,7 +33,6 @@ from geosphere_mcp_server.const import (
     DATASET_INCA,
     DATASET_NOWCAST,
     ENSEMBLE_PARAMETERS,
-    ENSEMBLE_STEP,
     HOURLY_LOOKBACK_HOURS,
     INCA_LOOKBACK_HOURS,
     INCA_PARAMETERS,
@@ -44,6 +43,7 @@ from geosphere_mcp_server.const import (
     POP_P90_WET_PCT,
     PRECIP_MIN_MM,
     PT_NO_PRECIPITATION,
+    RATE_LOOKBACK,
 )
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereApiError,
@@ -116,15 +116,22 @@ def _pop_by_timestamp(
 
     The percentiles are interval values, like AROME's gust/min-max/accumulation
     parameters: "Total amount of ... precipitation in the last forecast
-    period". The probability stamped `ts` therefore belongs to the hour
-    *ending* at `ts`, so it is keyed here by that hour's start -- one step back
-    -- which is the stamp of the row that reports the matching amount.
+    period". The probability stamped `ts` therefore belongs to the period
+    *ending* at `ts`, so it is keyed by that period's start -- simply the
+    preceding stamp, the row that reports the matching amount.
+
+    The cadence comes from the series itself rather than a fixed step: if
+    C-LAEF ever coarsens along its horizon (3-hourly tails are common for
+    ensembles) or drops a stamp, a fixed step would miss every key and silently
+    blank the probability across the whole forecast with nothing logged. The
+    predecessor is right at any cadence. Index 0 is the run start, whose "last
+    period" precedes the run, so it has no row to land on.
     """
     pop: dict[datetime, int | None] = {}
     if ensemble is None:
         return pop
-    for i, ts in enumerate(ensemble.timestamps):
-        pop[ts - ENSEMBLE_STEP] = _precipitation_probability(
+    for i in range(1, len(ensemble.timestamps)):
+        pop[ensemble.timestamps[i - 1]] = _precipitation_probability(
             ensemble.value_at("rr_p10", i),
             ensemble.value_at("rr_p50", i),
             ensemble.value_at("rr_p90", i),
@@ -238,10 +245,13 @@ def _arome_current(
 ) -> dict[str, Any] | None:
     """AROME snapshot of the hour in progress, for the fallback chain.
 
-    Scans from index 0 for the hour already under way — the API trims the
-    series to the current hour, so starting at index 1 would read cloud, CAPE
-    and CIN from the hour *after* now, and CIN gates the current condition's
-    thunder verdict.
+    Scans from index 0 for the hour already under way, so that hour has to be
+    present in the series. It is not there for free: an unbounded request
+    begins well after the current hour, so the caller anchors an explicit
+    ``start`` (see :func:`async_fetch_current_conditions`). Without it the
+    first row is a future one, and this function would read cloud, CAPE and
+    CIN from it and present them as current — CIN in particular gates the
+    current condition's thunder verdict.
 
     Every field here is instantaneous at the stamp except the gust:
     ``ugust``/``vgust`` are the maximum over the interval *ending* at their
@@ -346,7 +356,7 @@ def merge_current_conditions(
     cin = arome_field("cin")
 
     p0, _ = inca_latest("P0")
-    rr_1h, rr_at = inca_latest("RR")
+    rr_1h, _ = inca_latest("RR")
     if rr_1h is None and nowcast is not None:
         # Sum the last four 15-min nowcast buckets at/before now.
         past = [
@@ -360,26 +370,65 @@ def merge_current_conditions(
     precipitation_type = int(pt_raw) if pt_raw is not None else None
     nowcast_rr = now_value("rr")
     rate_mm_h = nowcast_rr * 4.0 if nowcast_rr is not None else (rr_1h or 0.0)
+    # A single bucket can round to 0.0 in the gap between cells of an active
+    # storm, reporting 0 mm/h mid-thunderstorm and starving both the `pouring`
+    # branch and the downpour override that lets observed rain overrule a
+    # modelled CIN lid -- the very case that override exists for (see
+    # `condition.derive_current_condition`). So once the nowcast's own `pt`
+    # code says it is precipitating, take the peak across the last
+    # RATE_LOOKBACK rather than the matched bucket alone.
+    #
+    # INCA's hourly `RR` is deliberately not used here. It is a total over the
+    # whole past hour, so substituting it for an instantaneous rate reports
+    # rain that has already stopped: 6 mm falling in the first 20 minutes and
+    # ending, with drizzle keeping `pt` non-zero, would read as 6 mm/h and
+    # derive a thunderstorm from a capped, drizzling sky.
+    if (
+        nowcast is not None
+        and precipitation_type is not None
+        and precipitation_type != PT_NO_PRECIPITATION
+    ):
+        recent = [
+            value
+            for ts, value in zip(nowcast.timestamps, nowcast.series("rr"), strict=True)
+            if now - RATE_LOOKBACK <= ts <= now and value is not None
+        ]
+        if recent:
+            rate_mm_h = max(rate_mm_h, max(recent) * 4.0)
     night = is_night(latitude, longitude, now)
 
-    # When these conditions actually describe, following whichever source won
-    # the chains above. INCA first, anchored to the analysis that supplied the
-    # temperature -- the field the reading is judged by -- rather than to
-    # precipitation, which can be absent while the thermodynamic fields are
-    # present and would then claim a fresher time than the temperature
-    # deserves. INCA publishes ~30 min after the hour it analyses and the
-    # previous slice is served until the next appears, so this can trail real
-    # time by ~90 min. The nowcast is current by construction, so `now` is
-    # honest for it. Outside the nowcast grid every field comes from an AROME
-    # row instead, stamped at the top of its hour and up to an hour old.
-    if inca_t2m_at is not None:
+    # When these conditions actually describe: the stamp of whichever source
+    # supplied the *temperature*, the field the reading is judged by. Every
+    # rung follows that one field. Anchoring to any other lets one field's
+    # freshness vouch for another's -- an analysis carrying RR but no T2M
+    # would otherwise report a time the temperature never had, and does so in
+    # whichever direction happens to be wrong.
+    #
+    # INCA publishes ~30 min after the hour it analyses and the previous slice
+    # is served until the next appears, so this can trail real time by ~90 min.
+    # The nowcast runs every 15 min; its own bucket stamp is the honest answer
+    # there, not `now` -- no source ever states `now`. Outside the nowcast grid
+    # every field comes from an AROME row instead, stamped at the top of its
+    # hour and up to an hour old.
+    #
+    # Both of those rungs are clamped to `now`, because an observation time can
+    # never be in the future. The nowcast needs it as much as the AROME row
+    # does: `_nearest_index` matches the *nearest* bucket, not the nearest one
+    # in the past, so at 15:38 it selects the 15:45 bucket.
+    nowcast_t2m_index = _nearest_index(nowcast.timestamps, now) if nowcast else None
+    if nowcast_t2m_index is not None and (
+        nowcast.value_at("t2m", nowcast_t2m_index) is None
+    ):
+        nowcast_t2m_index = None
+
+    if inca_t2m is not None:
         observed_at = inca_t2m_at
-    elif rr_at is not None:
-        observed_at = rr_at
-    elif nowcast is not None and nowcast.timestamps:
-        observed_at = now
+    elif nowcast_t2m_index is not None:
+        observed_at = min(nowcast.timestamps[nowcast_t2m_index], now)
+    elif arome_current:
+        observed_at = min(arome_current.get("time", now), now)
     else:
-        observed_at = arome_current.get("time", now) if arome_current else now
+        observed_at = now
 
     return {
         "observed_at": observed_at,
@@ -439,10 +488,24 @@ async def async_fetch_current_conditions(
     """
     now = now or datetime.now(UTC)
     inca_start = now - timedelta(hours=INCA_LOOKBACK_HOURS)
+    # Anchored exactly as the hourly fetch is, and for the same reason: an
+    # unbounded request begins well after the current hour (measured
+    # 2026-08-12 05:54Z: first stamp 07:00), so `_arome_current` would take
+    # cloud, CAPE and CIN from a row over an hour ahead and present them as
+    # current. See HOURLY_LOOKBACK_HOURS for why the anchor is the top of the
+    # hour rather than `now`.
+    arome_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(
+        hours=HOURLY_LOOKBACK_HOURS
+    )
 
     arome_res, nowcast_res, inca_res = await asyncio.gather(
         async_get_timeseries(
-            session, *DATASET_AROME, AROME_PARAMETERS, latitude, longitude
+            session,
+            *DATASET_AROME,
+            AROME_PARAMETERS,
+            latitude,
+            longitude,
+            start=arome_start,
         ),
         async_get_timeseries(
             session, *DATASET_NOWCAST, NOWCAST_PARAMETERS, latitude, longitude
@@ -506,10 +569,10 @@ async def async_fetch_hourly_forecast(
     if start is not None and start > window_start:
         window_start = start
 
-    # One hour of history, so the series is guaranteed to reach back to the
-    # hour already under way — see HOURLY_LOOKBACK_HOURS. Naming that hour as
-    # `start` does not work: the API rounds `start` up to the next whole stamp,
-    # so asking for 19:00 at 19:33 comes back starting 20:00.
+    # Anchored to the top of the hour, plus an hour of margin — see
+    # HOURLY_LOOKBACK_HOURS. The anchor is the part that matters: the API
+    # rounds a mid-hour `start` up to the next whole stamp, so anchoring to
+    # `now` at 19:33 would come back at 20:00 and drop the hour under way.
     series_start = window_start.replace(minute=0, second=0, microsecond=0) - timedelta(
         hours=HOURLY_LOOKBACK_HOURS
     )

@@ -240,6 +240,34 @@ def test_assemble_hourly_pop_comes_from_the_next_ensemble_stamp() -> None:
     assert pop[datetime(2026, 7, 15, 17, 0, tzinfo=UTC)] == 95
 
 
+def test_assemble_hourly_pop_survives_a_coarsening_ensemble() -> None:
+    """The percentile's period comes from the series, not a fixed 1 h step.
+
+    Ensembles commonly coarsen along their horizon, and C-LAEF may yet do so.
+    Subtracting a hardcoded step from every stamp would then miss every AROME
+    row past the break and blank the probability across the whole forecast,
+    silently -- no warning, just `None` everywhere. Keying on the preceding
+    stamp is right at any cadence.
+
+    Here the series goes 2-hourly after 16:00, so the 18:00 percentile
+    describes the period beginning 16:00 and must land on that row.
+    """
+    ensemble = _response(
+        "ensemble-v1-1h-2500m",
+        _ts((15, 0), (16, 0), (18, 0)),
+        {
+            "rr_p10": [0.0, 0.0, 5.0],
+            "rr_p50": [0.0, 0.0, 5.0],
+            "rr_p90": [0.0, 0.0, 5.0],
+        },
+    )
+    result = assemble_hourly_forecast(_arome_forecast(), ensemble, 48.219, 16.362, NOW)
+    pop = {h["time"]: h["precipitation_probability_pct"] for h in result["hourly"]}
+    assert pop[datetime(2026, 7, 15, 16, 0, tzinfo=UTC)] == 95
+    # The regular part of the series still lands where it did.
+    assert pop[datetime(2026, 7, 15, 15, 0, tzinfo=UTC)] == 0
+
+
 def test_assemble_hourly_without_ensemble_omits_pop() -> None:
     result = assemble_hourly_forecast(_arome_forecast(), None, 48.219, 16.362, NOW)
     assert all(h["precipitation_probability_pct"] is None for h in result["hourly"])
@@ -351,13 +379,143 @@ def test_merge_observed_at_follows_the_temperature_not_precipitation() -> None:
     assert merged["observed_at"] == datetime(2026, 7, 15, 14, 30, tzinfo=UTC)
 
 
-def test_merge_observed_at_is_now_when_only_the_nowcast_contributes() -> None:
-    """The 15-min nowcast is current by construction, so `now` is honest."""
+def test_merge_observed_at_takes_the_nowcast_bucket_that_was_matched() -> None:
+    """With the nowcast supplying the temperature, its bucket stamp is reported.
+
+    NOW sits exactly on a bucket here, so the stamp and the clock coincide;
+    `test_merge_observed_at_reports_the_bucket_not_the_clock` is what
+    distinguishes them.
+    """
     merged = merge_current_conditions(
         _nowcast(), None, _arome_forecast(), 48.219, 16.362, NOW
     )
     assert merged["temperature_c"] == 21.0  # nowcast at 15:30, not AROME
-    assert merged["observed_at"] == NOW
+    assert merged["observed_at"] == datetime(2026, 7, 15, 15, 30, tzinfo=UTC)
+
+
+def test_merge_observed_at_reports_the_bucket_not_the_clock() -> None:
+    """Off the 15-min grid, the matched bucket's stamp is the honest answer.
+
+    `now` is not: no source ever states it, and this timestamp exists to show
+    how far behind real time a reading is.
+    """
+    merged = merge_current_conditions(
+        _nowcast(),
+        None,
+        _arome_forecast(),
+        48.219,
+        16.362,
+        datetime(2026, 7, 15, 15, 37, tzinfo=UTC),
+    )
+    assert merged["temperature_c"] == 21.0  # 15:30 is nearest 15:37, by a minute
+    assert merged["observed_at"] == datetime(2026, 7, 15, 15, 30, tzinfo=UTC)
+
+
+def test_merge_observed_at_is_never_in_the_future() -> None:
+    """The bucket match is nearest, not nearest-in-the-past.
+
+    At 15:38 the 15:45 bucket is closer than 15:30, so the stamp would be
+    reported seven minutes ahead of the clock -- an "observation" time later
+    than the present, describing a value that is really a short forecast.
+    """
+    now = datetime(2026, 7, 15, 15, 38, tzinfo=UTC)
+    merged = merge_current_conditions(
+        _nowcast(), None, _arome_forecast(), 48.219, 16.362, now
+    )
+    assert merged["observed_at"] <= now
+
+
+def test_merge_observed_at_ignores_an_analysis_without_temperature() -> None:
+    """An INCA slice carrying RR but no T2M must not date the temperature.
+
+    The temperature then falls to the nowcast and is current, so reporting the
+    analysis stamp would claim a staleness the displayed value does not have --
+    the mirror image of the case above, and equally wrong.
+    """
+    inca = _response(
+        "inca-v1-1h-1km",
+        _ts((13, 30), (14, 30)),
+        {"T2M": [None, None], "RH2M": [70.0, 72.0], "RR": [0.4, 0.6]},
+    )
+    merged = merge_current_conditions(
+        _nowcast(), inca, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["temperature_c"] == 21.0  # the nowcast, not the analysis
+    assert merged["observed_at"] == datetime(2026, 7, 15, 15, 30, tzinfo=UTC)
+
+
+def _capped_storm_arome() -> GeoSphereResponse:
+    """CAPE past the thunder threshold with the lid on.
+
+    Only the observed rate can carry this to `lightning-rainy`.
+    """
+    return _response(
+        "nwp-v1-1h-2500m",
+        _ts((14, 0), (15, 0), (16, 0)),
+        {
+            "t2m": [10.0, 11.0, 12.0],
+            "tcc": [0.9, 0.9, 0.9],
+            "cape": [1500.0, 1500.0, 1500.0],
+            "cin": [-80.0, -80.0, -80.0],
+            "rr_acc": [0.0, 0.0, 0.0],
+            "snow_acc": [0.0, 0.0, 0.0],
+        },
+        reference_time=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+    )
+
+
+def _storm_nowcast(rr: list[float | None]) -> GeoSphereResponse:
+    """Nowcast buckets 15:00-15:45 with `pt` precipitating and `rr` as given.
+
+    NOW is 15:30, so the matched bucket is 15:30 and `RATE_LOOKBACK` reaches
+    back to 15:00 -- the first three buckets.
+    """
+    return _nowcast(
+        data={"t2m": [20.0, 20.5, 21.0, 21.5], "rr": rr, "pt": [1, 1, 1, 1]}
+    )
+
+
+def test_merge_dry_bucket_does_not_hide_the_cell_that_just_passed() -> None:
+    """The lull between cells of an active storm still reads as a storm.
+
+    The matched bucket (15:30) reads 0.0 while 15:15 caught 2 mm (8 mm/h).
+    Taking the matched bucket alone reports 0 mm/h, which starves the downpour
+    override that lets observed rain overrule a modelled CIN lid.
+    """
+    merged = merge_current_conditions(
+        _storm_nowcast([0.0, 2.0, 0.0, 0.0]),
+        None,
+        _capped_storm_arome(),
+        48.219,
+        16.362,
+        NOW,
+    )
+    assert merged["condition"] == "lightning-rainy"
+
+
+def test_merge_a_shower_that_already_ended_does_not_derive_a_storm() -> None:
+    """Rain that stopped must not keep driving the condition.
+
+    INCA's `RR` is a total over the whole past hour, so 6 mm that fell early in
+    it and stopped is still on the books while only drizzle continues -- enough
+    to keep `pt` non-zero. Reading that total as an instantaneous rate would
+    clear POURING_MM_PER_H and derive a thunderstorm from a capped, drizzling
+    sky. Every bucket inside RATE_LOOKBACK is dry, so it must not.
+    """
+    inca = _response(
+        "inca-v1-1h-1km",
+        _ts((13, 30), (14, 30)),
+        {"T2M": [9.0, 9.5], "RR": [6.0, 6.0]},
+    )
+    merged = merge_current_conditions(
+        _storm_nowcast([0.0, 0.0, 0.0, 0.0]),
+        inca,
+        _capped_storm_arome(),
+        48.219,
+        16.362,
+        NOW,
+    )
+    assert merged["condition"] == "rainy"
 
 
 def test_merge_nowcast_four_bucket_precip_sum() -> None:
@@ -423,6 +581,26 @@ async def test_async_fetch_current_all_sources() -> None:
     assert result["sources"] == ["INCA", "nowcast", "AROME"]
     assert result["temperature_c"] == 9.5
     assert result["grid_latitude"] == pytest.approx(48.219)
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_current_anchors_the_arome_request() -> None:
+    """The AROME call names a `start`, or the hour in progress is not in it.
+
+    An unbounded request begins well after the current hour (measured
+    2026-08-12 05:54Z: first stamp 07:00), so `_arome_current` would take the
+    first row it finds -- a future one -- and present its cloud, CAPE and CIN
+    as current. CIN gates the current condition's thunder verdict, so this is
+    not cosmetic. The anchor is the top of the hour, not `now`, because a
+    mid-hour `start` rounds up to the next stamp.
+    """
+    mock = AsyncMock(side_effect=[_arome_forecast(), _nowcast(), _inca()])
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_current_conditions(None, 48.219, 16.362, now=NOW)
+
+    arome_call = mock.await_args_list[0]
+    expected = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    assert arome_call.kwargs["start"] == expected
 
 
 @pytest.mark.asyncio
@@ -503,14 +681,14 @@ async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
 async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
     """Both requests ask for one hour before the current top of the hour.
 
-    The API trims the forecast to the current hour and `assemble_hourly_forecast`
-    skips the first step (no predecessor for the accumulation deltas), so
-    without this lookback the hour already under way is dropped -- which breaks
-    the storm outlook's "first entry is the in-progress hour" contract.
+    An unbounded request begins well after the current hour, so `start` has to
+    be named or the hour already under way is dropped -- which breaks the storm
+    outlook's "first entry is the in-progress hour" contract.
 
-    The anchor is the top of the hour, not `now`: the API rounds `start` up to
-    the next whole stamp, so `now - 1h` at 15:30 would come back as 15:00 and
-    the in-progress hour would again be the predecessor-less first step.
+    The anchor is the top of the hour, not `now`: the API honours a `start`
+    that lands exactly on a stamp and rounds a mid-hour one *up* to the next,
+    so anchoring to `now` at 15:30 with no lookback would come back at 16:00
+    and lose the hour under way. The lookback is margin on top of the anchor.
     """
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
     with patch.object(weather, "async_get_timeseries", mock):

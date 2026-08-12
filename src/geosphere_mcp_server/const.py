@@ -43,10 +43,11 @@ AROME_PARAMETERS = (
 # C-LAEF ensemble precipitation percentiles (per-hour amounts, kg m-2; the
 # API exposes only p10/p50/p90 — no member counts or true probabilities).
 # Like AROME's interval parameters these cover the period *ending* at their
-# stamp ("in the last forecast period"), so a percentile has to be shifted one
-# step back to describe the hour a forecast row is stamped for.
+# stamp ("in the last forecast period"), so a percentile is keyed to the
+# preceding stamp to describe the hour a forecast row is stamped for. The
+# cadence is read from the series rather than assumed -- see
+# `_pop_by_timestamp`.
 ENSEMBLE_PARAMETERS = ("rr_p10", "rr_p50", "rr_p90")
-ENSEMBLE_STEP = timedelta(hours=1)
 NOWCAST_PARAMETERS = ("t2m", "td", "rh2m", "rr", "pt", "dd", "ff", "fx")
 INCA_PARAMETERS = ("T2M", "TD2M", "RH2M", "RR", "P0", "GL", "UU", "VV")
 # The four pollutants both air-quality sources publish, in display order:
@@ -107,15 +108,31 @@ SNOW_MAX_T2M_C = 1.0
 # "precipitating" signal, with rain/snow decided by temperature.
 PT_NO_PRECIPITATION = 255
 
+# How far back the current precipitation rate may look for a wet 15-min
+# nowcast bucket. A single bucket can round to 0.0 in the gap between cells of
+# an active storm, so the rate takes the peak across this window rather than
+# the matched bucket alone. Deliberately short: INCA's hourly `RR` would be the
+# obvious wider source, but it is a *total* over the past hour, and using it as
+# an instantaneous rate keeps a shower that ended 40 min ago driving the
+# condition. Anything inside this window is still falling.
+RATE_LOOKBACK = timedelta(minutes=30)
+
 # Horizon of the AROME hourly forecast (hours). Used to clamp the hourly tool.
 AROME_MAX_HOURS = 60
 
-# Hours of history requested alongside the forecast, so the series is
-# guaranteed to reach back to the hour already under way. Naming that hour as
-# `start` does not work: the API rounds `start` up to the next whole stamp, so
-# asking for 19:00 at 19:33 comes back starting 20:00 — dropping the
-# in-progress hour and with it the outlook's "first entry is the hour under
-# way" contract (see outlook.py). Assembly drops whatever precedes the cutoff.
+# Hours of history requested alongside the forecast, as margin so the series is
+# certain to reach back to the hour already under way. Losing that hour would
+# break the outlook's "first entry is the hour under way" contract (see
+# outlook.py).
+#
+# What actually protects it is the *anchor*, not this margin. An unbounded
+# request begins well after the current hour (measured 2026-08-12 05:54Z:
+# first stamp 07:00), so `start` has to be named. The API then honours a
+# `start` that lands exactly on a stamp and rounds a mid-hour one *up* to the
+# next -- so `start = now` at 19:33 comes back at 20:00 and the in-progress
+# hour is gone, while `start = 19:00` comes back at 19:00. Anchoring to the
+# top of the hour is therefore load-bearing; this lookback is slack on top of
+# it. Assembly drops whatever precedes the cutoff.
 HOURLY_LOOKBACK_HOURS = 1
 
 # Forecast-outlook horizons (see outlook.py). The window rounds up to whole

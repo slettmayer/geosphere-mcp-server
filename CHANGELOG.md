@@ -31,18 +31,44 @@ version being cut, so you never rename that heading by hand. See
   (`cin > -50` J/kg, `CAP_CIN_JKG`) in addition to CAPE >= 1000 J/kg, so high CAPE under a strong lid no
   longer produces `lightning` / `lightning-rainy`. AROME's `cin` parameter is now fetched for this. A
   missing `cin` counts as uncapped, which both preserves the previous behaviour and is what the
-  Open-Meteo path depends on. Ported from `ha-geosphere-next` 0.9.0.
+  Open-Meteo path depends on. Ported from `ha-geosphere-next` 0.9.0. One exception: on the current
+  conditions path, *observed* rain of downpour intensity (>= 4 mm/h) overrides the lid, since inhibition
+  answers "can convection get started?" and a downpour has already settled it. Lighter rain does not --
+  any observed precipitation counts as "precipitating", down to drizzle, and high CAPE under a strong lid
+  with light frontal rain is a routine pattern rather than a storm.
+- Fixed: `observed_at` now reports the stamp of whichever source supplied the *temperature*, at every
+  rung, instead of mixing in whichever source happened to be present. An analysis with no `RR` reported
+  the observation time as `now` while an hour-old temperature was on display; an analysis with `RR` but no
+  `T2M` did the reverse, dating a current nowcast temperature to an hour-old slice. Where the nowcast
+  supplies the temperature its matched bucket's own stamp is now reported rather than `now`, a value no
+  source ever states, and the AROME rung is clamped so the timestamp can never sit in the future.
+- Fixed: a 15-minute nowcast bucket that rounds to 0.0 no longer reports 0 mm/h in the middle of a storm.
+  The current precipitation rate took the matched bucket alone, so in the lull between cells -- `pt` still
+  reporting precipitation -- the rate read 0 mm/h, starving both the `pouring` branch and the downpour
+  override of the CIN lid and showing a storm in progress as plain `rainy`. Once `pt` says it is
+  precipitating, the peak across the last 30 minutes of buckets (`RATE_LOOKBACK`) is now used. INCA's
+  hourly `RR` is deliberately not used for this: it is a total over the whole past hour, so reading it as
+  an instantaneous rate would keep a shower that ended 40 minutes ago driving the condition.
+- Fixed: the current-conditions AROME request now names an anchored `start`, as the hourly one already
+  did. Unbounded, it begins well after the current hour (measured 2026-08-12 05:54Z: first stamp 07:00),
+  so the snapshot behind current cloud cover, CAPE and CIN could be a forecast row over an hour ahead
+  presented as current -- and CIN gates the current condition's thunder verdict.
+- Changed: the ensemble probability is keyed to the *preceding* stamp of the C-LAEF series instead of a
+  hardcoded one-hour step. No behaviour changes on the current hourly grid -- the two are identical there
+  -- but ensembles commonly coarsen along their horizon, and if C-LAEF ever did, the fixed step would have
+  missed every forecast row past the break and blanked the probability across the whole forecast with
+  nothing logged.
 - Added: `cape` and `convective_inhibition` to the Open-Meteo hourly request, which the fallback storm
   outlook needs and which cost no extra call. Open-Meteo reports inhibition as a positive magnitude where
   AROME reports it negative, so the value is negated during normalization -- `is_thunder` only ever sees
   the AROME convention.
 - Fixed: the hourly forecast (and with it the storm outlook) no longer drops the hour already under way.
-  The API trims the forecast to the current hour and the first step has no predecessor for the
-  accumulation deltas, so that hour was being skipped -- which silently broke every outlook window: the
-  "next 1 h" window held one stamp instead of two, and a thunderstorm forecast for the current hour was
-  invisible. One hour of history is now requested alongside the forecast,
-  anchored to the top of the hour rather than to `now` (the API rounds `start` up to the next whole
-  stamp, so `now - 1h` at 15:30 would come back as 15:00 and change nothing).
+  An unbounded request begins well after the current hour, so that hour was never in the series -- which
+  silently broke every outlook window: the "next 1 h" window held one stamp instead of two, and a
+  thunderstorm forecast for the current hour was invisible. An explicit `start` is now sent, anchored to
+  the top of the hour rather than to `now` and backed off by one hour of margin. The anchor is the part
+  that matters: the API honours a `start` landing exactly on a stamp but rounds a mid-hour one up to the
+  next, so anchoring to `now` at 15:30 comes back at 16:00 with the hour under way already gone.
 - Changed: the hourly forecast now starts with the hour already under way rather than the next one, so
   `hours=N` returns the in-progress hour plus `N - 1` later ones. This is a consequence of the lookback
   fix above and it aligns the GeoSphere path with the Open-Meteo path, which always included the current
