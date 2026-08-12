@@ -43,19 +43,20 @@ def merge_air_quality(
     """Merge the WRF-Chem pollutant series and the daily AQI into one dict.
 
     Pollutant concentrations (µg/m³) are read at the forecast hour nearest to
-    ``now``. The daily AQI is the EEA band index (1-6) for today / tomorrow /
-    in 2 days, matched by local calendar day — the daily stamps are 00:00 UTC,
-    which is the previous day in the Alpine zone for part of the year.
+    ``now``, and ``observed_at`` reports that hour's own stamp clamped to the
+    present: the match is nearest in *either* direction, so from HH:31 onward
+    the closest stamp is the hour ahead, and an observation time can never be
+    in the future. The daily AQI is the EEA band index (1-6) for today /
+    tomorrow / in 2 days, matched by local calendar day — the daily stamps are
+    00:00 UTC, which is the previous day in the Alpine zone for part of the
+    year.
     """
     pollutants: dict[str, float | None] = dict.fromkeys(CHEM_POLLUTANTS)
     observed_at: datetime | None = None
 
-    if chem.timestamps:
-        index = min(
-            range(len(chem.timestamps)),
-            key=lambda i: abs((chem.timestamps[i] - now).total_seconds()),
-        )
-        observed_at = chem.timestamps[index]
+    index = chem.nearest_index(now)
+    if index is not None:
+        observed_at = min(chem.timestamps[index], now)
         for key, parameter in CHEM_POLLUTANTS.items():
             pollutants[key] = chem.value_at(parameter, index)
 

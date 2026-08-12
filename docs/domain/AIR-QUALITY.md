@@ -42,6 +42,12 @@ reports the set both sources can serve, so its output does not change shape with
 The reported value is the forecast hour **nearest to now**, on both paths. An exact tie between two hours
 resolves to the earlier one.
 
+Nearest means nearest in *either* direction, so from HH:31 onward the closest hour has not happened yet —
+the concentrations are still read from it, being the closest the dataset has, but the reported observation
+time is **clamped to the present** on the GeoSphere path. That timestamp is what the caller is told the
+reading describes, and an observation can never be in the future. Genuine staleness is left intact: only a
+stamp ahead of `now` is pulled back to it. The Open-Meteo path is not yet clamped (see Known Risks).
+
 ### The European Air Quality Index
 
 The EEA scale is six bands, and the rendered output always leads with the band index so both sources read
@@ -108,6 +114,11 @@ which is worldwide and would have answered — instead of dead-ending on a locat
 - The GeoSphere band and the Open-Meteo numeric index are computed by different methods, so a band may
   differ by one step between the paths for genuinely similar air.
 - Air quality adds two requests per call against the shared GeoSphere budget (5 req/s, 240 req/h).
+- The Open-Meteo path's observation time is **not** clamped to the present, and derives its local "now"
+  from the response's single `utc_offset_seconds` rather than the point's named zone — so across a DST
+  transition inside the 3-day window it can be an hour off, which near local midnight shifts the calendar
+  day the AQI bands are labelled with. Left alone deliberately: the Open-Meteo fallback is slated for
+  removal, and fixing it here would be work thrown away.
 
 ## Extension Guidelines
 - New pollutant: add one row to `AIR_QUALITY_POLLUTANTS` in `const.py` — every request parameter list and

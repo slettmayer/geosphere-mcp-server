@@ -112,7 +112,7 @@ On the GeoSphere path, each field is filled from a per-field fallback chain (por
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
 | Cloud cover, CAPE, CIN | AROME |
 | 1-hour precipitation | INCA `RR`, else the sum of the last four nowcast 15-min `rr` buckets |
-| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x 4, else INCA `RR`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets. Not INCA `RR`, which is an hour *total* and would report rain that has already stopped |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets. Not INCA `RR`, which is an hour *total* and would report rain that has already stopped |
 | Precipitation flag | nowcast `pt` (255 means none) |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 

@@ -72,7 +72,6 @@ def _aqi() -> GeoSphereResponse:
 
 def test_merge_reads_pollutants_at_the_nearest_hour() -> None:
     merged = merge_air_quality(_chem(), _aqi(), NOW)
-    assert merged["observed_at"] == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
     assert merged["pollutants"] == {
         "nitrogen_dioxide": 18.0,
         "ozone": 92.0,
@@ -82,6 +81,25 @@ def test_merge_reads_pollutants_at_the_nearest_hour() -> None:
     # Only the nearest hour is kept — nothing downstream reads a series, and
     # keeping one meant zipping columns of unverified equal length.
     assert "forecast" not in merged
+
+
+def test_merge_never_reports_a_future_observation_time() -> None:
+    """The nearest hour to 15:40 is 16:00, which has not happened yet.
+
+    The concentrations still come from that hour -- it is the closest the
+    dataset has -- but `observed_at` is what the caller is told the reading
+    describes, and it is rendered as the time the values were observed.
+    """
+    merged = merge_air_quality(_chem(), _aqi(), NOW)
+    assert merged["observed_at"] == NOW
+
+
+def test_merge_reports_a_past_stamp_unclamped() -> None:
+    """The clamp must not flatten genuine staleness into `now`."""
+    merged = merge_air_quality(
+        _chem(), _aqi(), datetime(2026, 7, 15, 16, 20, tzinfo=UTC)
+    )
+    assert merged["observed_at"] == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
 
 
 def test_merge_matches_the_daily_aqi_by_local_calendar_day() -> None:

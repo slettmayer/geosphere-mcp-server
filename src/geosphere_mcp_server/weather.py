@@ -36,6 +36,7 @@ from geosphere_mcp_server.const import (
     HOURLY_LOOKBACK_HOURS,
     INCA_LOOKBACK_HOURS,
     INCA_PARAMETERS,
+    NOWCAST_BUCKETS_PER_HOUR,
     NOWCAST_PARAMETERS,
     POP_DRY_PCT,
     POP_P10_WET_PCT,
@@ -97,16 +98,6 @@ def _diff(series: list[float | None], index: int) -> float | None:
     if current is None or previous is None:
         return None
     return max(round(current - previous, 2), 0.0)
-
-
-def _nearest_index(timestamps: list[datetime], when: datetime) -> int | None:
-    """Index of the timestamp closest to ``when``; None if the list is empty."""
-    if not timestamps:
-        return None
-    return min(
-        range(len(timestamps)),
-        key=lambda i: abs((timestamps[i] - when).total_seconds()),
-    )
 
 
 def _pop_by_timestamp(
@@ -314,13 +305,14 @@ def merge_current_conditions(
     """
     arome_current = _arome_current(arome, now)
 
+    # One scan, reused by every nowcast field below and by `observed_at`: the
+    # bucket cannot change within this call.
+    nowcast_index = nowcast.nearest_index(now) if nowcast is not None else None
+
     def now_value(name: str) -> float | None:
-        if nowcast is None:
+        if nowcast is None or nowcast_index is None:
             return None
-        index = _nearest_index(nowcast.timestamps, now)
-        if index is None:
-            return None
-        return nowcast.value_at(name, index)
+        return nowcast.value_at(name, nowcast_index)
 
     def inca_latest(name: str) -> tuple[float | None, datetime | None]:
         if inca is None:
@@ -369,7 +361,11 @@ def merge_current_conditions(
     pt_raw = now_value("pt")
     precipitation_type = int(pt_raw) if pt_raw is not None else None
     nowcast_rr = now_value("rr")
-    rate_mm_h = nowcast_rr * 4.0 if nowcast_rr is not None else (rr_1h or 0.0)
+    rate_mm_h = (
+        nowcast_rr * NOWCAST_BUCKETS_PER_HOUR
+        if nowcast_rr is not None
+        else (rr_1h or 0.0)
+    )
     # A single bucket can round to 0.0 in the gap between cells of an active
     # storm, reporting 0 mm/h mid-thunderstorm and starving both the `pouring`
     # branch and the downpour override that lets observed rain overrule a
@@ -394,7 +390,7 @@ def merge_current_conditions(
             if now - RATE_LOOKBACK <= ts <= now and value is not None
         ]
         if recent:
-            rate_mm_h = max(rate_mm_h, max(recent) * 4.0)
+            rate_mm_h = max(rate_mm_h, max(recent) * NOWCAST_BUCKETS_PER_HOUR)
     night = is_night(latitude, longitude, now)
 
     # When these conditions actually describe: the stamp of whichever source
@@ -413,9 +409,9 @@ def merge_current_conditions(
     #
     # Both of those rungs are clamped to `now`, because an observation time can
     # never be in the future. The nowcast needs it as much as the AROME row
-    # does: `_nearest_index` matches the *nearest* bucket, not the nearest one
+    # does: `nearest_index` matches the *nearest* bucket, not the nearest one
     # in the past, so at 15:38 it selects the 15:45 bucket.
-    nowcast_t2m_index = _nearest_index(nowcast.timestamps, now) if nowcast else None
+    nowcast_t2m_index = nowcast_index
     if nowcast_t2m_index is not None and (
         nowcast.value_at("t2m", nowcast_t2m_index) is None
     ):

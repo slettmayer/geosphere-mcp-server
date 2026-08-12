@@ -16,7 +16,6 @@ from geosphere_mcp_server.geosphere_api import (
 )
 from geosphere_mcp_server.weather import (
     _diff,
-    _nearest_index,
     _percent,
     _precipitation_probability,
     assemble_hourly_forecast,
@@ -104,13 +103,20 @@ def test_diff_none_and_out_of_range() -> None:
     assert _diff([0.0, 1.0], 5) is None
 
 
-# --- _nearest_index ---
+# --- GeoSphereResponse.nearest_index ---
 
 
 def test_nearest_index() -> None:
     stamps = _ts((15, 0), (15, 15), (15, 30), (15, 45))
-    assert _nearest_index(stamps, NOW) == 2
-    assert _nearest_index([], NOW) is None
+    assert _response("nowcast", stamps, {}).nearest_index(NOW) == 2
+    assert _response("nowcast", [], {}).nearest_index(NOW) is None
+
+
+def test_nearest_index_can_select_a_future_stamp() -> None:
+    """Nearest in either direction, so callers must clamp their own output."""
+    stamps = _ts((15, 15), (15, 30), (15, 45))
+    when = datetime(2026, 7, 15, 15, 38, tzinfo=UTC)
+    assert _response("nowcast", stamps, {}).nearest_index(when) == 2
 
 
 # --- WMO map completeness ---

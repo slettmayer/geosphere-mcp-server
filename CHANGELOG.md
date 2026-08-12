@@ -53,6 +53,12 @@ version being cut, so you never rename that heading by hand. See
   did. Unbounded, it begins well after the current hour (measured 2026-08-12 05:54Z: first stamp 07:00),
   so the snapshot behind current cloud cover, CAPE and CIN could be a forecast row over an hour ahead
   presented as current -- and CIN gates the current condition's thunder verdict.
+- Fixed: `get_air_quality` no longer stamps its concentrations with a time that has not arrived yet. The
+  WRF-Chem hour is picked nearest to now in *either* direction, so from HH:31 onward the closest hour is
+  the one ahead: at 14:40 the tool reported "Concentrations (15:00)". The values still come from that hour,
+  being the closest the dataset has, but the reported observation time is now clamped to the present, the
+  same rule current conditions already followed. Genuine staleness is untouched -- only a stamp ahead of
+  now is pulled back.
 - Changed: the ensemble probability is keyed to the *preceding* stamp of the C-LAEF series instead of a
   hardcoded one-hour step. No behaviour changes on the current hourly grid -- the two are identical there
   -- but ensembles commonly coarsen along their horizon, and if C-LAEF ever did, the fixed step would have

@@ -117,6 +117,11 @@ PT_NO_PRECIPITATION = 255
 # condition. Anything inside this window is still falling.
 RATE_LOOKBACK = timedelta(minutes=30)
 
+# Nowcast `rr` buckets carry the millimetres that fell within one 15-min step,
+# so an hourly rate is the bucket value times this. Tied to the nowcast
+# cadence: a move to 10-min buckets makes it 6.
+NOWCAST_BUCKETS_PER_HOUR = 4.0
+
 # Horizon of the AROME hourly forecast (hours). Used to clamp the hourly tool.
 AROME_MAX_HOURS = 60
 

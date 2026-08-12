@@ -79,6 +79,21 @@ class GeoSphereResponse:
             return data[index]
         return None
 
+    def nearest_index(self, when: datetime) -> int | None:
+        """Index of the stamp closest to ``when``; None if the series is empty.
+
+        Nearest in *either* direction: on an hourly series past HH:30, and on a
+        15-min one past HH:MM+7, the closest stamp is the *next* one. Callers
+        that report the matched stamp as an observation time must therefore
+        clamp it to the present -- it is otherwise in the future.
+        """
+        if not self.timestamps:
+            return None
+        return min(
+            range(len(self.timestamps)),
+            key=lambda i: abs((self.timestamps[i] - when).total_seconds()),
+        )
+
 
 def _stamp(when: datetime) -> str:
     """Serialize a bound for the API, which reads naive stamps as UTC.
