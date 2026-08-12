@@ -7,6 +7,165 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Removed: **breaking.** The Open-Meteo fallback is gone, and with it `get_daily_forecast`. This server
+  now serves **only** what GeoSphere Austria covers -- Austria and the Alpine region, out to AROME's
+  ~60 h horizon. A point outside the AROME grid returns
+  `⚠️ Outside coverage — this server only serves Austria and the Alpine region.` rather than a
+  second-rate answer from somewhere else, and that line is deliberately distinct
+  from the retryable failure lines: being outside coverage is a property of the location, so retrying
+  will never help. `get_daily_forecast` had no GeoSphere source to fall back on -- no dataset reaches
+  past ~60 h -- so it is removed outright rather than reduced to two and a half days. Callers that need
+  worldwide or multi-day coverage should pair this server with a dedicated global weather source; four
+  tools remain (`get_current_weather`, `get_hourly_forecast`, `get_storm_outlook`, `get_air_quality`).
+  The fallback doubled every tool -- two normalizers, two condition vocabularies (the WMO code map is
+  gone with it), two AQI scales, two convective-inhibition sign conventions -- for answers outside the
+  region this server exists to serve.
+- Removed: sunrise and sunset from `get_current_weather`. Only the Open-Meteo path ever supplied them;
+  no GeoSphere dataset publishes them, so the fields were already always absent inside coverage.
+- Added: `get_storm_outlook` -- peak wind gust for the next hour and the next 12 hours, whether a
+  thunderstorm is expected within the next hour (tri-state, so a data gap reads `unknown` rather than
+  `no`), when the next thunderstorm is expected across the whole horizon, and peak CAPE over 12 hours.
+  Ported from `ha-geosphere-next` 0.9.0. Two semantics carry over and are documented in the output
+  itself: horizons round up to whole hours, so the "next 1 h" window covers the hour already under way
+  plus the next one; and the next-thunderstorm stamp can sit up to 59 minutes in the past, which means a
+  storm is already in progress. An hour counts as a thunderstorm hour on the derived condition *or* on
+  the raw CAPE/CIN predicate plus forecast precipitation -- the second branch catches thundersnow and
+  hours with missing cloud cover, while the precipitation requirement keeps a dry high-CAPE afternoon
+  from raising a signal. It costs one AROME request -- the C-LAEF ensemble is skipped, since the outlook
+  reports no precipitation probability.
+- Added: `get_air_quality` -- NO₂, O₃, PM10 and PM2.5 surface concentrations plus the European Air
+  Quality Index for today, tomorrow and in two days. GeoSphere's WRF-Chem forecast (`chem-v2-1h-3km` /
+  `chem_aqi-v1-1d-3km`, 3 km grid) serves Austria and the Alps. The AQI is reported as its 1-6 EEA band,
+  which is what GeoSphere publishes -- there is no underlying numeric index to show alongside it. A
+  daily-AQI failure degrades to concentrations only; a pollutant failure propagates.
+- Changed: **behaviour change.** Thunder derivation now requires weak convective inhibition
+  (`cin > -50` J/kg, `CAP_CIN_JKG`) in addition to CAPE >= 1000 J/kg, so high CAPE under a strong lid no
+  longer produces `lightning` / `lightning-rainy`. AROME's `cin` parameter is now fetched for this. A
+  missing `cin` counts as uncapped, which preserves the previous behaviour for any hour AROME leaves
+  blank. Ported from `ha-geosphere-next` 0.9.0. One exception: on the current
+  conditions path, *observed* rain of downpour intensity (>= 4 mm/h) overrides the lid, since inhibition
+  answers "can convection get started?" and a downpour has already settled it. Lighter rain does not --
+  any observed precipitation counts as "precipitating", down to drizzle, and high CAPE under a strong lid
+  with light frontal rain is a routine pattern rather than a storm.
+- Fixed: `observed_at` now reports the stamp of whichever source supplied the *temperature*, at every
+  rung, instead of mixing in whichever source happened to be present. An analysis with no `RR` reported
+  the observation time as `now` while an hour-old temperature was on display; an analysis with `RR` but no
+  `T2M` did the reverse, dating a current nowcast temperature to an hour-old slice. Where the nowcast
+  supplies the temperature its matched bucket's own stamp is now reported rather than `now`, a value no
+  source ever states, and the AROME rung is clamped so the timestamp can never sit in the future.
+- Fixed: a 15-minute nowcast bucket that rounds to 0.0 no longer reports 0 mm/h in the middle of a storm.
+  The current precipitation rate took the matched bucket alone, so in the lull between cells -- `pt` still
+  reporting precipitation -- the rate read 0 mm/h, starving both the `pouring` branch and the downpour
+  override of the CIN lid and showing a storm in progress as plain `rainy`. Once `pt` says it is
+  precipitating, the peak across the last 30 minutes of buckets (`RATE_LOOKBACK`) is now used. INCA's
+  hourly `RR` is deliberately not used for this: it is a total over the whole past hour, so reading it as
+  an instantaneous rate would keep a shower that ended 40 minutes ago driving the condition.
+- Fixed: the current-conditions AROME request now names an anchored `start`, as the hourly one already
+  did. Unbounded, it begins well after the current hour (measured 2026-08-12 05:54Z: first stamp 07:00),
+  so the snapshot behind current cloud cover, CAPE and CIN could be a forecast row over an hour ahead
+  presented as current -- and CIN gates the current condition's thunder verdict.
+- Fixed: `get_air_quality` no longer stamps its concentrations with a time that has not arrived yet. The
+  WRF-Chem hour is picked nearest to now in *either* direction, so from HH:31 onward the closest hour is
+  the one ahead: at 14:40 the tool reported "Concentrations (15:00)". The values still come from that hour,
+  being the closest the dataset has, but the reported observation time is now clamped to the present, the
+  same rule current conditions already followed. Genuine staleness is untouched -- only a stamp ahead of
+  now is pulled back.
+- Changed: the ensemble probability is keyed to the *preceding* stamp of the C-LAEF series instead of a
+  hardcoded one-hour step. No behaviour changes on the current hourly grid -- the two are identical there
+  -- but ensembles commonly coarsen along their horizon, and if C-LAEF ever did, the fixed step would have
+  missed every forecast row past the break and blanked the probability across the whole forecast with
+  nothing logged.
+- Fixed: the hourly forecast (and with it the storm outlook) no longer drops the hour already under way.
+  An unbounded request begins well after the current hour, so that hour was never in the series -- which
+  silently broke every outlook window: the "next 1 h" window held one stamp instead of two, and a
+  thunderstorm forecast for the current hour was invisible. An explicit `start` is now sent, anchored to
+  the top of the hour rather than to `now` and backed off by one hour of margin. The anchor is the part
+  that matters: the API honours a `start` landing exactly on a stamp but rounds a mid-hour one up to the
+  next, so anchoring to `now` at 15:30 comes back at 16:00 with the hour under way already gone.
+- Changed: the hourly forecast now starts with the hour already under way rather than the next one, so
+  `hours=N` returns the in-progress hour plus `N - 1` later ones. This is a consequence of the lookback
+  fix above and it aligns the server with `ha-geosphere-next`. The leading hour's precipitation figure
+  covers the whole hour,
+  including the part already elapsed.
+- Changed: the hourly AROME and C-LAEF requests are now bounded to the window actually asked for
+  instead of pulling the full ~60 h horizon every time. `hours=6` fetches 8 hourly steps rather than
+  ~57, and an explicit `start` moves the fetched window with it. The bound carries an hour of slack at
+  each end (one for the accumulation predecessor, one so rounding cannot clip the last requested hour).
+  `get_storm_outlook` asks for the full horizon, so its thunderstorm scan is unaffected.
+- Fixed: the current condition no longer reads cloud cover, CAPE and CIN from the hour *after* now. The
+  AROME snapshot used for the fallback chain skipped index 0, copying the hourly path's need for an
+  accumulation predecessor -- but every field it reads is instantaneous, and the API trims the series to
+  the current hour. With the new CIN gate gating the thunder verdict, that meant a storm under way could
+  be reported as plain rain because the *next* hour was capped.
+- Fixed: `⚡ Next thunderstorm` now reports `unknown (no usable forecast hours)` instead of a confident
+  `none in the forecast horizon` when no forecast hour ahead can be judged. The underlying scan returns
+  the same empty result for "no storm" and "nothing readable here", so a response could declare the
+  window `unknown` on one line and assert a 60-hour all-clear on the next.
+- Fixed: a storm-outlook all-clear now names the horizon it covers (`none in the next 54 h`) instead of
+  implying the nominal ~60 h. The rendered span is measured from the rows that actually came back, so a
+  stale or truncated run reports itself honestly rather than asserting an all-clear it never scanned.
+- Fixed: `render_air_quality` now names its source even when neither concentrations nor an AQI came back.
+  Which source drew the blank is what tells a caller whether asking elsewhere is worth anything. The EEA
+  band legend is dropped in that case, having no figures left to explain.
+- Fixed: `merge_air_quality` no longer builds a full per-pollutant hourly series. Nothing downstream read
+  it, and it zipped the timestamp column against each value column with `strict=True` — so a response
+  whose columns disagreed in length would have raised rather than degraded.
+- Changed: `outlook.py` now takes windowing as the caller's job — `window()` is applied once per horizon
+  and handed to `max_gust` / `max_cape` / `thunderstorm_outlook` — and `series_is_decidable` is folded
+  into `scan_thunderstorm`, which returns the storm hour, its CAPE, and whether the scan counts from a
+  single pass. One outlook now walks the series three times instead of six, and the decidability answer
+  can no longer drift from the storm answer it qualifies.
+- Changed: the pollutant lists (`CHEM_PARAMETERS`, `CHEM_POLLUTANTS`, `format._POLLUTANT_LABELS`) are now
+  derived from one `AIR_QUALITY_POLLUTANTS` table in `const.py` instead of being hand-synced. Adding a
+  pollutant is one row.
+- Removed: the permanently-`None` `aqi_value_*` keys from `merge_air_quality` (GeoSphere publishes no
+  numeric index, so the renderer supplies the `None`), and the unreferenced `CHEM_MAX_HOURS` constant.
+- Docs: `outlook._is_lightning` states why only its CAPE/CIN branch requires precipitation — that
+  requirement substitutes for the cloud-cover corroboration the derived-condition branch already carries,
+  rather than being an inconsistency between the two. Behaviour is unchanged.
+- Fixed: **behaviour change.** Every hourly row's precipitation, snow and wind gust now describes the hour
+  the row is stamped for rather than the hour before it. AROME mixes two stampings and the assembly read
+  both at the same index: `t2m`, `rh2m`, wind, `tcc`, `cape`, `cin` are instantaneous at the stamp, but
+  `ugust`/`vgust` are the maximum "in the last forecast intervall" and `rr_acc`/`snow_acc` are
+  run-accumulations, so a delta spans the interval *ending* at the stamp. A row could therefore show rain
+  that had already stopped and the previous hour's gust peak — and because `_is_lightning` corroborates
+  CAPE with precipitation, `get_storm_outlook` could call a thunderstorm that was already over. Interval
+  parameters now come from the following step; the last forecast hour is dropped in exchange, having no
+  successor to read them from.
+- Fixed: `get_storm_outlook` no longer reports an all-clear over a storm already under way outside
+  whole-hour timezones. The window anchored on `now` floored to the top of the UTC hour, which assumes
+  rows sit on that grid. AROME does, so nothing was reachable in practice — but the failure mode was
+  silent and one-directional: a stamp off the grid puts the floor *above* the in-progress row and drops
+  it, rendering a storm under way as a clean all-clear. The bound is now "the hour has not ended yet",
+  which needs no grid at all.
+- Changed: **behaviour change.** The convective-inhibition veto no longer applies to *observed*
+  precipitation. `derive_current_condition`'s precipitating branch takes its rain from INCA and the
+  nowcast — measurements — while CAPE and CIN are AROME's forecast for the hour; inhibition answers "can
+  convection get started?", which an observation has already settled. A modelled lid could therefore
+  render a thunderstorm visibly in progress as plain `rainy`. Forecast-driven paths, including the same
+  function's non-precipitating branch, keep the full gate
+- Fixed: **behaviour change.** Precipitation probability moved with the amount. The C-LAEF percentiles are
+  interval values just like `rr_acc` — GeoSphere documents them as "the last forecast period" — but only
+  the AROME fields were shifted, leaving every row's probability a stamp behind its own rain. A row could
+  show a dry hour at 95 %, or rain at 0 %, with the probability describing an hour that had already
+  passed.
+- Fixed: the current conditions' AROME gust likewise came from the in-progress hour's stamp, whose gust
+  covered the hour before it. It now reads the successor, so `get_current_weather` outside the
+  nowcast/INCA grid reports the gust of the hour actually under way.
+- Fixed: `observed_at` no longer misreports how old a reading is. It was anchored to the INCA
+  precipitation analysis alone, so a slice with no `RR` claimed `now` while an hour-old temperature was on
+  display; it now follows the analysis that supplied the *temperature*. Outside the nowcast/INCA grid it
+  reports the AROME row's own stamp rather than `now` — there every field comes from the forecast hour in
+  progress, stamped at the top of that hour, so at 14:59 the rendered "observed" time claimed 14:59 for
+  values describing 14:00.
+- Fixed: a `start` with a non-UTC offset no longer requests the wrong window. `async_get_timeseries`
+  formatted the bound with `strftime`, dropping the offset, and the API reads naive stamps as UTC — so
+  `start="2026-08-11T15:00+02:00"` fetched from 15:00 UTC and the caller silently lost the first two
+  requested hours. Bounds are converted to UTC before serialization.
+- Changed: `outlook._LIGHTNING_PREFIX` is gone in favour of `const.CONDITION_LIGHTNING`, which is the same
+  string. A rename of the condition vocabulary would have left the predicate matching nothing, and
+  `get_storm_outlook` reporting an all-clear through an actual storm.
+
 ## 0.3.3 - 2026-08-12
 
 - Build: bump ruff in the python-dependencies group.

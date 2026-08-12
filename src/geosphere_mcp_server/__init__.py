@@ -1,7 +1,8 @@
 """GeoSphere MCP Server — Austrian weather for LLMs.
 
-GeoSphere Austria data where available (Austria and the Alps), Open-Meteo
-worldwide, exposed as MCP tools for LLM voice agents.
+High-resolution GeoSphere Austria data for Austria and the Alpine region,
+exposed as MCP tools for LLM voice agents. Points outside that region are not
+served; there is no worldwide fallback.
 """
 
 from __future__ import annotations

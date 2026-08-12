@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -79,6 +79,34 @@ class GeoSphereResponse:
             return data[index]
         return None
 
+    def nearest_index(self, when: datetime) -> int | None:
+        """Index of the stamp closest to ``when``; None if the series is empty.
+
+        Nearest in *either* direction: on an hourly series past HH:30, and on a
+        15-min one past HH:MM+7, the closest stamp is the *next* one. Callers
+        that report the matched stamp as an observation time must therefore
+        clamp it to the present -- it is otherwise in the future.
+        """
+        if not self.timestamps:
+            return None
+        return min(
+            range(len(self.timestamps)),
+            key=lambda i: abs((self.timestamps[i] - when).total_seconds()),
+        )
+
+
+def _stamp(when: datetime) -> str:
+    """Serialize a bound for the API, which reads naive stamps as UTC.
+
+    An aware datetime is converted to UTC first: formatting it directly would
+    drop the offset and turn, say, ``14:00+02:00`` into a request for
+    ``14:00Z`` — a window two hours off what the caller asked for. Naive
+    values are assumed to already be UTC, matching the API's own reading.
+    """
+    if when.tzinfo is not None:
+        when = when.astimezone(UTC)
+    return when.strftime("%Y-%m-%dT%H:%M")
+
 
 async def async_get_timeseries(
     session: aiohttp.ClientSession,
@@ -104,9 +132,9 @@ async def async_get_timeseries(
         "output_format": "geojson",
     }
     if start is not None:
-        query["start"] = start.strftime("%Y-%m-%dT%H:%M")
+        query["start"] = _stamp(start)
     if end is not None:
-        query["end"] = end.strftime("%Y-%m-%dT%H:%M")
+        query["end"] = _stamp(end)
 
     try:
         async with asyncio.timeout(GEOSPHERE_TIMEOUT):

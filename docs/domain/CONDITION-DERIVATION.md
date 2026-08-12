@@ -37,7 +37,8 @@ live in `const.py`. The two functions deliberately apply different rules.
 |------|-----------|----------|
 | Precipitation counts as wet | >= 0.1 mm | `PRECIP_MIN_MM` |
 | Wet becomes `pouring` | >= 4.0 mm/h | `POURING_MM_PER_H` |
-| Thunder (with or without rain) | CAPE >= 1000 J/kg | `THUNDER_CAPE_JKG` |
+| Thunder (with or without rain) | CAPE >= 1000 J/kg **and** CIN > -50 J/kg | `THUNDER_CAPE_JKG`, `CAP_CIN_JKG` |
+| Thunder on *observed* rain >= 4.0 mm/h | CAPE >= 1000 J/kg alone (CIN veto overridden) | `THUNDER_CAPE_JKG`, `POURING_MM_PER_H` |
 | Dry `lightning` also needs cloud | >= 60 % | `WINDY_CLOUD_TCC_PCT` |
 | Gust makes it windy | >= 15 m/s | `WINDY_GUST_MS` |
 | `windy` vs `windy-variant` split at cloud | 60 % | `WINDY_CLOUD_TCC_PCT` |
@@ -50,6 +51,32 @@ so exactly 12.5 % renders `sunny`/`clear-night` and exactly 62.5 % renders `part
 
 Rain versus snow is split from AROME's **accumulated** `snow_acc` and `rr_acc` deltas (rain = precipitation
 minus snowfall), not from temperature. There is **no fog branch** — the hourly tool never returns `fog`.
+
+**The thunder gate (`is_thunder`).** CAPE measures how much energy convection *could* release; convective
+inhibition (CIN) measures the lid holding it down. High CAPE under a strong lid produces no storm, so the
+forecast paths call `is_thunder(cape, cin)` rather than comparing CAPE alone. AROME publishes `cin` as a
+**negative** value in J/kg — `0.0` is uncapped and more negative is a stronger lid — so the gate reads
+`cin > -CAP_CIN_JKG`.
+
+**One place can override the cap**: the precipitating branch of `derive_current_condition`, and only when
+the observed rate reaches `POURING_MM_PER_H`. Its precipitation evidence is *observed* (INCA and the
+nowcast are anchored to measurements) while CAPE and CIN are AROME's forecast for the hour. Inhibition
+answers "can convection get started?", which a downpour has already settled, so a modelled lid must not
+veto a storm that is visibly happening — that would render a thunderstorm in progress as plain `rainy`.
+
+The intensity qualifier is what keeps the override narrow. `precipitating` is true of drizzle, so
+overriding on *any* observed rain would promote high CAPE under a strong lid with light stratiform rain —
+a real frontal pattern, not a storm — to `lightning-rainy`, contradicting the hourly path's `rainy` for the
+same hour. Below that rate, and everywhere the verdict is forecast-driven end to end (including this
+function's non-precipitating branch), the full gate applies. The cost is a genuine storm raining more
+weakly than 4 mm/h under a modelled lid, which still reads as `rainy`; the alternative was a second rate
+constant with nothing to validate it against.
+
+A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour AROME
+leaves blank. `is_thunder` takes the AROME sign convention (negative J/kg) and does not verify it — a
+future source publishing inhibition as a positive magnitude must be negated before calling.
+`CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination against real capped
+situations is unconfirmed against observations.
 
 **`derive_current_condition`** — used for current weather. It adds a fog heuristic and changes the
 rain/snow rule:
@@ -64,17 +91,13 @@ rain/snow rule:
 Snow versus rain is decided by temperature here because the nowcast precipitation-type code table is
 undocumented — it only signals *that* it is precipitating, not what kind. The fog heuristic can be
 switched off wholesale via the `FOG_HEURISTIC_ENABLED` flag in `const.py`. When it is not precipitating,
-the function falls back to `derive_condition` on cloud, CAPE, and gust alone.
+the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone — and there the CIN cap
+does apply, since nothing observed contradicts it (see the thunder gate above).
 
-Day versus night (`sunny` vs `clear-night`) is resolved with `astral` on both derivation paths.
-
-### Open-Meteo Path
-The WMO `weather_code` (0-99) maps to the same vocabulary through a static dict in `const.py`, combined
-with the `is_day` flag to pick `sunny` or `clear-night`. No physical derivation happens on this path.
+Day versus night (`sunny` vs `clear-night`) is resolved with `astral` in both derivation functions.
 
 ### Current-Conditions Merge Chain
-On the GeoSphere path, each field is filled from a per-field fallback chain (ported from
-`ha-geosphere-next`):
+Each field is filled from a per-field fallback chain (ported from `ha-geosphere-next`):
 
 | Field | Chain |
 |-------|-------|
@@ -82,9 +105,24 @@ On the GeoSphere path, each field is filled from a per-field fallback chain (por
 | Dew point | INCA -> nowcast |
 | Gust | nowcast -> AROME |
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
-| Cloud cover, CAPE | AROME |
+| Cloud cover, CAPE, CIN | AROME |
 | 1-hour precipitation | INCA `RR`, else the sum of the last four nowcast 15-min `rr` buckets |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets. Not INCA `RR`, which is an hour *total* and would report rain that has already stopped |
 | Precipitation flag | nowcast `pt` (255 means none) |
+| Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
+
+`observed_at` reports the stamp of whichever source supplied the **temperature** — the field the reading
+is judged by — at every rung, so no other field's freshness can vouch for it. The INCA analysis behind the
+*precipitation* is deliberately not a rung: an analysis with no `RR` would claim a fresher time than the
+temperature deserves, and one with `RR` but no `T2M` would date a current nowcast temperature to an
+hour-old slice. Both directions are wrong.
+
+Where the nowcast supplies the temperature, the matched 15-min bucket's own stamp is reported rather than
+`now` — no source ever states `now`, and this timestamp exists to show the gap. With neither, values come
+from the AROME row for the hour in progress, stamped at the top of that hour and up to an hour old — the
+staleness this timestamp exists to expose, so the row's own stamp is reported, clamped to `now` because an
+observation time can never be in the future. INCA publishes ~30 min after the hour it analyses and serves
+the previous slice until the next appears, so `observed_at` can trail real time by ~90 min.
 
 Two values are **derived rather than fetched**: apparent temperature ("feels like", Australian Bureau of
 Meteorology formula from temperature, humidity, and wind) and — on the hourly path only — dew point
@@ -105,10 +143,21 @@ Derived from the C-LAEF ensemble as a stepped value matched by **exact timestamp
 | p90 | 30 % | `POP_P90_WET_PCT` |
 | none | 0 % | `POP_DRY_PCT` |
 
-The ensemble series is keyed into a dict by timestamp and looked up with a plain exact-match lookup — there
-is no nearest-neighbour fallback, so a timestamp mismatch silently yields no probability. On the
-Open-Meteo path, `precipitation_probability` is used directly. An ensemble fetch failure omits the
-probability entirely and the forecast still renders.
+The percentiles are **interval** values, like AROME's accumulations and gusts: GeoSphere documents them as
+"the last forecast period", so a percentile stamped `T` covers the period *ending* at `T`.
+`_pop_by_timestamp` therefore keys the dict by the **preceding stamp**, putting each probability on the
+forecast row that reports the matching amount. Reading them at their own stamp pairs every row's amount
+with the *previous* hour's probability.
+
+The period start is read from the series rather than by subtracting a fixed step. Ensembles commonly
+coarsen along their horizon, and if C-LAEF ever does, a hardcoded 1 h step would miss every AROME row past
+the break and blank the probability across the whole forecast — silently, with nothing logged. The
+predecessor is correct at any cadence; index 0 (the run start, whose "last period" precedes the run) has
+no row to land on.
+
+Lookup is then a plain exact-match on the shifted key — there is no nearest-neighbour fallback, so a
+timestamp mismatch silently yields no probability. An ensemble fetch failure omits the probability
+entirely and the forecast still renders.
 
 ## Dependencies
 - `condition.py` depends only on `astral` and `const.py`
@@ -117,8 +166,7 @@ probability entirely and the forecast still renders.
 
 ## Design Decisions
 - **Physically derived conditions**: the condition comes from physical parameters rather than GeoSphere's
-  proprietary symbol code, and shares one vocabulary with the WMO-code mapping so both paths are
-  indistinguishable to the caller.
+  proprietary `sy` symbol code, whose table is undocumented and could change under us without notice.
 - **Two derivation functions instead of one**: the current path has nowcast humidity and a usable
   temperature signal, so it can afford a fog heuristic and a temperature-based snow rule; the hourly path
   has accumulation deltas instead and must not guess at fog.
@@ -131,9 +179,11 @@ probability entirely and the forecast still renders.
   upstream.
 - The nowcast precipitation-type code table is undocumented, so the current path infers snow from
   temperature alone.
+- The CIN threshold is a textbook boundary, not one validated against Austrian storm reports; too strict a
+  value would suppress real storms and too loose a one would not filter anything.
 - Exact-timestamp POP matching yields no probability on any clock skew between the AROME and C-LAEF series.
 
 ## Extension Guidelines
 - New threshold: add a named constant to `const.py`; never inline a literal in `condition.py`.
-- New condition string: add it to the vocabulary list above and to the WMO map, so both paths stay aligned.
+- New condition string: add it to the vocabulary list above and to the `CONDITION_*` block in `const.py`.
 - Keep `condition.py` free of MCP and Home Assistant imports.

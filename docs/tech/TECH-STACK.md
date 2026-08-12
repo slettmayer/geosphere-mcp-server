@@ -56,10 +56,6 @@ Documents the languages, frameworks, build tools, and key libraries used in this
   5 req/s and 240 req/h. Out-of-bounds points return HTTP 400 with `"outside of dataset bounds"`.
   See [../domain/DATA-SOURCES-AND-COVERAGE.md](../domain/DATA-SOURCES-AND-COVERAGE.md) for the query
   shape and the dataset catalog.
-- **Open-Meteo** (`https://api.open-meteo.com/v1/forecast`) -- keyless and free for non-commercial use,
-  worldwide, up to 16 days; current, hourly, and daily variables including precipitation probability and
-  WMO weather codes, with `timezone=auto`. It is the automatic fallback outside GeoSphere coverage and
-  the sole source for the daily tool.
 
 ### CI/CD
 - **GitHub Actions** -- `.github/workflows/validate.yml`
@@ -88,7 +84,7 @@ No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed a
   [migration guide](https://py.sdk.modelcontextprotocol.io/migration/).
 - Dev: `pytest`, `pytest-asyncio`, `ruff` -- all in the `dev` group and pinned by `uv.lock`, so CI lints
   and tests with the same versions used locally
-- External: GeoSphere Austria Dataset API, Open-Meteo
+- External: GeoSphere Austria Dataset API (the only upstream)
 
 ## Design Decisions
 - **uv over pip/poetry**: speed and deterministic resolution; enables `uvx` one-command launch.
@@ -98,7 +94,7 @@ No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed a
 
 ## Known Risks
 - GeoSphere dataset resource IDs are versioned -- a catalog rotation breaks the server until IDs are bumped.
-- No GeoSphere forecast beyond ~60 h -- longer horizons must route through Open-Meteo.
+- No GeoSphere forecast beyond ~60 h, and no fallback source -- a multi-day answer is unavailable.
 - Shared rate limits (5 req/s, 240 req/h) with no server-side quota tracking.
 - No connection pooling -- a new `aiohttp.ClientSession` per tool call.
 

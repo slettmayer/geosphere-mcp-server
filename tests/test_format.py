@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from geosphere_mcp_server.format import (
+    normalize_air_quality_geosphere,
     normalize_current_geosphere,
-    normalize_current_openmeteo,
-    normalize_daily_openmeteo,
     normalize_hourly_geosphere,
-    normalize_hourly_openmeteo,
+    normalize_outlook_geosphere,
+    render_air_quality,
     render_current,
-    render_daily,
     render_hourly,
+    render_outlook,
 )
 
 LAT, LON = 48.2208, 16.3738
@@ -36,33 +36,6 @@ SAMPLE_CURRENT_GEOSPHERE = {
     "sources": ["INCA", "nowcast", "AROME"],
     "grid_latitude": 48.219,
     "grid_longitude": 16.362,
-}
-
-# Raw Open-Meteo current body (timezone=auto, wind in m/s).
-SAMPLE_CURRENT_OPENMETEO = {
-    "timezone": "Europe/Lisbon",
-    "timezone_abbreviation": "WEST",
-    "utc_offset_seconds": 3600,
-    "current": {
-        "time": "2026-07-15T15:00",
-        "temperature_2m": 24.6,
-        "apparent_temperature": 25.0,
-        "relative_humidity_2m": 60,
-        "dew_point_2m": 16.0,
-        "precipitation": 0.0,
-        "weather_code": 2,
-        "cloud_cover": 35,
-        "pressure_msl": 1015.0,
-        "wind_speed_10m": 3.2,
-        "wind_direction_10m": 300,
-        "wind_gusts_10m": 7.0,
-        "is_day": 1,
-    },
-    "daily": {
-        "time": ["2026-07-15"],
-        "sunrise": ["2026-07-15T06:20"],
-        "sunset": ["2026-07-15T21:05"],
-    },
 }
 
 # GeoSphere-path assembled hourly (as produced by weather.assemble_hourly_forecast).
@@ -89,43 +62,6 @@ SAMPLE_HOURLY_GEOSPHERE = {
             "precipitation_probability_pct": 0,
         },
     ],
-}
-
-# Raw Open-Meteo hourly body.
-SAMPLE_HOURLY_OPENMETEO = {
-    "timezone": "Europe/Lisbon",
-    "timezone_abbreviation": "WEST",
-    "utc_offset_seconds": 3600,
-    "hourly": {
-        "time": [
-            "2026-07-15T13:00",
-            "2026-07-15T14:00",
-            "2026-07-15T15:00",
-            "2026-07-15T16:00",
-        ],
-        "temperature_2m": [19.0, 20.0, 21.0, 22.0],
-        "weather_code": [61, 3, 2, 0],
-        "precipitation": [0.5, 0.0, 0.0, 0.0],
-        "precipitation_probability": [80, 20, 0, 0],
-        "wind_speed_10m": [4.0, 3.0, 2.0, 1.0],
-    },
-}
-
-# Raw Open-Meteo daily body.
-SAMPLE_DAILY_OPENMETEO = {
-    "timezone": "Europe/Vienna",
-    "timezone_abbreviation": "CEST",
-    "utc_offset_seconds": 7200,
-    "daily": {
-        "time": ["2026-07-25", "2026-07-26"],
-        "weather_code": [2, 61],
-        "temperature_2m_min": [18.0, 16.0],
-        "temperature_2m_max": [27.0, 22.0],
-        "precipitation_sum": [2.1, 0.0],
-        "precipitation_probability_max": [40, 10],
-        "wind_speed_10m_max": [6.0, 5.0],
-        "wind_gusts_10m_max": [8.0, 12.0],
-    },
 }
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)  # 13:00 Lisbon local
@@ -179,35 +115,6 @@ def test_render_current_geosphere_omits_none_fields() -> None:
     assert "📡 Source: GeoSphere (AROME)" in out
 
 
-# --- render_current (Open-Meteo path) ---
-
-
-def test_render_current_openmeteo() -> None:
-    data = normalize_current_openmeteo(SAMPLE_CURRENT_OPENMETEO, 38.7, -9.1)
-    out = render_current(data)
-    assert out.splitlines()[0] == "# Current Weather at 38.7, -9.1"
-    assert "🌡️ Temperature: 24.6°C (feels like 25.0°C)" in out
-    assert "🌤️ Condition: partlycloudy" in out  # WMO code 2, day
-    assert "💨 Wind: 3.2 m/s from 300° (gusts 7 m/s)" in out
-    assert "🌅 Sunrise: 06:20" in out
-    assert "🌇 Sunset: 21:05" in out
-    assert "🕐 Timezone: Europe/Lisbon (WEST)" in out
-    assert "📡 Source: Open-Meteo — observed 15:00" in out
-
-
-def test_render_current_openmeteo_night_condition() -> None:
-    body = {
-        **SAMPLE_CURRENT_OPENMETEO,
-        "current": {
-            **SAMPLE_CURRENT_OPENMETEO["current"],
-            "weather_code": 0,
-            "is_day": 0,
-        },
-    }
-    out = render_current(normalize_current_openmeteo(body, 38.7, -9.1))
-    assert "🌤️ Condition: clear-night" in out
-
-
 # --- render_hourly (GeoSphere path) ---
 
 
@@ -258,8 +165,24 @@ def test_render_hourly_geosphere_horizon_note() -> None:
     """Requesting more hours than AROME returns appends the horizon note."""
     data = normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 48)
     out = render_hourly(data)
-    assert "get_daily_forecast for days further ahead" in out
+    assert "This server publishes nothing beyond it" in out
     assert "AROME forecast horizon ends 2026-07-15 15:00" in out
+
+
+def test_render_hourly_geosphere_empty_window() -> None:
+    """A `start` past the AROME horizon leaves nothing to render.
+
+    Reachable on the only path there is, so the branch needs its own case: the
+    hourly tool clamps `hours` but not `start`, and a series filtered down to
+    nothing must say so rather than render an empty forecast body.
+    """
+    data = normalize_hourly_geosphere(
+        {**SAMPLE_HOURLY_GEOSPHERE, "hourly": []}, LAT, LON, 24
+    )
+    out = render_hourly(data)
+    assert "No forecast hours available for the requested window." in out
+    # No horizon note either: nothing came back to name an end for.
+    assert "horizon" not in out
 
 
 def test_render_hourly_geosphere_no_note_when_satisfied() -> None:
@@ -268,54 +191,166 @@ def test_render_hourly_geosphere_no_note_when_satisfied() -> None:
     assert "horizon" not in out
 
 
-# --- render_hourly (Open-Meteo path) ---
+# --- Storm outlook ---
+
+NOW_OUTLOOK = datetime(2026, 7, 15, 14, 30, tzinfo=UTC)  # 16:30 CEST
 
 
-def test_render_hourly_openmeteo_filters_to_now() -> None:
-    # Lisbon local now = 13:00, cutoff drops the 13:00 past-hour boundary kept,
-    # so entries start at 13:00 and onward.
-    data = normalize_hourly_openmeteo(SAMPLE_HOURLY_OPENMETEO, 38.7, -9.1, 48, now=NOW)
-    out = render_hourly(data)
-    assert out.splitlines()[0] == "# 48-Hour Forecast for 38.7, -9.1"
-    assert "Open-Meteo model · Source: Open-Meteo" in out
-    assert "13:00: 19.0°C — rainy, 0.5 mm (80% chance), wind 4 m/s" in out
-    assert "16:00: 22.0°C — sunny, wind 1 m/s" in out
+def _geosphere_hour(offset_hours: int, **fields) -> dict:
+    """One assembled GeoSphere hour, stamped in UTC like weather.py emits."""
+    return {
+        "time": datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
+        + timedelta(hours=offset_hours),
+        "condition": fields.get("condition"),
+        "wind_gust_ms": fields.get("gust"),
+        "cape_jkg": fields.get("cape"),
+        "cin_jkg": fields.get("cin"),
+        "precipitation_mm": fields.get("precipitation"),
+    }
 
 
-def test_render_hourly_openmeteo_respects_start_and_hours() -> None:
-    start = datetime(2026, 7, 15, 14, 0, tzinfo=UTC)  # 15:00 Lisbon local
-    data = normalize_hourly_openmeteo(
-        SAMPLE_HOURLY_OPENMETEO, 38.7, -9.1, 1, now=NOW, start=start
+SAMPLE_OUTLOOK_ASSEMBLED = {
+    "reference_time": datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+    "sources": ["AROME"],
+    "hourly": [
+        _geosphere_hour(0, condition="partlycloudy", gust=8.0, cape=200.0, cin=0.0),
+        _geosphere_hour(1, condition="cloudy", gust=12.0, cape=400.0, cin=0.0),
+        _geosphere_hour(
+            4,
+            condition="lightning-rainy",
+            gust=24.0,
+            cape=1800.0,
+            cin=-5.0,
+            precipitation=3.0,
+        ),
+    ],
+}
+
+
+def test_normalize_outlook_geosphere_localizes_only_the_output() -> None:
+    """Derivation runs on UTC rows; reported stamps come back in Vienna time."""
+    data = normalize_outlook_geosphere(
+        SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK
     )
-    times = [h["time"].strftime("%H:%M") for h in data["hours"]]
-    assert times == ["15:00"]  # start cutoff + hours=1 truncation
+    assert data["max_gust_short_ms"] == 12.0
+    assert data["max_gust_short_at"].hour == 17  # 15:00Z -> 17:00 CEST
+    assert data["max_gust_long_ms"] == 24.0
+    assert data["thunderstorm_short"] is False
+    assert data["next_thunderstorm_at"].hour == 20  # 18:00Z -> 20:00 CEST
+    assert data["next_thunderstorm_cape_jkg"] == 1800.0
+    assert data["max_cape_long_jkg"] == 1800.0
 
 
-def test_render_hourly_empty_window() -> None:
-    data = normalize_hourly_openmeteo(
-        {"hourly": {"time": [], "temperature_2m": []}}, 38.7, -9.1, 24, now=NOW
+def test_render_outlook_geosphere() -> None:
+    out = render_outlook(
+        normalize_outlook_geosphere(SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK)
     )
-    out = render_hourly(data)
-    assert "No forecast hours available" in out
+    assert out.splitlines()[0] == "# Storm Outlook for 48.2208, 16.3738"
+    assert "Source: GeoSphere (AROME)" in out
+    assert "💨 Max gust next 1 h: 12 m/s (at Wed 2026-07-15 17:00)" in out
+    assert "💨 Max gust next 12 h: 24 m/s (at Wed 2026-07-15 20:00)" in out
+    assert "⛈️ Thunderstorm expected next 1 h: no" in out
+    assert "⚡ Next thunderstorm: Wed 2026-07-15 20:00 (CAPE 1800 J/kg)" in out
+    assert "🌡️ Max CAPE next 12 h: 1800 J/kg" in out
 
 
-# --- render_daily ---
-
-
-def test_render_daily() -> None:
-    data = normalize_daily_openmeteo(SAMPLE_DAILY_OPENMETEO, LAT, LON, 7)
-    out = render_daily(data)
-    assert out.splitlines()[0] == "# 7-Day Forecast for 48.2208, 16.3738"
-    assert "Source: Open-Meteo (Europe/Vienna)" in out
-    # Wind "up to" prefers gusts.
-    assert (
-        "Sat 2026-07-25: 18–27°C — partlycloudy, 2.1 mm (40% chance), "
-        "wind up to 8 m/s" in out
+def test_render_outlook_reports_unknowns_distinctly() -> None:
+    """No gust data, no storm, and an undecidable window each read differently."""
+    data = normalize_outlook_geosphere(
+        {"sources": ["AROME"], "hourly": [_geosphere_hour(0)]},
+        LAT,
+        LON,
+        now=NOW_OUTLOOK,
     )
-    # Zero precip omitted.
-    assert "Sun 2026-07-26: 16–22°C — rainy, wind up to 12 m/s" in out
+    out = render_outlook(data)
+    assert "💨 Max gust next 1 h: unknown" in out
+    assert "⛈️ Thunderstorm expected next 1 h: unknown (no usable forecast hours)" in out
+    # An unreadable series must not render a confident all-clear.
+    assert "⚡ Next thunderstorm: unknown (no usable forecast hours)" in out
 
 
-def test_render_daily_empty() -> None:
-    out = render_daily(normalize_daily_openmeteo({"daily": {"time": []}}, LAT, LON, 5))
-    assert "No daily forecast available" in out
+def test_render_outlook_reports_a_readable_calm_series_as_no_storm() -> None:
+    """A decidable series with no storm still gets the confident "none"."""
+    data = normalize_outlook_geosphere(
+        {
+            "sources": ["AROME"],
+            "hourly": [_geosphere_hour(0, condition="cloudy", cape=100.0, cin=0.0)],
+        },
+        LAT,
+        LON,
+        now=NOW_OUTLOOK,
+    )
+    out = render_outlook(data)
+    assert "⚡ Next thunderstorm: none in the forecast horizon" in out
+    assert "⛈️ Thunderstorm expected next 1 h: no" in out
+
+
+def test_render_outlook_names_the_horizon_an_all_clear_covers() -> None:
+    """ "No storm" over 4 h and over 60 h are different claims.
+
+    AROME nominally runs ~60 h, but a stale or truncated run hands over
+    fewer hours, so the span has to be stated rather than implied.
+    """
+    data = normalize_outlook_geosphere(
+        {
+            "sources": ["AROME"],
+            "hourly": [
+                _geosphere_hour(0, condition="cloudy", cape=100.0, cin=0.0),
+                _geosphere_hour(40, condition="cloudy", cape=100.0, cin=0.0),
+            ],
+        },
+        LAT,
+        LON,
+        now=NOW_OUTLOOK,
+    )
+    # NOW_OUTLOOK is 14:30 and the series ends at 06:00 the next day: 39.5 h.
+    assert data["scanned_horizon_hours"] == 40
+    assert "⚡ Next thunderstorm: none in the next 40 h" in render_outlook(data)
+
+
+def test_render_outlook_without_any_hours() -> None:
+    out = render_outlook(
+        normalize_outlook_geosphere({"hourly": []}, LAT, LON, now=NOW_OUTLOOK)
+    )
+    assert "No forecast hours available for the outlook window." in out
+
+
+# --- Air quality ---
+
+SAMPLE_AIR_QUALITY_GEOSPHERE = {
+    "observed_at": datetime(2026, 7, 15, 14, 0, tzinfo=UTC),  # 16:00 CEST
+    "pollutants": {
+        "nitrogen_dioxide": 18.4,
+        "ozone": 92.0,
+        "pm10": 21.2,
+        "pm2_5": 12.0,
+    },
+    "aqi_band_today": 2,
+    "aqi_band_tomorrow": 3,
+    "aqi_band_in_2_days": None,
+    "sources": ["WRF-Chem", "daily AQI"],
+}
+
+
+def test_render_air_quality_geosphere() -> None:
+    data = normalize_air_quality_geosphere(SAMPLE_AIR_QUALITY_GEOSPHERE, LAT, LON)
+    out = render_air_quality(data)
+    assert out.splitlines()[0] == "# Air Quality at 48.2208, 16.3738"
+    # GeoSphere publishes the band, so no numeric index is appended, and the
+    # unknown third day is omitted rather than rendered as a gap.
+    assert "🏷️ European AQI: 2 (fair) today · 3 (moderate) tomorrow" in out
+    assert "in 2 days" not in out
+    assert "🌫️ Concentrations (16:00): NO₂ 18 µg/m³ · O₃ 92 µg/m³ · PM10 21 µg/m³" in out
+    assert "Source: GeoSphere (WRF-Chem + daily AQI, 3 km)" in out
+
+
+def test_render_air_quality_without_any_data_still_names_the_source() -> None:
+    """Which source drew the blank decides whether asking elsewhere is worth it."""
+    data = normalize_air_quality_geosphere(
+        {"pollutants": {}, "sources": ["WRF-Chem"]}, LAT, LON
+    )
+    out = render_air_quality(data)
+    assert "No air-quality data available" in out
+    assert "📡 Source: GeoSphere (WRF-Chem, 3 km)" in out
+    # The band legend explains figures that are not there — leave it out.
+    assert "EEA" not in out

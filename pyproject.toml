@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "geosphere-mcp-server"
 dynamic = ["version"]
-description = "MCP server for weather forecasts: GeoSphere Austria high-resolution data (AROME/INCA/C-LAEF) for Austria and the Alps, Open-Meteo worldwide."
+description = "MCP server for weather forecasts: GeoSphere Austria high-resolution data (AROME/INCA/C-LAEF/WRF-Chem) for Austria and the Alps."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -16,7 +16,7 @@ keywords = [
     "geosphere",
     "austria",
     "forecast",
-    "open-meteo",
+    "air-quality",
     "home-assistant",
 ]
 classifiers = [
