@@ -7,6 +7,10 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.3.3 - 2026-08-12
+
+- Build: bump ruff in the python-dependencies group.
+
 ## 0.3.2 - 2026-08-07
 
 - Added: `tests/test_server_json.py` validates `server.json` against the MCP Registry's publish
