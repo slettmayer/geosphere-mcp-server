@@ -75,7 +75,7 @@ def merge_air_quality(
         "grid_longitude": chem.grid_longitude,
         "pollutants": pollutants,
         # EEA band index (1-6). GeoSphere publishes no underlying numeric
-        # index, so unlike the Open-Meteo path there is no value to pair here.
+        # index, so the band is the whole figure the renderer has to work with.
         "aqi_band_today": bands.get(0),
         "aqi_band_tomorrow": bands.get(1),
         "aqi_band_in_2_days": bands.get(2),
@@ -93,8 +93,8 @@ async def async_fetch_air_quality(
     The daily AQI is a nice-to-have on top of the concentrations: its failure
     logs a warning and keeps the pollutants, while a ``chem`` failure
     propagates. Raises :class:`GeoSphereOutOfDomainError` only when ``chem``
-    itself is out of domain, so the caller can fall back to Open-Meteo. The
-    result carries a ``sources`` list of the datasets that contributed.
+    itself is out of domain, which the server renders as an out-of-coverage
+    notice. The result carries a ``sources`` list of the contributing datasets.
     """
     now = now or datetime.now(UTC)
 

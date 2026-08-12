@@ -1,13 +1,13 @@
 # Air Quality
 
 ## Purpose
-Documents the air-quality feature: the pollutants both sources publish, the European AQI and its band
-scale, and how the two very different source shapes are reconciled into one output.
+Documents the air-quality feature: the pollutants WRF-Chem publishes, the European AQI and its band
+scale, and how the hourly and daily datasets are merged into one output.
 
 ## Responsibilities
 - Specifying the four pollutants and the daily AQI that `get_air_quality` reports
-- Documenting the EEA band scale and the numeric-to-band mapping
-- Explaining the per-source differences and how normalization hides them
+- Documenting the EEA band scale
+- Explaining how the reading is dated, and why it is clamped to the present
 - Recording the degradation rule between the pollutant and AQI datasets
 
 ## Non-Responsibilities
@@ -23,62 +23,49 @@ they will track a nearby monitoring station without matching it.
 
 ### Pollutants
 
-Four surface concentrations in µg/m³, the intersection of what both sources publish:
+Four surface concentrations in µg/m³:
 
-| Key | Label | GeoSphere parameter | Open-Meteo variable |
-|-----|-------|---------------------|---------------------|
-| `nitrogen_dioxide` | NO₂ | `no2surf` | `nitrogen_dioxide` |
-| `ozone` | O₃ | `o3surf` | `ozone` |
-| `pm10` | PM10 | `pm10surf` | `pm10` |
-| `pm2_5` | PM2.5 | `pm25surf` | `pm2_5` |
+| Key | Label | WRF-Chem parameter |
+|-----|-------|--------------------|
+| `nitrogen_dioxide` | NO₂ | `no2surf` |
+| `ozone` | O₃ | `o3surf` |
+| `pm10` | PM10 | `pm10surf` |
+| `pm2_5` | PM2.5 | `pm25surf` |
 
-That table is literally `AIR_QUALITY_POLLUTANTS` in `const.py`, and the uniform key is deliberately also
-the Open-Meteo variable name, so one tuple derives `CHEM_POLLUTANTS`, `CHEM_PARAMETERS`,
-`OPENMETEO_AIR_QUALITY_VARIABLES`, and the renderer's labels. Nothing here is hand-synced.
+That table is literally `AIR_QUALITY_POLLUTANTS` in `const.py`, and one tuple derives `CHEM_POLLUTANTS`,
+`CHEM_PARAMETERS`, and the renderer's labels. Nothing here is hand-synced.
 
-Neither path reports CO, SO₂, NH₃, pollen, or UV index, though Open-Meteo has some of them — the tool
-reports the set both sources can serve, so its output does not change shape with the caller's coordinate.
+CO, SO₂, NH₃, pollen, and UV index are not reported — WRF-Chem does not publish them at this resolution.
 
-The reported value is the forecast hour **nearest to now**, on both paths. An exact tie between two hours
-resolves to the earlier one.
+The reported value is the forecast hour **nearest to now**. An exact tie between two hours resolves to the
+earlier one.
 
 Nearest means nearest in *either* direction, so from HH:31 onward the closest hour has not happened yet —
 the concentrations are still read from it, being the closest the dataset has, but the reported observation
-time is **clamped to the present** on the GeoSphere path. That timestamp is what the caller is told the
-reading describes, and an observation can never be in the future. Genuine staleness is left intact: only a
-stamp ahead of `now` is pulled back to it. The Open-Meteo path is not yet clamped (see Known Risks).
+time is **clamped to the present**. That timestamp is what the caller is told the reading describes, and
+an observation can never be in the future. Genuine staleness is left intact: only a stamp ahead of `now`
+is pulled back to it.
 
 ### The European Air Quality Index
 
-The EEA scale is six bands, and the rendered output always leads with the band index so both sources read
-alike:
+The EEA scale is six bands, and the rendered output leads with the band index:
 
-| Band | Label | Numeric range |
-|------|-------|---------------|
-| 1 | good | 0 to <20 |
-| 2 | fair | 20 to <40 |
-| 3 | moderate | 40 to <60 |
-| 4 | poor | 60 to <80 |
-| 5 | very poor | 80 to <100 |
-| 6 | extremely poor | 100 and above |
+| Band | Label |
+|------|-------|
+| 1 | good |
+| 2 | fair |
+| 3 | moderate |
+| 4 | poor |
+| 5 | very poor |
+| 6 | extremely poor |
 
-Each band is **half-open**: the bound belongs to the band above it, so an index of exactly 20 is `fair`,
-not `good`. `AQI_NUMERIC_BAND_BOUNDS` holds the upper bounds and `aqi_band` compares with `<`.
+GeoSphere publishes this band index (1-6) directly, as a daily value, in the `chem_aqi-v1-1d-3km` dataset.
+There is **no underlying numeric index** to render alongside it, so `2 (fair) today` is the whole figure —
+`AQI_BAND_LABELS` in `const.py` supplies the label and nothing has to be banded.
 
-The two sources publish **different halves of this table**, which is the only real complexity in the
-feature:
-
-- **GeoSphere** publishes the band index (1-6) directly, as a daily value. No numeric index exists, so none
-  is rendered.
-- **Open-Meteo** publishes the underlying numeric index (0-100+) hourly, and no daily value at all. The
-  numeric value is banded with the thresholds above (`aqi_band` in `const.py`) and rendered as
-  `3 (moderate, index 44)`, so the band leads and the numeric detail follows.
-
-**Per-day values differ in how they are obtained.** GeoSphere's daily stamps are 00:00 UTC and are matched
-to today / tomorrow / in 2 days by **local calendar day** in `Europe/Vienna` — a 00:00 UTC stamp is 01:00
-or 02:00 local, so a naive UTC-date match would be off by a day for part of the year. Open-Meteo has no
-daily index, so each day's figure is the **maximum of that local day's hourly values**. A daily maximum is
-the honest summary for an index whose whole purpose is flagging the worst air of the day.
+The daily stamps are 00:00 UTC and are matched to today / tomorrow / in 2 days by **local calendar day** in
+`Europe/Vienna` — a 00:00 UTC stamp is 01:00 or 02:00 local, so a naive UTC-date match would be off by a
+day for part of the year.
 
 ### Degradation
 
@@ -87,41 +74,30 @@ C-LAEF ensemble: a `chem` failure propagates (the tool has nothing to say withou
 AQI failure logs a warning and keeps the concentrations. The `sources` list in the response reflects what
 actually contributed, and the rendered source line shows it.
 
-An out-of-domain error on `chem` — and only on `chem` — triggers the Open-Meteo fallback, which is a single
-request. **So does an empty in-domain response**: the API answers HTTP 200 with an empty series rather than
-an error when a WRF-Chem run is stale or incomplete, so "inside the grid" and "has data" are separate
-questions. `format.air_quality_is_empty` decides the second one, and the tool falls through to CAMS —
-which is worldwide and would have answered — instead of dead-ending on a location the server can serve.
+An out-of-domain error on `chem` — and only on `chem` — produces the out-of-coverage line, the same as
+every other tool. **An empty in-domain response is a different answer**: the API answers HTTP 200 with an
+empty series rather than an error when a WRF-Chem run is stale or incomplete, so "inside the grid" and
+"has data" are separate questions. That case renders `No air-quality data available for this location`
+*and still names the source*, so the caller can tell a run worth retrying from a location that will never
+be served.
 
 ## Dependencies
 - GeoSphere `chem-v2-1h-3km` (pollutants, ~73 h hourly) and `chem_aqi-v1-1d-3km` (daily band)
-- Open-Meteo `air-quality-api.open-meteo.com/v1/air-quality` (CAMS), 3 forecast days
-- `air_quality.py` holds the GeoSphere merge; `format.py` holds both normalizers and the renderer
+- `air_quality.py` holds the merge; `format.py` holds the normalizer and the renderer
 
 ## Design Decisions
 - **A separate tool, not a section of `get_current_weather`**: air quality costs two extra requests that
   most current-weather calls do not want.
-- **Band-first rendering**: the band is the part a human or model can act on, and it is the only figure both
-  sources can produce. The numeric index is detail, shown where it exists.
-- **Daily maximum for the Open-Meteo per-day figure**: an average would hide the afternoon ozone peak that
-  the index exists to flag.
-- **The four-pollutant intersection**: a stable output shape matters more than reporting everything each
-  source happens to have.
+- **Band-first rendering**: the band is the part a human or model can act on, and it is what the dataset
+  publishes.
 
 ## Known Risks
-- WRF-Chem and CAMS are different models: the two paths will not agree numerically at a point near the
-  coverage boundary. Each response states its source.
-- The GeoSphere band and the Open-Meteo numeric index are computed by different methods, so a band may
-  differ by one step between the paths for genuinely similar air.
+- WRF-Chem is a model, not a monitoring network: expect it to track a nearby station without matching it,
+  particularly for the traffic-driven pollutants at 3 km resolution.
 - Air quality adds two requests per call against the shared GeoSphere budget (5 req/s, 240 req/h).
-- The Open-Meteo path's observation time is **not** clamped to the present, and derives its local "now"
-  from the response's single `utc_offset_seconds` rather than the point's named zone — so across a DST
-  transition inside the 3-day window it can be an hour off, which near local midnight shifts the calendar
-  day the AQI bands are labelled with. Left alone deliberately: the Open-Meteo fallback is slated for
-  removal, and fixing it here would be work thrown away.
 
 ## Extension Guidelines
 - New pollutant: add one row to `AIR_QUALITY_POLLUTANTS` in `const.py` — every request parameter list and
   the renderer's labels derive from it. A pollutant only one source has needs a decision about the output
   shape first.
-- Never inline a band threshold: they live in `AQI_NUMERIC_BAND_BOUNDS` and `AQI_BAND_LABELS`.
+- Never inline a band label: they live in `AQI_BAND_LABELS`.

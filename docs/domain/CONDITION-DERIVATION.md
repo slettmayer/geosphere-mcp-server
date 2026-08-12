@@ -72,11 +72,11 @@ function's non-precipitating branch), the full gate applies. The cost is a genui
 weakly than 4 mm/h under a modelled lid, which still reads as `rainy`; the alternative was a second rate
 constant with nothing to validate it against.
 
-A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour a source
-leaves blank. Open-Meteo publishes inhibition too, but as a **positive magnitude**, so `format.py` negates
-it into the AROME convention before it ever reaches this function — `is_thunder` only ever sees the
-negative form. `CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination against
-real capped situations is unconfirmed against observations.
+A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour AROME
+leaves blank. `is_thunder` takes the AROME sign convention (negative J/kg) and does not verify it — a
+future source publishing inhibition as a positive magnitude must be negated before calling.
+`CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination against real capped
+situations is unconfirmed against observations.
 
 **`derive_current_condition`** — used for current weather. It adds a fog heuristic and changes the
 rain/snow rule:
@@ -94,15 +94,10 @@ switched off wholesale via the `FOG_HEURISTIC_ENABLED` flag in `const.py`. When 
 the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone — and there the CIN cap
 does apply, since nothing observed contradicts it (see the thunder gate above).
 
-Day versus night (`sunny` vs `clear-night`) is resolved with `astral` on both derivation paths.
-
-### Open-Meteo Path
-The WMO `weather_code` (0-99) maps to the same vocabulary through a static dict in `const.py`, combined
-with the `is_day` flag to pick `sunny` or `clear-night`. No physical derivation happens on this path.
+Day versus night (`sunny` vs `clear-night`) is resolved with `astral` in both derivation functions.
 
 ### Current-Conditions Merge Chain
-On the GeoSphere path, each field is filled from a per-field fallback chain (ported from
-`ha-geosphere-next`):
+Each field is filled from a per-field fallback chain (ported from `ha-geosphere-next`):
 
 | Field | Chain |
 |-------|-------|
@@ -161,8 +156,8 @@ predecessor is correct at any cadence; index 0 (the run start, whose "last perio
 no row to land on.
 
 Lookup is then a plain exact-match on the shifted key — there is no nearest-neighbour fallback, so a
-timestamp mismatch silently yields no probability. On the Open-Meteo path, `precipitation_probability` is
-used directly. An ensemble fetch failure omits the probability entirely and the forecast still renders.
+timestamp mismatch silently yields no probability. An ensemble fetch failure omits the probability
+entirely and the forecast still renders.
 
 ## Dependencies
 - `condition.py` depends only on `astral` and `const.py`
@@ -171,8 +166,7 @@ used directly. An ensemble fetch failure omits the probability entirely and the 
 
 ## Design Decisions
 - **Physically derived conditions**: the condition comes from physical parameters rather than GeoSphere's
-  proprietary symbol code, and shares one vocabulary with the WMO-code mapping so both paths are
-  indistinguishable to the caller.
+  proprietary `sy` symbol code, whose table is undocumented and could change under us without notice.
 - **Two derivation functions instead of one**: the current path has nowcast humidity and a usable
   temperature signal, so it can afford a fog heuristic and a temperature-based snow rule; the hourly path
   has accumulation deltas instead and must not guess at fog.
@@ -191,5 +185,5 @@ used directly. An ensemble fetch failure omits the probability entirely and the 
 
 ## Extension Guidelines
 - New threshold: add a named constant to `const.py`; never inline a literal in `condition.py`.
-- New condition string: add it to the vocabulary list above and to the WMO map, so both paths stay aligned.
+- New condition string: add it to the vocabulary list above and to the `CONDITION_*` block in `const.py`.
 - Keep `condition.py` free of MCP and Home Assistant imports.

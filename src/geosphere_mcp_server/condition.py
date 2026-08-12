@@ -1,9 +1,9 @@
 """Condition derivation — pure functions, fully testable.
 
 GeoSphere's `sy` weather symbol uses an undocumented proprietary code table,
-so (like Open-Meteo) the condition is derived from physical parameters
-instead. Condition strings equal Home Assistant's ATTR_CONDITION_* values;
-literals are used to keep this module free of homeassistant imports.
+so the condition is derived from physical parameters instead. Condition
+strings equal Home Assistant's ATTR_CONDITION_* values; literals are used to
+keep this module free of homeassistant imports.
 
 Ported near-verbatim from ha-geosphere-next (already homeassistant-free).
 """
@@ -78,12 +78,11 @@ def is_thunder(cape: float | None, cin: float | None) -> bool:
     """True when CAPE is sufficient AND convective inhibition is weak enough.
 
     Takes `cin` in the AROME convention: negative J/kg, `0.0` uncapped, more
-    negative a stronger lid. Open-Meteo publishes the same quantity as a
-    positive magnitude, and `format.openmeteo_hourly_rows` negates it before it
-    reaches here, so this function only ever sees one sign convention.
+    negative a stronger lid. Any future source publishing it as a positive
+    magnitude must negate before calling — the sign is not inferred here.
 
-    A missing value is treated as uncapped, so an hour whose source leaves the
-    field blank degrades to the pre-CIN, CAPE-only logic.
+    A missing value is treated as uncapped, so an hour AROME leaves blank
+    degrades to the pre-CIN, CAPE-only logic.
     """
     if cape is None or cape < THUNDER_CAPE_JKG:
         return False

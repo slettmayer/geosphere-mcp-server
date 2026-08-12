@@ -7,6 +7,21 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Removed: **breaking.** The Open-Meteo fallback is gone, and with it `get_daily_forecast`. This server
+  now serves **only** what GeoSphere Austria covers -- Austria and the Alpine region, out to AROME's
+  ~60 h horizon. A point outside the AROME grid returns
+  `⚠️ Outside coverage — this server only serves Austria and the Alpine region (the GeoSphere AROME
+  grid).` rather than a second-rate answer from somewhere else, and that line is deliberately distinct
+  from the retryable failure lines: being outside coverage is a property of the location, so retrying
+  will never help. `get_daily_forecast` had no GeoSphere source to fall back on -- no dataset reaches
+  past ~60 h -- so it is removed outright rather than reduced to two and a half days. Callers that need
+  worldwide or multi-day coverage should pair this server with a dedicated global weather source; four
+  tools remain (`get_current_weather`, `get_hourly_forecast`, `get_storm_outlook`, `get_air_quality`).
+  The fallback doubled every tool -- two normalizers, two condition vocabularies (the WMO code map is
+  gone with it), two AQI scales, two convective-inhibition sign conventions -- for answers outside the
+  region this server exists to serve.
+- Removed: sunrise and sunset from `get_current_weather`. Only the Open-Meteo path ever supplied them;
+  no GeoSphere dataset publishes them, so the fields were already always absent inside coverage.
 - Added: `get_storm_outlook` -- peak wind gust for the next hour and the next 12 hours, whether a
   thunderstorm is expected within the next hour (tri-state, so a data gap reads `unknown` rather than
   `no`), when the next thunderstorm is expected across the whole horizon, and peak CAPE over 12 hours.
@@ -16,22 +31,18 @@ version being cut, so you never rename that heading by hand. See
   storm is already in progress. An hour counts as a thunderstorm hour on the derived condition *or* on
   the raw CAPE/CIN predicate plus forecast precipitation -- the second branch catches thundersnow and
   hours with missing cloud cover, while the precipitation requirement keeps a dry high-CAPE afternoon
-  from raising a signal. Inside GeoSphere coverage this costs one AROME request (the C-LAEF ensemble is
-  skipped, since the outlook reports no precipitation probability); elsewhere it falls back to
-  Open-Meteo, which supplies both CAPE and convective inhibition, so the same gate applies there.
+  from raising a signal. It costs one AROME request -- the C-LAEF ensemble is skipped, since the outlook
+  reports no precipitation probability.
 - Added: `get_air_quality` -- NO₂, O₃, PM10 and PM2.5 surface concentrations plus the European Air
   Quality Index for today, tomorrow and in two days. GeoSphere's WRF-Chem forecast (`chem-v2-1h-3km` /
-  `chem_aqi-v1-1d-3km`, 3 km grid) serves Austria and the Alps; elsewhere it falls back to Open-Meteo's
-  CAMS air-quality API. The two sources publish different halves of the same scale -- GeoSphere the 1-6
-  EEA band, Open-Meteo a 0-100+ numeric index and no daily value at all -- so the output always leads
-  with the band, appends the numeric index only where one exists, and derives Open-Meteo's per-day figure
-  as the maximum of that local day's hourly values. A daily-AQI failure degrades to concentrations only;
-  a pollutant failure propagates.
+  `chem_aqi-v1-1d-3km`, 3 km grid) serves Austria and the Alps. The AQI is reported as its 1-6 EEA band,
+  which is what GeoSphere publishes -- there is no underlying numeric index to show alongside it. A
+  daily-AQI failure degrades to concentrations only; a pollutant failure propagates.
 - Changed: **behaviour change.** Thunder derivation now requires weak convective inhibition
   (`cin > -50` J/kg, `CAP_CIN_JKG`) in addition to CAPE >= 1000 J/kg, so high CAPE under a strong lid no
   longer produces `lightning` / `lightning-rainy`. AROME's `cin` parameter is now fetched for this. A
-  missing `cin` counts as uncapped, which both preserves the previous behaviour and is what the
-  Open-Meteo path depends on. Ported from `ha-geosphere-next` 0.9.0. One exception: on the current
+  missing `cin` counts as uncapped, which preserves the previous behaviour for any hour AROME leaves
+  blank. Ported from `ha-geosphere-next` 0.9.0. One exception: on the current
   conditions path, *observed* rain of downpour intensity (>= 4 mm/h) overrides the lid, since inhibition
   answers "can convection get started?" and a downpour has already settled it. Lighter rain does not --
   any observed precipitation counts as "precipitating", down to drizzle, and high CAPE under a strong lid
@@ -64,10 +75,6 @@ version being cut, so you never rename that heading by hand. See
   -- but ensembles commonly coarsen along their horizon, and if C-LAEF ever did, the fixed step would have
   missed every forecast row past the break and blanked the probability across the whole forecast with
   nothing logged.
-- Added: `cape` and `convective_inhibition` to the Open-Meteo hourly request, which the fallback storm
-  outlook needs and which cost no extra call. Open-Meteo reports inhibition as a positive magnitude where
-  AROME reports it negative, so the value is negated during normalization -- `is_thunder` only ever sees
-  the AROME convention.
 - Fixed: the hourly forecast (and with it the storm outlook) no longer drops the hour already under way.
   An unbounded request begins well after the current hour, so that hour was never in the series -- which
   silently broke every outlook window: the "next 1 h" window held one stamp instead of two, and a
@@ -77,8 +84,8 @@ version being cut, so you never rename that heading by hand. See
   next, so anchoring to `now` at 15:30 comes back at 16:00 with the hour under way already gone.
 - Changed: the hourly forecast now starts with the hour already under way rather than the next one, so
   `hours=N` returns the in-progress hour plus `N - 1` later ones. This is a consequence of the lookback
-  fix above and it aligns the GeoSphere path with the Open-Meteo path, which always included the current
-  hour, and with `ha-geosphere-next`. The leading hour's precipitation figure covers the whole hour,
+  fix above and it aligns the server with `ha-geosphere-next`. The leading hour's precipitation figure
+  covers the whole hour,
   including the part already elapsed.
 - Changed: the hourly AROME and C-LAEF requests are now bounded to the window actually asked for
   instead of pulling the full ~60 h horizon every time. `hours=6` fetches 8 hourly steps rather than
@@ -94,18 +101,9 @@ version being cut, so you never rename that heading by hand. See
   `none in the forecast horizon` when no forecast hour ahead can be judged. The underlying scan returns
   the same empty result for "no storm" and "nothing readable here", so a response could declare the
   window `unknown` on one line and assert a 60-hour all-clear on the next.
-- Fixed: a storm-outlook all-clear now names the horizon it covers (`none in the next 54 h`), and the
-  Open-Meteo fallback is asked for three days rather than 48 h. Open-Meteo counts forecast days from local
-  *midnight*, so a 48 h request at 20:00 left only ~28 h ahead and the scan reported an unqualified
-  all-clear over it. `OUTLOOK_FALLBACK_HOURS` keeps at least 48 h ahead at any hour of the day, and the
-  rendered span is measured from the rows that actually came back, so a short series still reports itself
-  honestly. AROME is unaffected at ~60 h.
-- Fixed: the European AQI bands are half-open, so an index of exactly 20 is now `fair` rather than `good`
-  (and likewise at 40/60/80/100). `aqi_band` compared with `<=`, which put every boundary value one band
-  too low.
-- Fixed: a rate-limited `get_air_quality` no longer suffixes `— get_daily_forecast still works
-  (Open-Meteo)`. That tool carries no air-quality data, so the pointer only bought the caller another
-  wasted call. The suffix stays on current / hourly / storm outlook, where it is true.
+- Fixed: a storm-outlook all-clear now names the horizon it covers (`none in the next 54 h`) instead of
+  implying the nominal ~60 h. The rendered span is measured from the rows that actually came back, so a
+  stale or truncated run reports itself honestly rather than asserting an all-clear it never scanned.
 - Fixed: `render_air_quality` now names its source even when neither concentrations nor an AQI came back.
   Which source drew the blank is what tells a caller whether asking elsewhere is worth anything. The EEA
   band legend is dropped in that case, having no figures left to explain.
@@ -117,9 +115,9 @@ version being cut, so you never rename that heading by hand. See
   into `scan_thunderstorm`, which returns the storm hour, its CAPE, and whether the scan counts from a
   single pass. One outlook now walks the series three times instead of six, and the decidability answer
   can no longer drift from the storm answer it qualifies.
-- Changed: the four pollutant lists (`CHEM_PARAMETERS`, `CHEM_POLLUTANTS`,
-  `OPENMETEO_AIR_QUALITY_VARIABLES`, `format._POLLUTANT_LABELS`) are now derived from one
-  `AIR_QUALITY_POLLUTANTS` table in `const.py` instead of being hand-synced. Adding a pollutant is one row.
+- Changed: the pollutant lists (`CHEM_PARAMETERS`, `CHEM_POLLUTANTS`, `format._POLLUTANT_LABELS`) are now
+  derived from one `AIR_QUALITY_POLLUTANTS` table in `const.py` instead of being hand-synced. Adding a
+  pollutant is one row.
 - Removed: the permanently-`None` `aqi_value_*` keys from `merge_air_quality` (GeoSphere publishes no
   numeric index, so the renderer supplies the `None`), and the unreferenced `CHEM_MAX_HOURS` constant.
 - Docs: `outlook._is_lightning` states why only its CAPE/CIN branch requires precipitation — that
@@ -136,20 +134,10 @@ version being cut, so you never rename that heading by hand. See
   successor to read them from.
 - Fixed: `get_storm_outlook` no longer reports an all-clear over a storm already under way outside
   whole-hour timezones. The window anchored on `now` floored to the top of the UTC hour, which assumes
-  rows sit on that grid — true of GeoSphere, but Open-Meteo stamps rows in the point's *local* hour, so
-  after conversion a zone offset by :30 or :45 puts every row half an hour off it and the floor landed
-  above the in-progress row. In Mumbai a thunderstorm in progress with 30 m/s gusts rendered as "Max gust
-  next 1 h: 5 m/s" / "Thunderstorm expected next 1 h: no". The bound is now "the hour has not ended yet",
-  which needs no grid at all. Affects India, Sri Lanka, Nepal, Iran, Afghanistan, Myanmar, central and
-  South Australia and the Chatham Islands, on roughly half of all clock minutes
-- Fixed: a far-future `start` no longer fails the whole hourly call on the Open-Meteo path. `lead_hours`
-  is derived from the caller's `start` and nothing bounded it, so 14 days out computed `forecast_days=17`
-  and the API rejected the request outright ("Allowed range 0 to 16") — answering "no weather data
-  available" for a window it can in fact serve. Clamped to `OPENMETEO_MAX_DAYS`
-- Fixed: `get_hourly_forecast`'s Open-Meteo window is now matched through the point's *named* zone, as the
-  outlook path already was, instead of shifting `start` by the single current `utc_offset_seconds`. That
-  offset is wrong for every stamp on the far side of a DST transition, so a window requested shortly
-  before one began an hour off what the caller asked for
+  rows sit on that grid. AROME does, so nothing was reachable in practice — but the failure mode was
+  silent and one-directional: a stamp off the grid puts the floor *above* the in-progress row and drops
+  it, rendering a storm under way as a clean all-clear. The bound is now "the hour has not ended yet",
+  which needs no grid at all.
 - Changed: **behaviour change.** The convective-inhibition veto no longer applies to *observed*
   precipitation. `derive_current_condition`'s precipitating branch takes its rain from INCA and the
   nowcast — measurements — while CAPE and CIN are AROME's forecast for the hour; inhibition answers "can
@@ -173,22 +161,7 @@ version being cut, so you never rename that heading by hand. See
 - Fixed: a `start` with a non-UTC offset no longer requests the wrong window. `async_get_timeseries`
   formatted the bound with `strftime`, dropping the offset, and the API reads naive stamps as UTC — so
   `start="2026-08-11T15:00+02:00"` fetched from 15:00 UTC and the caller silently lost the first two
-  requested hours. Bounds are converted to UTC before serialization. The Open-Meteo path was already
-  correct, so this also removes a divergence between the two source paths.
-- Fixed: the Open-Meteo hourly fallback no longer returns nothing for a `start` in the future, and no
-  longer under-delivers late in the day. `forecast_days` was `ceil(hours / 24)` and that API counts days
-  from **local midnight**, not from now — so `hours=24` asked at 20:00 local yielded four hours, and a
-  `start` two days out fell off the end of the response entirely. The request now accounts for the lead
-  time to `start` and carries a day of headroom.
-- Fixed: the Open-Meteo storm outlook ran its window and horizon arithmetic on naive local wall-clock, so
-  a DST transition inside the window made the stated horizon 11 or 13 real hours — on a spring-forward
-  night the "next 12 h" peak-gust scan silently lost an hour off the end. Rows are now resolved to
-  instants in the point's own zone and compared in UTC, matching the GeoSphere path. (Attaching the zone
-  alone is not enough: `aware + timedelta` is wall-clock arithmetic within that zone.)
-- Fixed: `get_air_quality` falls back to Open-Meteo when an in-domain WRF-Chem response comes back empty,
-  not only when the point is out of domain. The API answers HTTP 200 with an empty series when a run is
-  stale or incomplete, so a location CAMS covers worldwide could dead-end on "No air-quality data
-  available".
+  requested hours. Bounds are converted to UTC before serialization.
 - Changed: `outlook._LIGHTNING_PREFIX` is gone in favour of `const.CONDITION_LIGHTNING`, which is the same
   string. A rename of the condition vocabulary would have left the predicate matching nothing, and
   `get_storm_outlook` reporting an all-clear through an actual storm.

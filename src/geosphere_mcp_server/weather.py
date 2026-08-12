@@ -479,8 +479,9 @@ async def async_fetch_current_conditions(
     Degrades to an AROME-only snapshot when INCA/nowcast are unavailable
     (e.g. the point is inside the AROME domain but outside Austria). Raises
     :class:`GeoSphereOutOfDomainError` only when AROME itself is out of domain,
-    so the caller can fall back to Open-Meteo. Other AROME errors propagate.
-    The result carries a ``sources`` list of the datasets that contributed.
+    which the server renders as an out-of-coverage notice. Other AROME errors
+    propagate. The result carries a ``sources`` list of the contributing
+    datasets.
     """
     now = now or datetime.now(UTC)
     inca_start = now - timedelta(hours=INCA_LOOKBACK_HOURS)
@@ -553,9 +554,9 @@ async def async_fetch_hourly_forecast(
     Ensemble failure just omits precipitation probability. Pass
     ``include_ensemble=False`` to skip that request entirely — the storm
     outlook does not report probability and should not spend the call. Raises
-    :class:`GeoSphereOutOfDomainError` only when AROME is out of domain (caller
-    falls back to Open-Meteo); other AROME errors propagate. The result carries
-    a ``sources`` list.
+    :class:`GeoSphereOutOfDomainError` only when AROME is out of domain, which
+    the server renders as an out-of-coverage notice; other AROME errors
+    propagate. The result carries a ``sources`` list.
     """
     now = now or datetime.now(UTC)
 

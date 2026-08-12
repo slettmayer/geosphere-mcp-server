@@ -5,10 +5,10 @@ Documents the severe-weather outlook: what `get_storm_outlook` reports, the wind
 figure, and how a thunderstorm hour is decided.
 
 ## Responsibilities
-- Specifying the five derivations in `outlook.py` and the horizons they use
+- Specifying the derivations in `outlook.py` and the horizons they use
 - Documenting the round-up window and the "storm in progress" timestamp
 - Explaining the two-branch thunderstorm test and its false-positive guard
-- Recording how the outlook degrades on the Open-Meteo path
+- Recording how the outlook degrades when AROME leaves a field blank
 
 ## Non-Responsibilities
 - The thunder gate itself (`is_thunder`) — see [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)
@@ -55,13 +55,11 @@ stamps. A "1 hour" window covers the in-progress hour plus the next one, and can
 ~2 h out. A caller that needs a strict "within the next 60 minutes" answer must compare the returned
 timestamps itself.
 
-The bound is `row > now - 1 h` (`outlook._from`), **not** `now` floored to the top of the hour. Flooring
-assumes rows sit on whole UTC hours, which only the GeoSphere path guarantees: Open-Meteo stamps rows in
-the point's local hour, so once resolved to UTC a zone offset by :30 or :45 — India, Sri Lanka, Nepal,
-Iran, Afghanistan, Myanmar, central and South Australia, the Chatham Islands — puts every row half an hour
-off that grid. The floor then lands *above* the in-progress row and drops it, so a storm already under way
-renders as a clean all-clear. Pinned by
-`tests/test_format.py::test_outlook_covers_the_current_hour_off_the_utc_grid`.
+The bound is `row > now - 1 h` (`outlook._from`), **not** `now` floored to the top of the hour. AROME does
+stamp on whole UTC hours, so flooring would work today — but it fails in the one direction that matters. A
+stamp off the hour grid would put the floor *above* the in-progress row and drop it, rendering a storm
+already under way as a clean all-clear. The relative form costs nothing and keeps the grid assumption out
+of the contract.
 
 **`scan_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
 one already under way. That is the encoding of "a storm is in progress". Lead-time arithmetic downstream
@@ -116,40 +114,33 @@ storm is by construction an hour it counts as readable.
 
 ### An All-Clear Names Its Horizon
 
-The two paths hand the outlook series of quite different lengths — AROME runs ~60 h, while the Open-Meteo
-fallback counts forecast days from *local midnight*, so 48 h requested at 20:00 leaves only ~28 h ahead.
-`get_storm_outlook` therefore asks the fallback for `OUTLOOK_FALLBACK_HOURS` (72 h, three days), which
-keeps at least 48 h ahead at any hour of the day, and `horizon_hours` measures what actually came back so
-the renderer can print `none in the next {N} h` rather than an unqualified "forecast horizon".
+`get_storm_outlook` asks for `AROME_MAX_HOURS`, so the scan spans everything AROME publishes — nominally
+~60 h. A run that is stale or truncated hands over fewer, so `horizon_hours` measures what actually came
+back and the renderer prints `none in the next {N} h` rather than an unqualified "forecast horizon". "No
+storm for 4 h" and "no storm for 60 h" are different claims, and only one of them is usually true.
 
-### Both Source Paths, One Implementation
+### Degradation and Timestamps
 
-`outlook.py` reads the hourly **row dicts** that `weather.assemble_hourly_forecast` and
-`format.openmeteo_hourly_rows` both produce, so the same functions serve GeoSphere and Open-Meteo. Rows are
-read through `.get`, so a source that omits a key degrades rather than raising.
+`outlook.py` reads the hourly **row dicts** that `weather.assemble_hourly_forecast` produces, through
+`.get` rather than by indexing — so an hour AROME left a field blank is judged on what it does carry
+rather than raising. A missing inhibition value reads as uncapped, degrading those hours to CAPE-only
+gating.
 
-On the Open-Meteo path the outlook is two variables (`cape`, `convective_inhibition`) added to the
-existing hourly request — no extra call. **The two sources report inhibition with opposite signs**: AROME
-publishes it negative (`0.0` uncapped, more negative a stronger lid) and Open-Meteo a positive magnitude,
-so `openmeteo_hourly_rows` negates the value to match the convention `is_thunder` expects. Inverting that
-would turn the gate inside out — suppressing exactly the storms it should pass.
+AROME publishes inhibition **negative** (`0.0` uncapped, more negative a stronger lid), which is the
+convention `is_thunder` expects and does not verify. A future source publishing it as a positive magnitude
+must be negated before it reaches the gate; getting that backwards turns the gate inside out, suppressing
+exactly the storms it should pass.
 
-A missing inhibition value still reads as uncapped, so a point where Open-Meteo returns nulls degrades to
-CAPE-only gating for those hours rather than failing.
-
-Timestamps differ between paths: GeoSphere rows are aware UTC and Open-Meteo rows are naive local. The
-Open-Meteo normalizer resolves its rows to instants in the point's own zone and converts them to **UTC**
-before the derivation touches them; only the *reported* timestamps are localized for display.
-
-Attaching the zone is not on its own enough. `aware + timedelta` is wall-clock arithmetic *within* that
-zone, so a 12-hour horizon spanning a DST transition would cover 11 or 13 real hours — on a
-spring-forward night the peak-gust scan silently loses an hour off the end. UTC has no transitions, so a
-timedelta there is a true duration. `outlook.window` documents this as a requirement on its callers.
+Rows are aware **UTC** and the derivation runs on them directly; only the *reported* timestamps are
+localized to Vienna for display. That ordering is load-bearing: `aware + timedelta` is wall-clock
+arithmetic *within* a zone, so deriving in a DST-observing zone would make a 12-hour horizon cover 11 or
+13 real hours — on a spring-forward night the peak-gust scan silently loses an hour off the end. UTC has
+no transitions, so a timedelta there is a true duration. `outlook.window` documents this as a requirement
+on its callers.
 
 ## Dependencies
 - `outlook.py` depends only on `condition.is_thunder` and `PRECIP_MIN_MM` from `const.py`
-- The GeoSphere path needs AROME `cape` and `cin` plus one hour of lookback; the Open-Meteo path needs the
-  `cape` and `convective_inhibition` hourly variables
+- Needs AROME `cape` and `cin` plus one hour of lookback
 - The tool fetches AROME **without** the C-LAEF ensemble — the outlook reports no precipitation
   probability, so that request would be wasted
 
@@ -167,17 +158,13 @@ timedelta there is a true duration. `outlook.window` documents this as a require
   rendered output as well as here, because it will otherwise surprise a caller.
 - The whole window contract silently depends on the one-hour lookback in `async_fetch_hourly_forecast`.
   Removing it, or re-anchoring it to `now`, breaks every horizon here without failing a type check.
-- On the Open-Meteo fallback the scanned horizon is shorter than GeoSphere's ~60 h (Open-Meteo's
-  `forecast_days` counts from local midnight, so it shrinks as the day advances) and the output does not
-  state how far it looked.
-- The sign flip on Open-Meteo's inhibition is invisible in the output; a regression there would silently
-  invert the thunder gate rather than raise anything. `test_openmeteo_rows_negate_the_inhibition_sign`
-  and `test_openmeteo_capped_hour_is_not_a_storm` are the only guards.
+- The inhibition sign convention is invisible in the output; a source or refactor that reversed it would
+  silently invert the thunder gate rather than raise anything.
 - The precipitation guard on branch 2 will miss a genuinely dry thunderstorm — rare, and the alternative is
   a storm signal on most summer afternoons.
 
 ## Extension Guidelines
 - New derivation: add a pure function to `outlook.py` reading the row dict, then surface it through
-  `format._outlook` so both source paths get it at once.
+  `format._outlook`.
 - Changing a horizon: edit the constant in `const.py`; the rendered labels are built from it.
 - Keep `outlook.py` free of I/O and of any source-specific branching.

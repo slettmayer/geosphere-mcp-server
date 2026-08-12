@@ -1,7 +1,7 @@
 """Constants for the GeoSphere MCP server.
 
-All dataset ids, parameter lists, thresholds, API URLs, and the WMO weather
-code -> Home Assistant condition map live here; never inline these literals.
+All dataset ids, parameter lists, thresholds, and API URLs live here; never
+inline these literals.
 """
 
 from __future__ import annotations
@@ -50,11 +50,10 @@ AROME_PARAMETERS = (
 ENSEMBLE_PARAMETERS = ("rr_p10", "rr_p50", "rr_p90")
 NOWCAST_PARAMETERS = ("t2m", "td", "rh2m", "rr", "pt", "dd", "ff", "fx")
 INCA_PARAMETERS = ("T2M", "TD2M", "RH2M", "RR", "P0", "GL", "UU", "VV")
-# The four pollutants both air-quality sources publish, in display order:
-# (uniform key, display label, WRF-Chem parameter name). The uniform key is
-# deliberately also the Open-Meteo air-quality variable name, so this one table
-# drives the request parameters of both sources and the renderer's labels — the
-# lists below are derived, never hand-synced.
+# The four pollutants WRF-Chem publishes, in display order: (uniform key,
+# display label, WRF-Chem parameter name). This one table drives both the
+# request parameters and the renderer's labels — the lists below are derived
+# from it, never hand-synced.
 AIR_QUALITY_POLLUTANTS = (
     ("nitrogen_dioxide", "NO₂", "no2surf"),
     ("ozone", "O₃", "o3surf"),
@@ -86,8 +85,8 @@ THUNDER_CAPE_JKG = 1000.0
 # uncapped, more negative means a stronger lid. CAPE only counts as thunder
 # potential when inhibition is weaker than this magnitude. 50 J/kg is a
 # standard boundary for weak inhibition; discrimination against real capped
-# situations is unconfirmed. A missing `cin` counts as uncapped, so sources
-# without it (Open-Meteo) keep the pre-CIN, CAPE-only behaviour.
+# situations is unconfirmed. A missing `cin` counts as uncapped, so an hour
+# AROME leaves blank degrades to the pre-CIN, CAPE-only behaviour.
 CAP_CIN_JKG = 50.0
 PRECIP_MIN_MM = 0.1
 POURING_MM_PER_H = 4.0
@@ -144,90 +143,11 @@ HOURLY_LOOKBACK_HOURS = 1
 # hourly steps, so an N-hour horizon spans the in-progress hour plus N more.
 OUTLOOK_SHORT_HORIZON_HOURS = 1
 OUTLOOK_LONG_HORIZON_HOURS = 12
-# Hours the outlook asks Open-Meteo for. Larger than OPENMETEO_MAX_HOURS,
-# because that API counts forecast days from local midnight: 48 h requested at
-# 20:00 leaves only ~28 h ahead, and the outlook's "next thunderstorm" scan
-# reports an all-clear over whatever it was given. Three days keep at least
-# 48 h ahead at any time of day. The rendered horizon is measured from the
-# rows actually returned, so a short series still reports itself honestly.
-OUTLOOK_FALLBACK_HOURS = 72
-
-# --- Open-Meteo API (worldwide fallback + always-on daily forecast) ---
-
-OPENMETEO_API_BASE_URL = "https://api.open-meteo.com/v1/forecast"
-OPENMETEO_TIMEOUT = 15
-# Open-Meteo hourly fallback horizon (hours).
-OPENMETEO_MAX_HOURS = 48
-OPENMETEO_MAX_DAYS = 16
-
-# Wind comes back in m/s to stay consistent with GeoSphere.
-OPENMETEO_WIND_SPEED_UNIT = "ms"
-
-OPENMETEO_CURRENT_VARIABLES = (
-    "temperature_2m",
-    "apparent_temperature",
-    "relative_humidity_2m",
-    "dew_point_2m",
-    "precipitation",
-    "weather_code",
-    "cloud_cover",
-    "pressure_msl",
-    "wind_speed_10m",
-    "wind_direction_10m",
-    "wind_gusts_10m",
-    "is_day",
-)
-OPENMETEO_CURRENT_DAILY_VARIABLES = ("sunrise", "sunset")
-
-OPENMETEO_HOURLY_VARIABLES = (
-    "temperature_2m",
-    "relative_humidity_2m",
-    "precipitation",
-    "precipitation_probability",
-    "snowfall",
-    "weather_code",
-    "cloud_cover",
-    "wind_speed_10m",
-    "wind_direction_10m",
-    "wind_gusts_10m",
-    # Drive the storm outlook on the fallback path. Open-Meteo reports
-    # inhibition as a POSITIVE magnitude where AROME reports it negative, so
-    # the value is negated during normalization (see format.openmeteo_hourly_rows).
-    "cape",
-    "convective_inhibition",
-)
-
-OPENMETEO_DAILY_VARIABLES = (
-    "weather_code",
-    "temperature_2m_max",
-    "temperature_2m_min",
-    "apparent_temperature_max",
-    "apparent_temperature_min",
-    "precipitation_sum",
-    "snowfall_sum",
-    "precipitation_probability_max",
-    "wind_speed_10m_max",
-    "wind_gusts_10m_max",
-    "wind_direction_10m_dominant",
-    "sunrise",
-    "sunset",
-    "uv_index_max",
-)
-
-# --- Open-Meteo Air Quality API (worldwide air-quality fallback) ---
-
-OPENMETEO_AIR_QUALITY_BASE_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
-# The European AQI plus the same four pollutants WRF-Chem publishes, whose
-# uniform keys are already the Open-Meteo variable names (see
-# AIR_QUALITY_POLLUTANTS), so both source paths normalize to the same keys.
-OPENMETEO_AIR_QUALITY_VARIABLES = ("european_aqi", *CHEM_POLLUTANTS)
-# Days of hourly air quality to request; three cover today/tomorrow/in 2 days.
-OPENMETEO_AIR_QUALITY_DAYS = 3
 
 # --- European Air Quality Index ---
 
 # EEA band index (1-6) -> label. GeoSphere's `aqi` parameter is already this
-# index; Open-Meteo publishes the underlying 0-100+ numeric value instead.
+# index, so it is rendered directly with no banding step in between.
 AQI_BAND_LABELS = {
     1: "good",
     2: "fair",
@@ -236,21 +156,6 @@ AQI_BAND_LABELS = {
     5: "very poor",
     6: "extremely poor",
 }
-# Upper bounds of the published EEA numeric bands, in band order. Each band is
-# half-open — the bound belongs to the band *above* it, so an index of exactly
-# 20 is "fair", not "good". The last band is open-ended, so a value at or above
-# the final bound falls into band 6.
-AQI_NUMERIC_BAND_BOUNDS = (20.0, 40.0, 60.0, 80.0, 100.0)
-
-
-def aqi_band(value: float | None) -> int | None:
-    """Map an Open-Meteo numeric European AQI to its EEA band index (1-6)."""
-    if value is None:
-        return None
-    for index, bound in enumerate(AQI_NUMERIC_BAND_BOUNDS, start=1):
-        if value < bound:
-            return index
-    return len(AQI_NUMERIC_BAND_BOUNDS) + 1
 
 
 def aqi_label(band: int | None) -> str | None:
@@ -261,8 +166,11 @@ def aqi_label(band: int | None) -> str | None:
 
 
 # --- Shared condition vocabulary ---
-# Home Assistant condition strings, used as plain literals to keep this
-# package free of homeassistant imports.
+# The complete set of Home Assistant condition strings this server can emit,
+# spelled as plain literals to keep the package free of homeassistant imports.
+# `condition.py` returns these values inline as the branch it takes decides
+# them; the names exist so the vocabulary is declared in one place and so
+# `outlook.py` can match the lightning prefix without restating it.
 CONDITION_SUNNY = "sunny"
 CONDITION_CLEAR_NIGHT = "clear-night"
 CONDITION_PARTLYCLOUDY = "partlycloudy"
@@ -276,139 +184,3 @@ CONDITION_LIGHTNING = "lightning"
 CONDITION_LIGHTNING_RAINY = "lightning-rainy"
 CONDITION_WINDY = "windy"
 CONDITION_WINDY_VARIANT = "windy-variant"
-
-# WMO weather code (0-99) -> base HA condition. "sunny" is swapped to
-# "clear-night" by the caller using the Open-Meteo `is_day` flag. Codes not
-# emitted by Open-Meteo are mapped by their WMO 4677 present-weather meaning
-# so every integer 0-99 resolves to a valid condition.
-WMO_CONDITION_MAP: dict[int, str] = {
-    # 0-3: cloud development (Open-Meteo: 0 clear, 1 mainly clear,
-    # 2 partly cloudy, 3 overcast)
-    0: CONDITION_SUNNY,
-    1: CONDITION_SUNNY,
-    2: CONDITION_PARTLYCLOUDY,
-    3: CONDITION_CLOUDY,
-    # 4-12: haze, smoke, dust, mist
-    4: CONDITION_FOG,
-    5: CONDITION_FOG,
-    6: CONDITION_FOG,
-    7: CONDITION_WINDY,
-    8: CONDITION_WINDY,
-    9: CONDITION_WINDY,
-    10: CONDITION_FOG,
-    11: CONDITION_FOG,
-    12: CONDITION_FOG,
-    # 13-19: lightning, precipitation in sight, squalls, thunderstorm
-    13: CONDITION_LIGHTNING,
-    14: CONDITION_RAINY,
-    15: CONDITION_RAINY,
-    16: CONDITION_RAINY,
-    17: CONDITION_LIGHTNING,
-    18: CONDITION_WINDY,
-    19: CONDITION_WINDY,
-    # 20-29: recent precipitation (within the past hour)
-    20: CONDITION_RAINY,
-    21: CONDITION_RAINY,
-    22: CONDITION_SNOWY,
-    23: CONDITION_SNOWY_RAINY,
-    24: CONDITION_SNOWY_RAINY,
-    25: CONDITION_RAINY,
-    26: CONDITION_SNOWY,
-    27: CONDITION_POURING,
-    28: CONDITION_FOG,
-    29: CONDITION_LIGHTNING_RAINY,
-    # 30-39: duststorm, sandstorm, blowing/drifting snow
-    30: CONDITION_WINDY,
-    31: CONDITION_WINDY,
-    32: CONDITION_WINDY,
-    33: CONDITION_WINDY_VARIANT,
-    34: CONDITION_WINDY_VARIANT,
-    35: CONDITION_WINDY_VARIANT,
-    36: CONDITION_SNOWY,
-    37: CONDITION_SNOWY,
-    38: CONDITION_SNOWY,
-    39: CONDITION_SNOWY,
-    # 40-49: fog (Open-Meteo: 45 fog, 48 depositing rime fog)
-    40: CONDITION_FOG,
-    41: CONDITION_FOG,
-    42: CONDITION_FOG,
-    43: CONDITION_FOG,
-    44: CONDITION_FOG,
-    45: CONDITION_FOG,
-    46: CONDITION_FOG,
-    47: CONDITION_FOG,
-    48: CONDITION_FOG,
-    49: CONDITION_FOG,
-    # 50-59: drizzle (Open-Meteo: 51/53/55 drizzle, 56/57 freezing drizzle)
-    50: CONDITION_RAINY,
-    51: CONDITION_RAINY,
-    52: CONDITION_RAINY,
-    53: CONDITION_RAINY,
-    54: CONDITION_RAINY,
-    55: CONDITION_RAINY,
-    56: CONDITION_SNOWY_RAINY,
-    57: CONDITION_SNOWY_RAINY,
-    58: CONDITION_RAINY,
-    59: CONDITION_RAINY,
-    # 60-69: rain (Open-Meteo: 61/63/65 rain, 66/67 freezing rain)
-    60: CONDITION_RAINY,
-    61: CONDITION_RAINY,
-    62: CONDITION_RAINY,
-    63: CONDITION_RAINY,
-    64: CONDITION_POURING,
-    65: CONDITION_POURING,
-    66: CONDITION_SNOWY_RAINY,
-    67: CONDITION_SNOWY_RAINY,
-    68: CONDITION_SNOWY_RAINY,
-    69: CONDITION_SNOWY_RAINY,
-    # 70-79: solid precipitation (Open-Meteo: 71/73/75 snowfall,
-    # 77 snow grains)
-    70: CONDITION_SNOWY,
-    71: CONDITION_SNOWY,
-    72: CONDITION_SNOWY,
-    73: CONDITION_SNOWY,
-    74: CONDITION_SNOWY,
-    75: CONDITION_SNOWY,
-    76: CONDITION_SNOWY,
-    77: CONDITION_SNOWY,
-    78: CONDITION_SNOWY,
-    79: CONDITION_SNOWY_RAINY,
-    # 80-89: showers (Open-Meteo: 80/81/82 rain showers,
-    # 85/86 snow showers)
-    80: CONDITION_RAINY,
-    81: CONDITION_RAINY,
-    82: CONDITION_POURING,
-    83: CONDITION_SNOWY_RAINY,
-    84: CONDITION_SNOWY_RAINY,
-    85: CONDITION_SNOWY,
-    86: CONDITION_SNOWY,
-    87: CONDITION_SNOWY_RAINY,
-    88: CONDITION_SNOWY_RAINY,
-    89: CONDITION_POURING,
-    # 90-99: thunderstorm (Open-Meteo: 95 thunderstorm,
-    # 96/99 thunderstorm with hail)
-    90: CONDITION_LIGHTNING_RAINY,
-    91: CONDITION_LIGHTNING_RAINY,
-    92: CONDITION_LIGHTNING_RAINY,
-    93: CONDITION_LIGHTNING_RAINY,
-    94: CONDITION_LIGHTNING_RAINY,
-    95: CONDITION_LIGHTNING,
-    96: CONDITION_LIGHTNING_RAINY,
-    97: CONDITION_LIGHTNING_RAINY,
-    98: CONDITION_LIGHTNING_RAINY,
-    99: CONDITION_LIGHTNING_RAINY,
-}
-
-
-def wmo_to_condition(code: int | None, *, night: bool = False) -> str | None:
-    """Map an Open-Meteo WMO weather code to an HA condition string.
-
-    Returns ``clear-night`` in place of ``sunny`` when ``night`` is True.
-    Unknown / out-of-range codes return None.
-    """
-    if code is None:
-        return None
-    condition = WMO_CONDITION_MAP.get(int(code))
-    if condition == CONDITION_SUNNY and night:
-        return CONDITION_CLEAR_NIGHT
-    return condition

@@ -32,7 +32,7 @@ from geosphere_mcp_server.const import CAP_CIN_JKG, THUNDER_CAPE_JKG
         (THUNDER_CAPE_JKG - 1, 0.0, False),
         (THUNDER_CAPE_JKG, 0.0, True),
         # A missing cin counts as uncapped, so the gate cannot suppress it --
-        # this is the Open-Meteo path, whose endpoint has no inhibition.
+        # an hour AROME left blank keeps the pre-CIN, CAPE-only behaviour.
         (1500.0, None, True),
         # Weak inhibition passes, a strong lid suppresses.
         (1500.0, -10.0, True),

@@ -6,21 +6,29 @@
 [![Python](https://img.shields.io/pypi/pyversions/geosphere-mcp-server.svg)](https://pypi.org/project/geosphere-mcp-server/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-MCP server for weather: current conditions, hourly forecasts, multi-day outlooks, storm outlooks, and air quality for **any location worldwide**, via the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for weather: current conditions, hourly forecasts, storm outlooks, and air quality for **Austria and the Alpine region**, via the [Model Context Protocol](https://modelcontextprotocol.io).
 
-In **Austria and the Alpine region** it serves high-resolution [GeoSphere Austria](https://www.geosphere.at) data — the AROME numerical forecast, the INCA analysis/nowcast, and the C-LAEF ensemble for precipitation probability. **Everywhere else** it falls back automatically to [Open-Meteo](https://open-meteo.com), so it is a drop-in worldwide weather source. Every response states which source produced it.
+It serves high-resolution [GeoSphere Austria](https://www.geosphere.at) data — the AROME numerical forecast, the INCA analysis/nowcast, the C-LAEF ensemble for precipitation probability, and the WRF-Chem air-quality forecast. There is **no worldwide fallback**: a point outside the AROME grid returns an out-of-coverage notice, so pair this with a global weather source if you need one. Every response states which datasets produced it.
 
 Output is compact emoji-markdown with metric units — built for smart-home and voice-assistant LLM pipelines where a terse, readable answer beats a JSON blob. Weather conditions are derived from physical parameters and reported with the Home Assistant condition vocabulary (`sunny`, `partlycloudy`, `rainy`, `snowy`, …).
 
 ## Coverage
 
-| Where | `get_current_weather` | `get_hourly_forecast` | `get_daily_forecast` | `get_storm_outlook` | `get_air_quality` |
-|-------|-----------------------|-----------------------|----------------------|---------------------|-------------------|
-| Austria | GeoSphere INCA + nowcast + AROME | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) | GeoSphere AROME, CAPE gated by CIN | GeoSphere WRF-Chem (3 km) |
-| Alps (non-AT) | GeoSphere AROME only | GeoSphere AROME (≤60 h) + C-LAEF probability | Open-Meteo (1–16 days) | GeoSphere AROME, CAPE gated by CIN | GeoSphere WRF-Chem (3 km) |
-| Rest of world | Open-Meteo | Open-Meteo (≤48 h) | Open-Meteo (1–16 days) | Open-Meteo, CAPE gated by CIN | Open-Meteo (CAMS) |
+| Where | `get_current_weather` | `get_hourly_forecast` | `get_storm_outlook` | `get_air_quality` |
+|-------|-----------------------|-----------------------|---------------------|-------------------|
+| Austria | INCA + nowcast + AROME | AROME (≤60 h) + C-LAEF probability | AROME, CAPE gated by CIN | WRF-Chem (3 km) |
+| Alps (non-AT) | AROME only | AROME (≤60 h) + C-LAEF probability | AROME, CAPE gated by CIN | WRF-Chem (3 km) |
+| Rest of world | *not served* | *not served* | *not served* | *not served* |
 
-Coverage is detected automatically: the server tries GeoSphere first and falls back to Open-Meteo when the point is outside the AROME grid — no bounding box to configure. The daily forecast always uses Open-Meteo (GeoSphere publishes no forecasts beyond ~60 h).
+Coverage is decided by the API, not by a bounding box you configure: GeoSphere answers HTTP 400 for a point outside the AROME grid, and the server renders that as
+
+```
+⚠️ Outside coverage — this server only serves Austria and the Alpine region (the GeoSphere AROME grid).
+```
+
+That line is deliberately distinct from the transient failures (`⚠️ Timeout…`, `⚠️ No weather data available`): being outside coverage is a permanent property of the location, so retrying will never help.
+
+**There is no multi-day forecast.** GeoSphere publishes nothing beyond AROME's ~60 h, so the longest answer this server can give is roughly two and a half days of hourly rows.
 
 ## Installation
 
@@ -68,7 +76,7 @@ It is a standard stdio MCP server, so it runs anywhere an stdio MCP server can b
 
 ### `get_current_weather`
 
-Current conditions for a point. GeoSphere (INCA/AROME) inside coverage, Open-Meteo elsewhere.
+Current conditions for a point, from INCA, the 15-minute nowcast, and AROME.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -89,32 +97,15 @@ Current conditions for a point. GeoSphere (INCA/AROME) inside coverage, Open-Met
 📡 Source: GeoSphere (INCA + nowcast + AROME) — observed 15:20
 ```
 
-Outside GeoSphere coverage the same tool answers from Open-Meteo (sunrise/sunset and the point's own timezone included):
-
-```
-# Current Weather at 38.7223, -9.1393
-
-🌡️ Temperature: 26.1°C (feels like 27.0°C)
-🌤️ Condition: cloudy
-💧 Humidity: 58%
-💨 Wind: 4.5 m/s from 315° (gusts 9 m/s)
-📊 Pressure: 1014 hPa
-☁️ Cloud cover: 90%
-🌅 Sunrise: 06:24
-🌇 Sunset: 20:52
-🕐 Timezone: Europe/Lisbon (WEST)
-📡 Source: Open-Meteo — observed 14:00
-```
-
 ### `get_hourly_forecast`
 
-Hour-by-hour forecast. GeoSphere AROME (with C-LAEF precipitation probability) up to ~60 h inside coverage; Open-Meteo up to 48 h elsewhere.
+Hour-by-hour forecast from AROME, with C-LAEF precipitation probability, up to ~60 h.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
 | `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
-| `hours` | int | 24 | Forecast hours (clamped to 1–60 on GeoSphere, 1–48 on the fallback) |
+| `hours` | int | 24 | Forecast hours (clamped to 1–60) |
 | `start` | string | now | Optional ISO 8601 start (e.g. `2026-07-22T15:00`); forecast begins at/after this instant |
 
 ```
@@ -128,31 +119,7 @@ Wed 2026-07-22
   17:00: 22.5°C — cloudy, wind 3 m/s
 ```
 
-The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note suggesting `get_daily_forecast` for days further ahead. Dry hours omit the precipitation and probability parts.
-
-### `get_daily_forecast`
-
-Multi-day outlook, always from Open-Meteo (worldwide, including Austria).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
-| `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
-| `days` | int | 7 | Forecast days from today (clamped to 1–16). Ignored when `start_date`/`end_date` are given |
-| `start_date` | str | — | Optional first forecast day, ISO `YYYY-MM-DD` |
-| `end_date` | str | — | Optional last forecast day (inclusive), ISO `YYYY-MM-DD`; defaults to `start_date`. Span capped at 16 days |
-
-Request either a count of days from today (`days`) or an explicit calendar range (`start_date`/`end_date`). The range is the reliable way to answer a named period — for "the weekend" or "next Tuesday", the caller resolves today's date, then passes the exact dates rather than converting the period into a day count.
-
-```
-# 3-Day Forecast for 48.2208, 16.3738
-
-Source: Open-Meteo (Europe/Vienna)
-
-Wed 2026-07-22: 16–27°C — partlycloudy, wind up to 9 m/s
-Thu 2026-07-23: 15–22°C — rainy, 4.2 mm (80% chance), wind up to 15 m/s
-Fri 2026-07-24: 14–26°C — sunny, wind up to 8 m/s
-```
+The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note naming where the horizon ends — there is nothing further ahead to reach for. Dry hours omit the precipitation and probability parts.
 
 ### `get_storm_outlook`
 
@@ -180,9 +147,9 @@ Two behaviours are worth knowing before you build on this:
 
 - **Horizons round up to whole hours.** The window starts at the top of the current hour, so the "next 1 h" figure covers the hour already under way *plus* the next one, and can report an event up to ~2 h out. Compare the returned timestamps yourself if you need a strict 60-minute answer.
 - **`Next thunderstorm` can be in the past**, by up to 59 minutes, when the storm hour is the one already under way. That means a storm is in progress — clamp a negative lead time to zero rather than assuming the stamp is in the future.
-- **An all-clear names its horizon** (`none in the next 54 h`). That horizon is not the same on both paths: AROME runs ~60 h, while the Open-Meteo fallback counts forecast days from local midnight, so it is asked for three days and reports whatever that leaves ahead — at least 48 h. It is not an all-clear beyond the stated span.
+- **An all-clear names its horizon** (`none in the next 54 h`). AROME nominally runs ~60 h, but a stale or truncated run reaches less far, so the span is measured from the rows actually returned. It is not an all-clear beyond the stated span.
 
-A thunderstorm hour is one whose derived condition is `lightning`/`lightning-rainy`, *or* one where CAPE ≥ 1000 J/kg with weak inhibition **and** precipitation is forecast — the second branch catches thundersnow and hours with missing cloud data, and requires precipitation so that a dry high-CAPE afternoon does not raise a signal. `Thunderstorm expected` and `Next thunderstorm` both report `unknown` rather than a confident answer when the forecast holds no usable hour. Both sources supply convective inhibition, so the gate works on either path — Open-Meteo reports it as a positive magnitude and the server normalizes the sign.
+A thunderstorm hour is one whose derived condition is `lightning`/`lightning-rainy`, *or* one where CAPE ≥ 1000 J/kg with weak inhibition **and** precipitation is forecast — the second branch catches thundersnow and hours with missing cloud data, and requires precipitation so that a dry high-CAPE afternoon does not raise a signal. `Thunderstorm expected` and `Next thunderstorm` both report `unknown` rather than a confident answer when the forecast holds no usable hour.
 
 ### `get_air_quality`
 
@@ -202,18 +169,19 @@ Pollutant concentrations now, plus the European Air Quality Index for today, tom
 📡 Source: GeoSphere (WRF-Chem + daily AQI, 3 km)
 ```
 
-The AQI is always reported as its 1–6 EEA band (1 good … 6 extremely poor) so both sources read alike. GeoSphere publishes that band directly; Open-Meteo publishes a 0–100+ numeric index instead, which is banded and rendered as `3 (moderate, index 44)`. Open-Meteo also has no daily index, so each day there is the maximum of that day's hourly values. Both sources are **model forecasts, not station measurements** — expect them to track a nearby monitoring station without matching it.
+The AQI is reported as its 1–6 EEA band (1 good … 6 extremely poor), which is what GeoSphere publishes — there is no underlying numeric index to show alongside it. These are **model forecasts, not station measurements** — expect them to track a nearby monitoring station without matching it.
+
+A point inside the 3 km grid can still come back empty when a WRF-Chem run is stale or incomplete; the response then says `No air-quality data available for this location` and still names the source, which is a different answer from being out of coverage.
 
 ## Data sources & attribution
 
 - **GeoSphere Austria Dataset API** — AROME forecast, INCA analysis/nowcast, C-LAEF ensemble, WRF-Chem air quality. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © GeoSphere Austria.
-- **Open-Meteo** — worldwide forecast and air-quality (CAMS) APIs. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © Open-Meteo.
 
-Both APIs are keyless and intended for **non-commercial** use. When you redistribute their data, keep the attribution.
+The API is keyless and intended for **non-commercial** use. When you redistribute its data, keep the attribution.
 
 ## Rate limits
 
-The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Each GeoSphere-path call issues a small burst of concurrent requests (three for current weather, two for hourly and air quality, one for the storm outlook); on an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice — `get_daily_forecast` keeps working through Open-Meteo in that case. Open-Meteo has its own generous free-tier limits.
+The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Each call issues a small burst of concurrent requests (three for current weather, two for hourly and air quality, one for the storm outlook); on an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice.
 
 ## Development
 
@@ -228,7 +196,7 @@ ruff format .
 # Run unit tests
 pytest -m "not integration"
 
-# Run integration tests (hits the live GeoSphere + Open-Meteo APIs)
+# Run integration tests (hits the live GeoSphere API)
 pytest -m integration
 ```
 

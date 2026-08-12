@@ -1,10 +1,10 @@
-"""Integration tests against the live GeoSphere and Open-Meteo APIs.
+"""Integration tests against the live GeoSphere API.
 
 Marked ``integration`` and excluded from CI (``-m "not integration"``); run
 locally with ``pytest -m integration``. Three coverage classes are exercised:
 Vienna (full GeoSphere: INCA + nowcast + AROME), Munich (AROME domain but
-outside Austria: degraded GeoSphere), and Lisbon (outside the AROME domain:
-Open-Meteo fallback).
+outside Austria: degraded GeoSphere), and Lisbon (outside the AROME domain,
+and so outside what this server serves at all).
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 
 from geosphere_mcp_server.server import (
+    OUT_OF_DOMAIN_MESSAGE,
     get_air_quality,
     get_current_weather,
-    get_daily_forecast,
     get_hourly_forecast,
     get_storm_outlook,
 )
@@ -63,13 +63,6 @@ async def test_air_quality_vienna_uses_geosphere() -> None:
     assert "WRF-Chem" in result
 
 
-@pytest.mark.asyncio
-async def test_daily_forecast_vienna() -> None:
-    result = await get_daily_forecast(*VIENNA, days=5)
-    _assert_rendered(result)
-    assert "Open-Meteo" in result
-
-
 # --- Munich: AROME domain, outside Austria (degraded GeoSphere) ---
 
 
@@ -86,39 +79,19 @@ async def test_hourly_forecast_munich() -> None:
     _assert_rendered(result)
 
 
-# --- Lisbon: outside the AROME domain (Open-Meteo fallback) ---
+# --- Lisbon: outside the AROME domain (not served) ---
+#
+# These pin the live API's out-of-domain signal, which is the whole basis of
+# the coverage message: GeoSphere answers HTTP 400 rather than an empty
+# series, and only the client's mapping of that to GeoSphereOutOfDomainError
+# keeps an uncovered point from reading as a generic failure.
 
 
 @pytest.mark.asyncio
-async def test_current_weather_lisbon_falls_back_to_openmeteo() -> None:
-    result = await get_current_weather(*LISBON)
-    _assert_rendered(result)
-    assert "Open-Meteo" in result
-
-
-@pytest.mark.asyncio
-async def test_hourly_forecast_lisbon_falls_back_to_openmeteo() -> None:
-    result = await get_hourly_forecast(*LISBON, hours=6)
-    _assert_rendered(result)
-    assert "Open-Meteo" in result
-
-
-@pytest.mark.asyncio
-async def test_storm_outlook_lisbon_falls_back_to_openmeteo() -> None:
-    result = await get_storm_outlook(*LISBON)
-    _assert_rendered(result)
-    assert "Open-Meteo" in result
-
-
-@pytest.mark.asyncio
-async def test_air_quality_lisbon_falls_back_to_openmeteo() -> None:
-    result = await get_air_quality(*LISBON)
-    _assert_rendered(result)
-    assert "Open-Meteo (CAMS)" in result
-
-
-@pytest.mark.asyncio
-async def test_daily_forecast_lisbon() -> None:
-    result = await get_daily_forecast(*LISBON, days=3)
-    _assert_rendered(result)
-    assert "Open-Meteo" in result
+@pytest.mark.parametrize(
+    "tool",
+    [get_current_weather, get_hourly_forecast, get_storm_outlook, get_air_quality],
+    ids=["current", "hourly", "outlook", "air_quality"],
+)
+async def test_lisbon_is_out_of_coverage(tool) -> None:
+    assert await tool(*LISBON) == OUT_OF_DOMAIN_MESSAGE

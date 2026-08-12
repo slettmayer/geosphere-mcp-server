@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from geosphere_mcp_server import weather
-from geosphere_mcp_server.const import WMO_CONDITION_MAP
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereResponse,
@@ -117,30 +116,6 @@ def test_nearest_index_can_select_a_future_stamp() -> None:
     stamps = _ts((15, 15), (15, 30), (15, 45))
     when = datetime(2026, 7, 15, 15, 38, tzinfo=UTC)
     assert _response("nowcast", stamps, {}).nearest_index(when) == 2
-
-
-# --- WMO map completeness ---
-
-
-def test_wmo_condition_map_covers_0_to_99() -> None:
-    """Every integer code 0-99 maps to a valid HA condition string."""
-    valid = {
-        "sunny",
-        "clear-night",
-        "partlycloudy",
-        "cloudy",
-        "fog",
-        "rainy",
-        "pouring",
-        "snowy",
-        "snowy-rainy",
-        "lightning",
-        "lightning-rainy",
-        "windy",
-        "windy-variant",
-    }
-    assert sorted(WMO_CONDITION_MAP) == list(range(100))
-    assert all(v in valid for v in WMO_CONDITION_MAP.values())
 
 
 # --- assemble_hourly_forecast ---

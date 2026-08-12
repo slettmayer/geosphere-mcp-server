@@ -149,7 +149,7 @@ def test_capped_cape_with_precipitation_is_not_a_storm() -> None:
 
 
 def test_missing_cin_key_reads_as_uncapped() -> None:
-    """Open-Meteo rows carry no inhibition at all — thunder gates on CAPE."""
+    """A row missing the key entirely — not merely None — gates on CAPE alone."""
     row = {
         "time": datetime(2026, 7, 15, 16, 0, tzinfo=UTC),
         "condition": None,

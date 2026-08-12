@@ -5,10 +5,10 @@ gusts within a horizon, and when thunder is next expected. Deliberately
 threshold-free — what counts as "too windy" is the caller's policy, not this
 server's.
 
-Operates on the row dicts produced by :func:`weather.assemble_hourly_forecast`
-and :func:`format.normalize_hourly_openmeteo`, so one implementation serves
-both source paths. Rows are read through ``.get``: an Open-Meteo row carries no
-``cin_jkg`` at all, which reads as "uncapped" (see :func:`condition.is_thunder`).
+Operates on the row dicts produced by :func:`weather.assemble_hourly_forecast`.
+Rows are read through ``.get`` rather than indexed, so an hour AROME left a
+field blank is judged on what it does carry — a missing ``cin_jkg`` reads as
+"uncapped" (see :func:`condition.is_thunder`).
 
 Gust values are returned in m/s, matching the rows themselves.
 
@@ -37,13 +37,12 @@ def _from(now: datetime) -> datetime:
     """Exclusive lower bound selecting the hour already under way, and later.
 
     A row counts once its hour has not yet ended: ``row + _STEP > now``, i.e.
-    ``row > now - _STEP``. Deliberately *not* ``now.replace(minute=0)`` — that
-    assumes rows are stamped on whole UTC hours, which is only true of the
-    GeoSphere path. Open-Meteo stamps rows in the point's local hour, so after
-    the conversion to UTC a zone offset by :30 or :45 (India, Iran, Nepal,
-    Myanmar, central Australia, the Chatham Islands) puts every row half an
-    hour off the UTC grid. Flooring then lands *above* the in-progress row and
-    drops it — silently turning a storm under way into an all-clear.
+    ``row > now - _STEP``. Deliberately *not* ``now.replace(minute=0)``: that
+    form only works while every stamp sits on a whole UTC hour, and it fails
+    in the one direction that matters — landing *above* an in-progress row
+    stamped off the hour grid and dropping it, silently turning a storm under
+    way into an all-clear. AROME does stamp on whole UTC hours today, so this
+    costs nothing; it just does not make the assumption load-bearing.
     """
     return now - _STEP
 
@@ -65,9 +64,10 @@ def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
     ``rows`` and ``now`` must share a **fixed-offset** zone — in practice both
     UTC. ``now + timedelta`` is wall-clock arithmetic even on aware datetimes,
     so passing times in a DST-observing zone would make the horizon 11 or 13
-    real hours across a transition. Callers whose source is local (Open-Meteo)
-    convert to UTC first and localize only what they render. The stamps need
-    not align with the UTC hour grid, though — see :func:`_from`.
+    real hours across a transition. GeoSphere stamps are UTC and the derivation
+    runs on them directly; only the reported timestamps are localized to Vienna
+    for display. The stamps need not align with the UTC hour grid — see
+    :func:`_from`.
     """
     start = _from(now)
     end = now + timedelta(hours=hours)
@@ -84,10 +84,9 @@ def _is_lightning(row: dict[str, Any]) -> bool:
     Two branches, because the derived condition alone misses real storms:
 
     a) the derived condition starts with "lightning" — the primary signal, and
-       already a *considered* thunder verdict: on the GeoSphere path
-       `derive_condition` only reaches it with cloud cover at or above
-       `WINDY_CLOUD_TCC_PCT` on top of the CAPE/CIN gate, and on the
-       Open-Meteo path it comes from the model's own WMO thunderstorm code; or
+       already a *considered* thunder verdict: `derive_condition` only reaches
+       it with cloud cover at or above `WINDY_CLOUD_TCC_PCT` on top of the
+       CAPE/CIN gate; or
     b) the raw CAPE/CIN thunder predicate holds *and* the hour is forecast to
        produce precipitation. `derive_condition` returns `snowy` /
        `snowy-rainy` before it ever looks at thunder (thundersnow) and returns
@@ -198,9 +197,9 @@ def scan_thunderstorm(
 def horizon_hours(rows: list[dict[str, Any]], now: datetime) -> int | None:
     """Hours of forecast left ahead of ``now``, or None for an empty series.
 
-    What an all-clear actually covers: the two source paths hand the outlook
-    series of quite different lengths, so "none in the forecast horizon" is
-    only honest next to the horizon it was scanned over.
+    What an all-clear actually covers. AROME nominally runs ~60 h, but a stale
+    or truncated run hands over fewer hours, so "none in the forecast horizon"
+    is only honest next to the horizon it was actually scanned over.
     """
     times = [row["time"] for row in rows if row.get("time") is not None]
     if not times:
