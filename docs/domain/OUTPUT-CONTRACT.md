@@ -45,7 +45,7 @@ opened.
 The only renderer that uses per-field emoji. Fields are omitted when the value is unavailable:
 
 `🌡️ Temperature` (with an appended "feels like" suffix), `🌤️ Condition`, `💧 Humidity`, `💨 Wind`
-(speed, bearing, gust), `🌧️ Precipitation (last hour)`, `📊 Pressure`, `☁️ Cloud cover`, `🌅 Sunrise`,
+(speed, bearing, gust), `🌧️ Precipitation (last hour)`, `📊 Pressure`, `☁️ Cloud cover`,
 `🕐 Timezone`, and a closing `📡 Source: ...` line. There are no sunrise/sunset lines — no GeoSphere
 dataset publishes them.
 
@@ -122,13 +122,17 @@ rate-limit retry policy.
 |-----------|------|
 | Rate limit, retry-after known | `⚠️ GeoSphere rate limit exceeded (retry in {N}s)` |
 | Rate limit, no retry-after | `⚠️ GeoSphere rate limit exceeded (retry shortly)` |
-| Point outside the AROME grid | `⚠️ Outside coverage — this server only serves Austria and the Alpine region (the GeoSphere AROME grid).` |
+| Point outside the queried dataset's grid | `⚠️ Outside coverage — this server only serves Austria and the Alpine region.` |
 | Timeout against the upstream API | `⚠️ Timeout fetching weather data` |
 | Anything else, including non-timeout network failures | `⚠️ No weather data available` |
 
 Every line but the coverage one describes a **transient** condition worth retrying. The coverage line
 describes the location, and no amount of retrying will change it — which is why it is worded and handled
 separately (`server.OUT_OF_DOMAIN_MESSAGE`) rather than folded into the generic failure line.
+
+It names **no specific grid**, deliberately. The forecast tools query AROME (2.5 km) while
+`get_air_quality` queries WRF-Chem (3 km), so a point can be inside one and outside the other; naming
+AROME would tell an air-quality caller its location is unservable when the other three tools answer it.
 
 ## Dependencies
 - `server.py` owns argument parsing, validation, and clamping

@@ -34,12 +34,17 @@ _LOGGER = logging.getLogger(__name__)
 # no longer than this; otherwise surface the limit to the caller immediately.
 RATE_LIMIT_RETRY_MAX_S = 5.0
 
-# Returned verbatim for a point outside the AROME grid. Phrased so a caller
-# learns the location is unservable rather than that the request failed —
-# retrying, or asking a different tool here, will not help.
+# Returned verbatim for a point outside the grid of whichever dataset the tool
+# asked for. Phrased so a caller learns the location is unservable rather than
+# that the request failed — retrying will not help.
+#
+# Deliberately does NOT name a grid. The tools do not all query the same one:
+# the three forecast tools go to AROME (2.5 km) while `get_air_quality` goes to
+# WRF-Chem (3 km), so a point can be inside one and outside the other. Naming
+# AROME here would tell an air-quality caller its location is unservable when
+# the other three tools answer it fine.
 OUT_OF_DOMAIN_MESSAGE = (
-    "⚠️ Outside coverage — this server only serves Austria and the "
-    "Alpine region (the GeoSphere AROME grid)."
+    "⚠️ Outside coverage — this server only serves Austria and the Alpine region."
 )
 
 mcp = MCPServer(

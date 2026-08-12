@@ -10,8 +10,8 @@ version being cut, so you never rename that heading by hand. See
 - Removed: **breaking.** The Open-Meteo fallback is gone, and with it `get_daily_forecast`. This server
   now serves **only** what GeoSphere Austria covers -- Austria and the Alpine region, out to AROME's
   ~60 h horizon. A point outside the AROME grid returns
-  `⚠️ Outside coverage — this server only serves Austria and the Alpine region (the GeoSphere AROME
-  grid).` rather than a second-rate answer from somewhere else, and that line is deliberately distinct
+  `⚠️ Outside coverage — this server only serves Austria and the Alpine region.` rather than a
+  second-rate answer from somewhere else, and that line is deliberately distinct
   from the retryable failure lines: being outside coverage is a property of the location, so retrying
   will never help. `get_daily_forecast` had no GeoSphere source to fall back on -- no dataset reaches
   past ~60 h -- so it is removed outright rather than reduced to two and a half days. Callers that need

@@ -20,13 +20,13 @@ Output is compact emoji-markdown with metric units — built for smart-home and 
 | Alps (non-AT) | AROME only | AROME (≤60 h) + C-LAEF probability | AROME, CAPE gated by CIN | WRF-Chem (3 km) |
 | Rest of world | *not served* | *not served* | *not served* | *not served* |
 
-Coverage is decided by the API, not by a bounding box you configure: GeoSphere answers HTTP 400 for a point outside the AROME grid, and the server renders that as
+Coverage is decided by the API, not by a bounding box you configure: GeoSphere answers HTTP 400 for a point outside the grid, and the server renders that as
 
 ```
-⚠️ Outside coverage — this server only serves Austria and the Alpine region (the GeoSphere AROME grid).
+⚠️ Outside coverage — this server only serves Austria and the Alpine region.
 ```
 
-That line is deliberately distinct from the transient failures (`⚠️ Timeout…`, `⚠️ No weather data available`): being outside coverage is a permanent property of the location, so retrying will never help.
+That line is deliberately distinct from the transient failures (`⚠️ Timeout…`, `⚠️ No weather data available`): being outside coverage is a permanent property of the location, so retrying will never help. It names no grid on purpose — the forecast tools query AROME (2.5 km) and `get_air_quality` queries WRF-Chem (3 km), so a point can be inside one and outside the other.
 
 **There is no multi-day forecast.** GeoSphere publishes nothing beyond AROME's ~60 h, so the longest answer this server can give is roughly two and a half days of hourly rows.
 

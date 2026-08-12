@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from geosphere_mcp_server import const
 from geosphere_mcp_server.condition import (
     apparent_temperature,
     derive_condition,
@@ -313,3 +314,59 @@ def test_dew_point_from_t_rh() -> None:
     assert dew_point_from_t_rh(None, 50.0) is None
     assert dew_point_from_t_rh(20.0, None) is None
     assert dew_point_from_t_rh(20.0, 0.0) is None
+
+
+# --- Condition vocabulary ---
+
+
+def _declared_vocabulary() -> set[str]:
+    """Every ``CONDITION_*`` value declared in const.py."""
+    return {
+        value
+        for name, value in vars(const).items()
+        if name.startswith("CONDITION_") and isinstance(value, str)
+    }
+
+
+def test_derivation_emits_exactly_the_declared_vocabulary() -> None:
+    """`condition.py` returns these strings as literals; nothing else pins them.
+
+    `const.py` declares the vocabulary, but the derivation spells each value
+    inline rather than importing the constant — so a rename of, say,
+    `CONDITION_SUNNY` (to follow an upstream Home Assistant rename) would leave
+    the emitted condition untouched, and the declaration would silently stop
+    describing what the server actually returns.
+
+    Asserted in both directions on purpose. Subset alone would miss a rename;
+    superset alone would miss a constant no branch can reach.
+    """
+    emitted = {
+        # derive_condition, one case per branch in precedence order.
+        derive_condition(1.0, 0.5, 50.0, 0.0, 0.0, 0.0, False),  # snowy-rainy
+        derive_condition(0.5, 0.5, 50.0, 0.0, 0.0, 0.0, False),  # snowy
+        derive_condition(1.0, 0.0, 50.0, 2000.0, 0.0, 0.0, False),  # lightning-rainy
+        derive_condition(5.0, 0.0, 50.0, 0.0, 0.0, 0.0, False),  # pouring
+        derive_condition(1.0, 0.0, 50.0, 0.0, 0.0, 0.0, False),  # rainy
+        derive_condition(0.0, 0.0, 90.0, 2000.0, 0.0, 0.0, False),  # lightning
+        derive_condition(0.0, 0.0, 90.0, 0.0, 0.0, 20.0, False),  # windy-variant
+        derive_condition(0.0, 0.0, 10.0, 0.0, 0.0, 20.0, False),  # windy
+        derive_condition(0.0, 0.0, 5.0, 0.0, 0.0, 0.0, True),  # clear-night
+        derive_condition(0.0, 0.0, 5.0, 0.0, 0.0, 0.0, False),  # sunny
+        derive_condition(0.0, 0.0, 40.0, 0.0, 0.0, 0.0, False),  # partlycloudy
+        derive_condition(0.0, 0.0, 90.0, 0.0, 0.0, 0.0, False),  # cloudy
+        # derive_current_condition adds the fog branch.
+        derive_current_condition(
+            precipitation_type=const.PT_NO_PRECIPITATION,
+            precipitation_rate_mm_h=0.0,
+            temperature=8.0,
+            humidity=99.0,
+            wind_speed=0.5,
+            cloud_coverage=95.0,
+            cape=None,
+            cin=None,
+            gust_speed=0.0,
+            night=False,
+        ),  # fog
+    }
+    assert None not in emitted
+    assert emitted == _declared_vocabulary()

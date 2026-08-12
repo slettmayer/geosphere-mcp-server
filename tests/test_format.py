@@ -169,6 +169,22 @@ def test_render_hourly_geosphere_horizon_note() -> None:
     assert "AROME forecast horizon ends 2026-07-15 15:00" in out
 
 
+def test_render_hourly_geosphere_empty_window() -> None:
+    """A `start` past the AROME horizon leaves nothing to render.
+
+    Reachable on the only path there is, so the branch needs its own case: the
+    hourly tool clamps `hours` but not `start`, and a series filtered down to
+    nothing must say so rather than render an empty forecast body.
+    """
+    data = normalize_hourly_geosphere(
+        {**SAMPLE_HOURLY_GEOSPHERE, "hourly": []}, LAT, LON, 24
+    )
+    out = render_hourly(data)
+    assert "No forecast hours available for the requested window." in out
+    # No horizon note either: nothing came back to name an end for.
+    assert "horizon" not in out
+
+
 def test_render_hourly_geosphere_no_note_when_satisfied() -> None:
     data = normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 2)
     out = render_hourly(data)
@@ -312,9 +328,6 @@ SAMPLE_AIR_QUALITY_GEOSPHERE = {
     "aqi_band_today": 2,
     "aqi_band_tomorrow": 3,
     "aqi_band_in_2_days": None,
-    "aqi_value_today": None,
-    "aqi_value_tomorrow": None,
-    "aqi_value_in_2_days": None,
     "sources": ["WRF-Chem", "daily AQI"],
 }
 
