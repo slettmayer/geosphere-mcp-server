@@ -7,6 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.4.0 - 2026-08-12
+
 - Removed: **breaking.** The Open-Meteo fallback is gone, and with it `get_daily_forecast`. This server
   now serves **only** what GeoSphere Austria covers -- Austria and the Alpine region, out to AROME's
   ~60 h horizon. A point outside the AROME grid returns
