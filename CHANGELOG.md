@@ -7,6 +7,10 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.4.1 - 2026-08-22
+
+- Build: bump ruff in the python-dependencies group.
+
 ## 0.4.0 - 2026-08-12
 
 - Removed: **breaking.** The Open-Meteo fallback is gone, and with it `get_daily_forecast`. This server
