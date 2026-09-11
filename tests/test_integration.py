@@ -40,6 +40,14 @@ async def test_current_weather_vienna_uses_geosphere() -> None:
     _assert_rendered(result)
     assert "GeoSphere" in result
     assert "Temperature" in result
+    # The source line names every contributing dataset, so this pins the
+    # nowcast as actually present. Without it a rejected request degrades
+    # silently -- `_optional_response` swallows any GeoSphereApiError -- and
+    # every assertion above still passes while the gust, the precipitation
+    # type and `is_precipitating` quietly vanish. The nowcast call carries an
+    # anchored `start`; this is what fails loudly if the API ever stops
+    # honouring one reaching past the serving run's t0.
+    assert "nowcast" in result, result
 
 
 @pytest.mark.asyncio

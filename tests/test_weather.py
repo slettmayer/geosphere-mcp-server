@@ -477,6 +477,25 @@ def test_merge_dry_bucket_does_not_hide_the_cell_that_just_passed() -> None:
     assert merged["condition"] == "lightning-rainy"
 
 
+def test_merge_rate_lookback_reaches_the_edge_of_its_window() -> None:
+    """The peak spans the full RATE_LOOKBACK, inclusive of its far edge.
+
+    Only reachable since the nowcast request gained an anchored `start`:
+    unbounded, the series held a single bucket and this window collapsed to the
+    matched one. 15:00 is exactly RATE_LOOKBACK behind NOW, so its 2 mm bucket
+    (8 mm/h) still drives the downpour override.
+    """
+    merged = merge_current_conditions(
+        _storm_nowcast([2.0, 0.0, 0.0, 0.0]),
+        None,
+        _capped_storm_arome(),
+        48.219,
+        16.362,
+        NOW,
+    )
+    assert merged["condition"] == "lightning-rainy"
+
+
 def test_merge_a_shower_that_already_ended_does_not_derive_a_storm() -> None:
     """Rain that stopped must not keep driving the condition.
 
