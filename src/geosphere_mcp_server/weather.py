@@ -387,10 +387,14 @@ def merge_current_conditions(
     # -- see the constant.
     #
     # `precipitation_1h_mm` keeps reporting the accumulation regardless: it is
-    # a real measurement of a past hour. Note it is NOT dated by `observed_at`,
+    # a real measurement of a past hour. It is NOT dated by `observed_at`,
     # which anchors to whichever source supplied the temperature (see below)
     # and can therefore be newer than the `RR` stamp -- the two are read from
-    # the same slice but not the same row.
+    # the same slice but not the same row. `inca_latest` scans each parameter
+    # back independently, so an analysis carrying `T2M` but no `RR` pairs a
+    # current `observed_at` with an hours-old total. The stamp travels with
+    # the value as `precipitation_1h_at` and the renderer names the hour it
+    # covers, rather than letting the source line's time speak for it.
     rr_1h_is_current = (
         rr_1h_time is not None
         and (now - rr_1h_time).total_seconds() <= INCA_RR_MAX_AGE_SECONDS
@@ -475,6 +479,9 @@ def merge_current_conditions(
         ),
         "wind_gust_ms": gust,
         "precipitation_1h_mm": rr_1h,
+        # The hour this total covers ends at its stamp: `RR` is the
+        # accumulation over the hour it is stamped for.
+        "precipitation_1h_at": rr_1h_time if rr_1h is not None else None,
         "precipitation_type": precipitation_type,
         "is_precipitating": is_precipitating(precipitation_type, nowcast_rate_mm_h),
         "cloud_cover_pct": cloud,

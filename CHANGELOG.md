@@ -7,6 +7,14 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Changed: `get_current_weather` dates the precipitation line by its own stamp -- `🌧️ Precipitation
+  (hour to 14:00): 0.6 mm` -- instead of labelling it "last hour". INCA's `RR` is the accumulation over
+  the hour ending at its stamp, and an INCA slice's parameters are scanned back independently, so a slice
+  carrying a current temperature and an hours-old `RR` paired a stale total with a fresh
+  `— observed HH:MM`. A total with no stamp behind it keeps the undated wording.
+- Removed: the unreferenced `INCA_MAX_AGE_SECONDS` constant, a leftover from the `ha-geosphere-next` port
+  that implied a staleness check this stateless server never performed. It sat next to the new
+  `INCA_RR_MAX_AGE_SECONDS` with a different value for the same source.
 - Fixed: `get_current_weather` no longer reports a quarter-hour of rain as an hour. When INCA's hourly
   `RR` was missing, the last-hour precipitation fell back to summing four 15-min nowcast `rr` buckets --
   but that endpoint serves a single model run clamped to its own t0, so only one to three buckets ever

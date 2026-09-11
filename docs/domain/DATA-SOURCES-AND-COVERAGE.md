@@ -109,8 +109,6 @@ publicly available weather information.
   `const.py` are bumped. Only the integration tests catch this.
 - Shared GeoSphere rate limits (5 req/s, 240 req/h) apply across all callers, with no server-side quota
   tracking.
-- `INCA_MAX_AGE_SECONDS` in `const.py` is defined but unreferenced — a leftover from the
-  `ha-geosphere-next` port implying a staleness check that this stateless server does not perform.
 
 ## Extension Guidelines
 - New GeoSphere dataset: add its resource ID and parameter list to `const.py`, then wire the fetch in

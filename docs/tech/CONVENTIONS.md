@@ -98,7 +98,8 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
   `⚠️ No weather data available`; the warning log is the only signal.
 - A new API client that does not raise a dedicated `*TimeoutError` would have its timeouts silently folded
   into that same generic line (see [ARCHITECTURE.md](ARCHITECTURE.md) Known Risks).
-- Constants can go stale without any signal: `INCA_MAX_AGE_SECONDS` sits in `const.py` unreferenced.
+- Constants can go stale without any signal -- nothing fails when one stops being referenced, so a port
+  that drops a caller leaves the constant behind looking load-bearing.
 
 ## Extension Guidelines
 - New functions follow the naming pattern for their category (see table above)

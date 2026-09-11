@@ -195,8 +195,6 @@ every tool answers an uncovered point identically. Tools never raise across the 
 - The timeout branch depends on the client raising a dedicated timeout type. A new client that wrapped
   timeouts into a plain connection error would silently regress to the generic "no data" line, since a
   bare `TimeoutError` never reaches the server layer.
-- `INCA_MAX_AGE_SECONDS` in `const.py` is defined but never referenced -- leftover from the
-  `ha-geosphere-next` port, implying a staleness check this stateless server does not perform.
 - The generic `except Exception` at the server layer can mask genuine defects behind
   `⚠️ No weather data available`; the warning log is the only signal.
 

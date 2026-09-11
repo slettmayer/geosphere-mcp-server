@@ -66,8 +66,6 @@ CHEM_POLLUTANTS = {key: parameter for key, _, parameter in AIR_QUALITY_POLLUTANT
 CHEM_PARAMETERS = tuple(CHEM_POLLUTANTS.values())
 CHEM_AQI_PARAMETERS = ("aqi",)
 
-# How old the newest cached INCA analysis may get before a re-fetch (seconds).
-INCA_MAX_AGE_SECONDS = 55 * 60
 # INCA analyses trail real time by <1 h; query a window of the last 3 hours.
 INCA_LOOKBACK_HOURS = 3
 # How old INCA's hourly `RR` may get before the condition derivation stops
