@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from geosphere_mcp_server import weather
+from geosphere_mcp_server.const import NOWCAST_LOOKBACK
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereResponse,
@@ -335,7 +336,9 @@ def test_merge_arome_only_degraded() -> None:
     assert merged["pressure_hpa"] is None  # INCA-only field
     assert merged["global_radiation_wm2"] is None
     assert merged["snow_limit_m"] == 2000.0
-    assert merged["is_precipitating"] is False
+    # Nothing observed precipitation, so neither "wet" nor a confident "dry".
+    assert merged["is_precipitating"] is None
+    assert merged["precipitation_1h_mm"] is None
     # AROME rows are stamped at the top of their hour, so at 15:30 these values
     # are half an hour old. Claiming `now` would hide that.
     assert merged["observed_at"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
@@ -499,15 +502,19 @@ def test_merge_a_shower_that_already_ended_does_not_derive_a_storm() -> None:
     assert merged["condition"] == "rainy"
 
 
-def test_merge_nowcast_four_bucket_precip_sum() -> None:
-    """Without INCA RR, 1-h precip sums the last four 15-min nowcast buckets."""
+def test_merge_without_inca_rr_reports_no_hourly_accumulation() -> None:
+    """Nowcast buckets are never summed into the hourly total.
+
+    The endpoint serves one model run clamped to its own t0, so the buckets on
+    hand cover 15-45 min; summing them published a quarter-hour of rain as an
+    hour. With no INCA `RR` the field is simply absent.
+    """
     nowcast = _nowcast(
         stamps=_ts((14, 45), (15, 0), (15, 15), (15, 30), (15, 45)),
         data={
             "t2m": [20.0, 20.0, 20.0, 20.0, 20.0],
             "td": [10.0, 10.0, 10.0, 10.0, 10.0],
             "rh2m": [60.0, 60.0, 60.0, 60.0, 60.0],
-            # five buckets; only the four at/before 15:30 count (last is future)
             "rr": [0.5, 0.1, 0.2, 0.3, 9.0],
             "pt": [255, 255, 255, 255, 255],
             "dd": [180.0, 180.0, 180.0, 180.0, 180.0],
@@ -518,8 +525,67 @@ def test_merge_nowcast_four_bucket_precip_sum() -> None:
     merged = merge_current_conditions(
         nowcast, None, _arome_forecast(), 48.219, 16.362, NOW
     )
-    # 0.5 + 0.1 + 0.2 + 0.3 = 1.1 (the 15:45 future bucket excluded)
-    assert merged["precipitation_1h_mm"] == 1.1
+    assert merged["precipitation_1h_mm"] is None
+
+
+def test_merge_is_precipitating_unknown_without_a_nowcast() -> None:
+    """INCA `RR` never answers "is it raining now" -- that is an hour total."""
+    merged = merge_current_conditions(
+        None, _inca(), _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_1h_mm"] == 0.6  # the accumulation still stands
+    assert merged["is_precipitating"] is None
+
+
+def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
+    """An INCA slice that stopped updating must not hold the sky on `rainy`."""
+    stale = _response(
+        "inca-v1-1h-1km",
+        _ts(
+            (12, 0),
+        ),
+        {
+            "T2M": [20.0],
+            "TD2M": [10.0],
+            "RH2M": [60.0],
+            "RR": [5.0],
+            "P0": [101300.0],
+            "GL": [150.0],
+            "UU": [0.0],
+            "VV": [-3.0],
+        },
+    )
+    merged = merge_current_conditions(
+        None, stale, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    # The accumulation is still reported -- it is a real measurement of a past
+    # hour -- but 3.5 h past its stamp it no longer derives the condition.
+    assert merged["precipitation_1h_mm"] == 5.0
+    assert merged["condition"] != "rainy"
+
+
+def test_merge_fresh_inca_rr_still_drives_the_condition() -> None:
+    """Inside INCA_RR_MAX_AGE_SECONDS the accumulation is still evidence."""
+    fresh = _response(
+        "inca-v1-1h-1km",
+        _ts(
+            (14, 30),
+        ),
+        {
+            "T2M": [20.0],
+            "TD2M": [10.0],
+            "RH2M": [60.0],
+            "RR": [5.0],
+            "P0": [101300.0],
+            "GL": [150.0],
+            "UU": [0.0],
+            "VV": [-3.0],
+        },
+    )
+    merged = merge_current_conditions(
+        None, fresh, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["condition"] == "pouring"
 
 
 def test_merge_precip_type_255_not_precipitating() -> None:
@@ -582,6 +648,25 @@ async def test_async_fetch_current_anchors_the_arome_request() -> None:
     arome_call = mock.await_args_list[0]
     expected = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     assert arome_call.kwargs["start"] == expected
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_current_anchors_the_nowcast_request() -> None:
+    """The nowcast call names a `start` floored to the 15-min grid.
+
+    Unbounded, the endpoint begins at the bucket covering `now`, leaving one
+    stamp at/before it -- which silently reduces the `RATE_LOOKBACK` peak to
+    the matched bucket it exists to widen. A mid-interval `start` rounds *up*
+    to the next stamp, so the anchor is the bucket boundary, not `now`.
+    """
+    mock = AsyncMock(side_effect=[_arome_forecast(), _nowcast(), _inca()])
+    now = datetime(2026, 7, 15, 15, 38, tzinfo=UTC)
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_current_conditions(None, 48.219, 16.362, now=now)
+
+    nowcast_call = mock.await_args_list[1]
+    bucket = datetime(2026, 7, 15, 15, 30, tzinfo=UTC)
+    assert nowcast_call.kwargs["start"] == bucket - NOWCAST_LOOKBACK
 
 
 @pytest.mark.asyncio

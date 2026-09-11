@@ -58,7 +58,9 @@ and its own out-of-domain answer decides. Three coverage classes result:
 
 1. **Austria** — INCA analysis and nowcast plus AROME available; current conditions merge across all
    sources.
-2. **Alps outside Austria** — inside the AROME grid but outside INCA/nowcast; AROME-only snapshot.
+2. **Alps outside Austria** — inside the AROME grid but outside INCA/nowcast; AROME-only snapshot. The
+   two fields that only observations can supply — the last hour's precipitation and the "is it
+   precipitating" flag — are absent here rather than guessed at.
 3. **Everywhere else** — outside AROME, and therefore **not served**. Every tool answers with the same
    out-of-coverage line (`server.OUT_OF_DOMAIN_MESSAGE`).
 

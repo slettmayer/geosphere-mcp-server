@@ -49,6 +49,12 @@ The only renderer that uses per-field emoji. Fields are omitted when the value i
 `🕐 Timezone`, and a closing `📡 Source: ...` line. There are no sunrise/sunset lines — no GeoSphere
 dataset publishes them.
 
+`🌧️ Precipitation (last hour)` comes from INCA's hourly `RR` and from nothing else, so it is absent on
+the AROME-only path (inside the AROME grid but outside Austria) and whenever the INCA fetch fails. It is
+never reconstructed from nowcast buckets — see
+[CONDITION-DERIVATION.md](CONDITION-DERIVATION.md#current-conditions-merge-chain) for why that sum was
+removed.
+
 The source names every contributing dataset, for example
 `📡 Source: GeoSphere (INCA + nowcast + AROME)`. When an observation time is available the line gains an
 `— observed {HH:MM}` suffix.

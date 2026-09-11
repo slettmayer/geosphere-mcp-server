@@ -7,6 +7,27 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Fixed: `get_current_weather` no longer reports a quarter-hour of rain as an hour. When INCA's hourly
+  `RR` was missing, the last-hour precipitation fell back to summing four 15-min nowcast `rr` buckets --
+  but that endpoint serves a single model run clamped to its own t0, so only one to three buckets ever
+  exist. Every such figure was a 15-45 minute total published as a full hour, under-reporting by up to 4x
+  on exactly the degraded path it existed for. The field is now simply absent when INCA has no `RR`.
+  (Ported from ha-geosphere-next 0.12.0.)
+- Fixed: the nowcast request now carries a `start` anchored to the 15-min grid. Unbounded, the endpoint
+  begins at the bucket covering `now`, which left one usable stamp and silently reduced the
+  `RATE_LOOKBACK` 30-minute peak to the single matched bucket it exists to widen -- so a bucket rounding
+  to 0.0 between cells of an active storm could still starve the `pouring` branch and the downpour
+  override. (Ported from ha-geosphere-next 0.12.0.)
+- Fixed: the current condition no longer stays on `rainy` under a clear sky from an INCA slice that
+  stopped updating. INCA `RR` is still consulted as a rate fallback, but only while it is younger than
+  the new `INCA_RR_MAX_AGE_SECONDS` (2 h) -- comfortably past INCA's own ~90 min worst-case publishing
+  lag, so ordinary lag never trips it. (Ported from ha-geosphere-next 0.11.0.)
+- Changed: `is_precipitating` is now tri-state and derives from the nowcast alone. It reports nothing --
+  rather than a confident "not precipitating" -- when no source observed precipitation at all: outside
+  the Austrian nowcast grid, or on a failed nowcast fetch. `condition.is_precipitating` is now the single
+  definition, shared with the condition derivation instead of restated in the merge. The field is not
+  rendered by any tool today, so no output changes. (Ported from ha-geosphere-next 0.11.0.)
+
 ## 0.4.3 - 2026-09-09
 
 - Build: bump ruff in the python-dependencies group.

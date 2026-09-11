@@ -16,6 +16,7 @@ from geosphere_mcp_server.condition import (
     derive_current_condition,
     dew_point_from_t_rh,
     is_night,
+    is_precipitating,
     is_thunder,
     wind_from_components,
 )
@@ -79,6 +80,31 @@ def test_is_thunder(cape, cin, expected) -> None:
 )
 def test_derive_condition(precip, snow, tcc, cape, cin, gust, night, expected) -> None:
     assert derive_condition(precip, snow, tcc, cape, cin, gust, night) == expected
+
+
+# --- is_precipitating ---
+
+
+def test_is_precipitating_any_pt_code_but_255() -> None:
+    """Any code other than "no precipitation" is sufficient on its own."""
+    assert is_precipitating(1, None) is True
+    assert is_precipitating(1, 0.0) is True
+
+
+def test_is_precipitating_rate_alone_is_sufficient() -> None:
+    assert is_precipitating(None, 0.5) is True
+    assert is_precipitating(None, 0.0) is False
+    assert is_precipitating(255, 0.5) is True
+
+
+def test_is_precipitating_unknown_when_nothing_observed() -> None:
+    """`None` is not "dry": nothing observed precipitation at all."""
+    assert is_precipitating(None, None) is None
+
+
+def test_is_precipitating_pt_255_alone_reads_as_dry() -> None:
+    """255 is the one code GeoSphere's silence leaves us sure of."""
+    assert is_precipitating(255, None) is False
 
 
 # --- derive_current_condition ---

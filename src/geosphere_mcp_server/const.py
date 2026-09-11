@@ -70,6 +70,22 @@ CHEM_AQI_PARAMETERS = ("aqi",)
 INCA_MAX_AGE_SECONDS = 55 * 60
 # INCA analyses trail real time by <1 h; query a window of the last 3 hours.
 INCA_LOOKBACK_HOURS = 3
+# How old INCA's hourly `RR` may get before the condition derivation stops
+# treating it as evidence about *now* (seconds). Only that derivation consults
+# it; `is_precipitating` never does.
+#
+# This bound catches a slice that has stopped updating, NOT ordinary lag. INCA
+# publishes ~30 min after the hour it analyses and the previous slice is served
+# until the next appears, so the freshest `RR` in existence is routinely up to
+# ~90 min old (see `merge_current_conditions`, which says the same of
+# `observed_at`). A bound at or below that would reject the best data the
+# source has for part of every publish cycle, flapping the condition between
+# `rainy` and cloud-derived once an hour through steady rain -- worse than the
+# staleness it set out to fix. Two hours is comfortably past the normal worst
+# case: by then INCA should have published two newer analyses, so a slice this
+# old means GeoSphere's own pipeline has stalled and is serving the same
+# analysis to every caller. That is the unbounded case this exists for.
+INCA_RR_MAX_AGE_SECONDS = 2 * 60 * 60
 
 # Stepped precipitation probability from the ensemble rr percentiles: the
 # wettest percentile above PRECIP_MIN_MM bounds the share of wet members and
@@ -115,6 +131,18 @@ PT_NO_PRECIPITATION = 255
 # an instantaneous rate keeps a shower that ended 40 min ago driving the
 # condition. Anything inside this window is still falling.
 RATE_LOOKBACK = timedelta(minutes=30)
+
+# How far back the nowcast request reaches, anchored to a bucket boundary.
+# Without a `start` the endpoint begins at the bucket covering `now`, so the
+# series carries exactly one stamp at or before it -- measured 2026-09-11
+# against the live API, 11 buckets per response, ten of them in the future.
+# That silently disabled the `RATE_LOOKBACK` peak, which needs more than the
+# matched bucket to mean anything. Like `HOURLY_LOOKBACK_HOURS` the anchor is
+# what matters: the API rounds a mid-interval `start` *up* to the next stamp,
+# so it is floored to the 15-min grid before this is subtracted. One bucket of
+# slack past `RATE_LOOKBACK`; the API clamps to the newest run's own t0
+# regardless, which sits ~25-35 min back, so asking for more buys nothing.
+NOWCAST_LOOKBACK = RATE_LOOKBACK + timedelta(minutes=15)
 
 # Nowcast `rr` buckets carry the millimetres that fell within one 15-min step,
 # so an hourly rate is the bucket value times this. Tied to the nowcast

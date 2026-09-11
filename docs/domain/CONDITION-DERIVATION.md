@@ -64,7 +64,7 @@ nowcast are anchored to measurements) while CAPE and CIN are AROME's forecast fo
 answers "can convection get started?", which a downpour has already settled, so a modelled lid must not
 veto a storm that is visibly happening — that would render a thunderstorm in progress as plain `rainy`.
 
-The intensity qualifier is what keeps the override narrow. `precipitating` is true of drizzle, so
+The intensity qualifier is what keeps the override narrow. `is_precipitating` is true of drizzle, so
 overriding on *any* observed rain would promote high CAPE under a strong lid with light stratiform rain —
 a real frontal pattern, not a storm — to `lightning-rainy`, contradicting the hourly path's `rainy` for the
 same hour. Below that rate, and everywhere the verdict is forecast-driven end to end (including this
@@ -106,10 +106,32 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | Gust | nowcast -> AROME |
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
 | Cloud cover, CAPE, CIN | AROME |
-| 1-hour precipitation | INCA `RR`, else the sum of the last four nowcast 15-min `rr` buckets |
-| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets. Not INCA `RR`, which is an hour *total* and would report rain that has already stopped |
-| Precipitation flag | nowcast `pt` (255 means none) |
+| 1-hour precipitation | INCA `RR` only -- absent when INCA is |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR` if it is younger than `INCA_RR_MAX_AGE_SECONDS`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
+| Precipitation flag (`is_precipitating`) | `condition.is_precipitating` on the nowcast `pt` code (255 means none) and the nowcast rate -- never INCA `RR`. Tri-state: absent when neither spoke |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
+
+**Why the hourly total has no nowcast fallback.** Summing the last four 15-min `rr` buckets was tried and
+removed. The nowcast endpoint serves a single model run, clamped to that run's own t0 and published
+~25-35 min after the analysis it is stamped for, so there were never four buckets to sum: measured
+2026-09-11 against the live API, an unbounded request returns exactly one bucket at or before `now` and an
+anchored one reaches only the serving run's start. Every such sum was a 15-45 minute total labelled as a
+full hour, under-reporting by up to 4x on exactly the degraded path it existed for. Reconstructing a true
+hour would need the t0 bucket of four consecutive runs (`forecast_offset=0..3`) — four extra requests per
+call against a shared rate limit. Reporting nothing is the honest answer, and it is why the request now
+carries a `start` anchored to the 15-min grid (`NOWCAST_LOOKBACK`): without one the series holds a single
+bucket, which silently reduced the `RATE_LOOKBACK` peak to the matched bucket it exists to widen.
+
+**Why `is_precipitating` is tri-state.** "Is it precipitating right now" is an instantaneous question, and
+only the 15-min nowcast observes it. INCA's hourly `RR` is an accumulation over the hour it is stamped
+for, so substituting it reports rain that has already stopped — 2.4 mm falling in the hour to 15:00 still
+reads "wet" at 16:50. With no nowcast at all (a point inside the AROME domain but outside the Austrian
+grid, or a transient fetch failure) nothing observed precipitation, and a confident "dry" would be
+invented, so the flag is absent rather than false — consistent with `precipitation_1h_mm` in the same
+case. The condition derivation *does* still fall back to `RR`, because it has to name something, but only
+while that value is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h). The bound catches a slice that has
+stopped updating, not ordinary lag: INCA routinely trails ~90 min, and a tighter bound would flap the
+condition between `rainy` and cloud-derived once per publish cycle through steady rain.
 
 `observed_at` reports the stamp of whichever source supplied the **temperature** — the field the reading
 is judged by — at every rung, so no other field's freshness can vouch for it. The INCA analysis behind the
