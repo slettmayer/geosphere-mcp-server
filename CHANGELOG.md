@@ -7,6 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-11
+
 - Fixed: the INCA `RR` freshness gate rejects a future-dated stamp. `age <= INCA_RR_MAX_AGE_SECONDS` is
   also satisfied by a negative age, so an hour that had not happened yet would have read as the freshest
   reading available and derived `pouring` from it. Not reachable through this server's own fetch path
