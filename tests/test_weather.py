@@ -578,9 +578,14 @@ def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
         None, stale, _arome_forecast(), 48.219, 16.362, NOW
     )
     # The accumulation is still reported -- it is a real measurement of a past
-    # hour -- but 3.5 h past its stamp it no longer derives the condition.
+    # hour -- but 3.5 h past its stamp it no longer derives the condition,
+    # which falls through to AROME's 20% cloud cover.
+    #
+    # Pinned to the exact cloud-derived value, not `!= "rainy"`: an ungated
+    # read of RR=5.0 clears POURING_MM_PER_H and derives `pouring`, so the
+    # looser assertion passed with the gate removed and tested nothing.
     assert merged["precipitation_1h_mm"] == 5.0
-    assert merged["condition"] != "rainy"
+    assert merged["condition"] == "partlycloudy"
 
 
 def test_merge_fresh_inca_rr_still_drives_the_condition() -> None:
