@@ -395,9 +395,18 @@ def merge_current_conditions(
     # current `observed_at` with an hours-old total. The stamp travels with
     # the value as `precipitation_1h_at` and the renderer names the hour it
     # covers, rather than letting the source line's time speak for it.
+    # Bounded at BOTH ends. A bare `age <= INCA_RR_MAX_AGE_SECONDS` is also
+    # satisfied by a negative age, so a future-stamped `RR` would read as the
+    # freshest reading there is and derive `pouring` from an hour that has not
+    # happened yet. The fetch path cannot currently produce one -- the INCA
+    # request is bounded `end=now` with the same `now` passed to this merge --
+    # but this is a pure function with its own `now` argument, and nothing in
+    # its signature enforces that pairing. `observed_at` below already clamps
+    # every rung to `now` on the same principle: an observation can never be
+    # in the future.
+    rr_1h_age_s = (now - rr_1h_time).total_seconds() if rr_1h_time is not None else None
     rr_1h_is_current = (
-        rr_1h_time is not None
-        and (now - rr_1h_time).total_seconds() <= INCA_RR_MAX_AGE_SECONDS
+        rr_1h_age_s is not None and 0 <= rr_1h_age_s <= INCA_RR_MAX_AGE_SECONDS
     )
     rate_mm_h = (
         nowcast_rate_mm_h

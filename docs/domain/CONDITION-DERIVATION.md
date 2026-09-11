@@ -107,7 +107,7 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
 | Cloud cover, CAPE, CIN | AROME |
 | 1-hour precipitation | INCA `RR` only -- absent when INCA is |
-| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR` if it is younger than `INCA_RR_MAX_AGE_SECONDS`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR` if its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
 | Precipitation flag (`is_precipitating`) | `condition.is_precipitating` on the nowcast `pt` code (255 means none) and the nowcast rate -- never INCA `RR`. Tri-state: absent when neither spoke |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
@@ -129,7 +129,9 @@ reads "wet" at 16:50. With no nowcast at all (a point inside the AROME domain bu
 grid, or a transient fetch failure) nothing observed precipitation, and a confident "dry" would be
 invented, so the flag is absent rather than false — consistent with `precipitation_1h_mm` in the same
 case. The condition derivation *does* still fall back to `RR`, because it has to name something, but only
-while that value is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h). The bound catches a slice that has
+while that value is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h) **and not future-dated** — a bare
+age comparison is also satisfied by a negative age, which would let an hour that has not happened yet
+read as the freshest reading there is. The bound catches a slice that has
 stopped updating, not ordinary lag: INCA routinely trails ~90 min, and a tighter bound would flap the
 condition between `rainy` and cloud-derived once per publish cycle through steady rain.
 

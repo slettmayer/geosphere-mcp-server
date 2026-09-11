@@ -588,6 +588,37 @@ def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
     assert merged["condition"] == "partlycloudy"
 
 
+def test_merge_future_dated_inca_rr_does_not_drive_the_condition() -> None:
+    """A negative age is not freshness.
+
+    `age <= INCA_RR_MAX_AGE_SECONDS` alone is satisfied by a future stamp, so
+    an hour that has not happened yet would read as the freshest reading there
+    is. The fetch path bounds INCA at `end=now`, but this merge takes its own
+    `now` and nothing in the signature ties the two together.
+    """
+    future = _response(
+        "inca-v1-1h-1km",
+        _ts(
+            (17, 30),
+        ),
+        {
+            "T2M": [20.0],
+            "TD2M": [10.0],
+            "RH2M": [60.0],
+            "RR": [5.0],
+            "P0": [101300.0],
+            "GL": [150.0],
+            "UU": [0.0],
+            "VV": [-3.0],
+        },
+    )
+    merged = merge_current_conditions(
+        None, future, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_1h_mm"] == 5.0
+    assert merged["condition"] == "partlycloudy"
+
+
 def test_merge_fresh_inca_rr_still_drives_the_condition() -> None:
     """Inside INCA_RR_MAX_AGE_SECONDS the accumulation is still evidence."""
     fresh = _response(

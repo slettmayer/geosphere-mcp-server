@@ -7,6 +7,11 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Fixed: the INCA `RR` freshness gate rejects a future-dated stamp. `age <= INCA_RR_MAX_AGE_SECONDS` is
+  also satisfied by a negative age, so an hour that had not happened yet would have read as the freshest
+  reading available and derived `pouring` from it. Not reachable through this server's own fetch path
+  (the INCA request is bounded `end=now`), but `merge_current_conditions` is a pure function taking its
+  own `now`, and `observed_at` already clamps every rung on the same principle.
 - Changed: `get_current_weather` dates the precipitation line by its own stamp -- `🌧️ Precipitation
   (hour to 14:00): 0.6 mm` -- instead of labelling it "last hour". INCA's `RR` is the accumulation over
   the hour ending at its stamp, and an INCA slice's parameters are scanned back independently, so a slice
