@@ -45,9 +45,22 @@ opened.
 The only renderer that uses per-field emoji. Fields are omitted when the value is unavailable:
 
 `🌡️ Temperature` (with an appended "feels like" suffix), `🌤️ Condition`, `💧 Humidity`, `💨 Wind`
-(speed, bearing, gust), `🌧️ Precipitation (last hour)`, `📊 Pressure`, `☁️ Cloud cover`,
+(speed, bearing, gust), `🌧️ Precipitation (hour to HH:MM)`, `📊 Pressure`, `☁️ Cloud cover`,
 `🕐 Timezone`, and a closing `📡 Source: ...` line. There are no sunrise/sunset lines — no GeoSphere
 dataset publishes them.
+
+`🌧️ Precipitation` comes from INCA's hourly `RR` and from nothing else, so it is absent on the
+AROME-only path (inside the AROME grid but outside Austria) and whenever the INCA fetch fails. It is
+never reconstructed from nowcast buckets — see
+[CONDITION-DERIVATION.md](CONDITION-DERIVATION.md#current-conditions-merge-chain) for why that sum was
+removed.
+
+It carries **its own timestamp**, not the source line's: `RR` is the accumulation over the hour ending at
+its stamp, and the parameters of an INCA slice are scanned back independently, so a slice with a current
+`T2M` and an hours-old `RR` would otherwise pair a stale total with a fresh `— observed HH:MM`. The line
+therefore names the hour it covers (`hour to 14:00`) rather than saying "last hour", which is only true
+when the two happen to agree. A total with no stamp behind it falls back to the undated
+`(last hour)` wording rather than being dropped.
 
 The source names every contributing dataset, for example
 `📡 Source: GeoSphere (INCA + nowcast + AROME)`. When an observation time is available the line gains an

@@ -29,6 +29,7 @@ SAMPLE_CURRENT_GEOSPHERE = {
     "wind_bearing_deg": 240.0,
     "wind_gust_ms": 6.0,
     "precipitation_1h_mm": 0.0,
+    "precipitation_1h_at": datetime(2026, 7, 15, 12, 0, tzinfo=UTC),  # 14:00 CEST
     "precipitation_type": 255,
     "is_precipitating": False,
     "cloud_cover_pct": 40.0,
@@ -70,6 +71,35 @@ NOW = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)  # 13:00 Lisbon local
 # --- render_current (GeoSphere path) ---
 
 
+def test_render_current_dates_precipitation_by_its_own_stamp() -> None:
+    """A stale `RR` must not borrow a current observation time.
+
+    `inca_latest` scans each parameter back independently, so a slice with a
+    fresh `T2M` and an hours-old `RR` pairs the two. Naming the hour the total
+    covers keeps the source line's time from speaking for it.
+    """
+    data = normalize_current_geosphere(
+        SAMPLE_CURRENT_GEOSPHERE
+        | {
+            "precipitation_1h_mm": 5.0,
+            "precipitation_1h_at": datetime(2026, 7, 15, 9, 0, tzinfo=UTC),
+        },
+        LAT,
+        LON,
+    )
+    out = render_current(data)
+    assert "🌧️ Precipitation (hour to 11:00): 5 mm" in out
+    assert "— observed 14:30" in out
+
+
+def test_render_current_precipitation_without_a_stamp() -> None:
+    """No stamp falls back to the undated wording rather than dropping the value."""
+    data = normalize_current_geosphere(
+        SAMPLE_CURRENT_GEOSPHERE | {"precipitation_1h_at": None}, LAT, LON
+    )
+    assert "🌧️ Precipitation (last hour): 0 mm" in render_current(data)
+
+
 def test_render_current_geosphere() -> None:
     data = normalize_current_geosphere(SAMPLE_CURRENT_GEOSPHERE, LAT, LON)
     out = render_current(data)
@@ -78,7 +108,8 @@ def test_render_current_geosphere() -> None:
     assert "🌤️ Condition: partlycloudy" in out
     assert "💧 Humidity: 55%" in out
     assert "💨 Wind: 2.7 m/s from 240° (gusts 6 m/s)" in out
-    assert "🌧️ Precipitation (last hour): 0 mm" in out
+    # Dated by the `RR` stamp, not by the source line's 14:30 observation time.
+    assert "🌧️ Precipitation (hour to 14:00): 0 mm" in out
     assert "📊 Pressure: 1013 hPa" in out
     assert "☁️ Cloud cover: 40%" in out
     # Sunrise/sunset are omitted on the GeoSphere path.

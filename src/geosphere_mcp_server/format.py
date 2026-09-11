@@ -87,6 +87,7 @@ def normalize_current_geosphere(
     tz = ZoneInfo(GEOSPHERE_TZ)
     observed = current.get("observed_at")
     observed_local = observed.astimezone(tz) if observed is not None else None
+    precip_at = current.get("precipitation_1h_at")
     sources = current.get("sources") or []
     source = f"GeoSphere ({' + '.join(sources)})" if sources else "GeoSphere"
     return {
@@ -100,6 +101,9 @@ def normalize_current_geosphere(
         "wind_bearing_deg": current.get("wind_bearing_deg"),
         "wind_gust_ms": current.get("wind_gust_ms"),
         "precipitation_1h_mm": current.get("precipitation_1h_mm"),
+        "precipitation_1h_at": (
+            precip_at.astimezone(tz) if precip_at is not None else None
+        ),
         "pressure_hpa": current.get("pressure_hpa"),
         "cloud_cover_pct": current.get("cloud_cover_pct"),
         "observed_at": observed_local,
@@ -139,7 +143,13 @@ def render_current(data: dict[str, Any]) -> str:
 
     precip = _mm(data.get("precipitation_1h_mm"))
     if precip is not None:
-        lines.append(f"🌧️ Precipitation (last hour): {precip} mm")
+        # Dated by its own stamp, not by the source line's observation time.
+        # The two come from the same INCA slice but not the same row, so a
+        # slice with a current temperature and an hours-old `RR` would
+        # otherwise read as an hour of rain that has just fallen.
+        covers = _hm(data.get("precipitation_1h_at"))
+        window = f"hour to {covers}" if covers is not None else "last hour"
+        lines.append(f"🌧️ Precipitation ({window}): {precip} mm")
 
     pressure = _round_int(data.get("pressure_hpa"))
     if pressure is not None:

@@ -7,6 +7,40 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Fixed: the INCA `RR` freshness gate rejects a future-dated stamp. `age <= INCA_RR_MAX_AGE_SECONDS` is
+  also satisfied by a negative age, so an hour that had not happened yet would have read as the freshest
+  reading available and derived `pouring` from it. Not reachable through this server's own fetch path
+  (the INCA request is bounded `end=now`), but `merge_current_conditions` is a pure function taking its
+  own `now`, and `observed_at` already clamps every rung on the same principle.
+- Changed: `get_current_weather` dates the precipitation line by its own stamp -- `🌧️ Precipitation
+  (hour to 14:00): 0.6 mm` -- instead of labelling it "last hour". INCA's `RR` is the accumulation over
+  the hour ending at its stamp, and an INCA slice's parameters are scanned back independently, so a slice
+  carrying a current temperature and an hours-old `RR` paired a stale total with a fresh
+  `— observed HH:MM`. A total with no stamp behind it keeps the undated wording.
+- Removed: the unreferenced `INCA_MAX_AGE_SECONDS` constant, a leftover from the `ha-geosphere-next` port
+  that implied a staleness check this stateless server never performed. It sat next to the new
+  `INCA_RR_MAX_AGE_SECONDS` with a different value for the same source.
+- Fixed: `get_current_weather` no longer reports a quarter-hour of rain as an hour. When INCA's hourly
+  `RR` was missing, the last-hour precipitation fell back to summing four 15-min nowcast `rr` buckets --
+  but that endpoint serves a single model run clamped to its own t0, so only one to three buckets ever
+  exist. Every such figure was a 15-45 minute total published as a full hour, under-reporting by up to 4x
+  on exactly the degraded path it existed for. The field is now simply absent when INCA has no `RR`.
+  (Ported from ha-geosphere-next 0.12.0.)
+- Fixed: the nowcast request now carries a `start` anchored to the 15-min grid. Unbounded, the endpoint
+  begins at the bucket covering `now`, which left one usable stamp and silently reduced the
+  `RATE_LOOKBACK` 30-minute peak to the single matched bucket it exists to widen -- so a bucket rounding
+  to 0.0 between cells of an active storm could still starve the `pouring` branch and the downpour
+  override. (Ported from ha-geosphere-next 0.12.0.)
+- Fixed: the current condition no longer stays on `rainy` under a clear sky from an INCA slice that
+  stopped updating. INCA `RR` is still consulted as a rate fallback, but only while it is younger than
+  the new `INCA_RR_MAX_AGE_SECONDS` (2 h) -- comfortably past INCA's own ~90 min worst-case publishing
+  lag, so ordinary lag never trips it. (Ported from ha-geosphere-next 0.11.0.)
+- Changed: `is_precipitating` is now tri-state and derives from the nowcast alone. It reports nothing --
+  rather than a confident "not precipitating" -- when no source observed precipitation at all: outside
+  the Austrian nowcast grid, or on a failed nowcast fetch. `condition.is_precipitating` is now the single
+  definition, shared with the condition derivation instead of restated in the merge. The field is not
+  rendered by any tool today, so no output changes. (Ported from ha-geosphere-next 0.11.0.)
+
 ## 0.4.3 - 2026-09-09
 
 - Build: bump ruff in the python-dependencies group.

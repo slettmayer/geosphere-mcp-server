@@ -58,7 +58,9 @@ and its own out-of-domain answer decides. Three coverage classes result:
 
 1. **Austria** — INCA analysis and nowcast plus AROME available; current conditions merge across all
    sources.
-2. **Alps outside Austria** — inside the AROME grid but outside INCA/nowcast; AROME-only snapshot.
+2. **Alps outside Austria** — inside the AROME grid but outside INCA/nowcast; AROME-only snapshot. The
+   two fields that only observations can supply — the last hour's precipitation and the "is it
+   precipitating" flag — are absent here rather than guessed at.
 3. **Everywhere else** — outside AROME, and therefore **not served**. Every tool answers with the same
    out-of-coverage line (`server.OUT_OF_DOMAIN_MESSAGE`).
 
@@ -107,8 +109,6 @@ publicly available weather information.
   `const.py` are bumped. Only the integration tests catch this.
 - Shared GeoSphere rate limits (5 req/s, 240 req/h) apply across all callers, with no server-side quota
   tracking.
-- `INCA_MAX_AGE_SECONDS` in `const.py` is defined but unreferenced — a leftover from the
-  `ha-geosphere-next` port implying a staleness check that this stateless server does not perform.
 
 ## Extension Guidelines
 - New GeoSphere dataset: add its resource ID and parameter list to `const.py`, then wire the fetch in

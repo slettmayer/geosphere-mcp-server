@@ -24,6 +24,7 @@ from geosphere_mcp_server.condition import (
     derive_current_condition,
     dew_point_from_t_rh,
     is_night,
+    is_precipitating,
     wind_from_components,
 )
 from geosphere_mcp_server.const import (
@@ -36,7 +37,9 @@ from geosphere_mcp_server.const import (
     HOURLY_LOOKBACK_HOURS,
     INCA_LOOKBACK_HOURS,
     INCA_PARAMETERS,
+    INCA_RR_MAX_AGE_SECONDS,
     NOWCAST_BUCKETS_PER_HOUR,
+    NOWCAST_LOOKBACK,
     NOWCAST_PARAMETERS,
     POP_DRY_PCT,
     POP_P10_WET_PCT,
@@ -299,9 +302,8 @@ def merge_current_conditions(
     Per-field preference (ported from GeoSphereCurrentCoordinator._merge):
     temp/humidity/wind speed+bearing = INCA -> nowcast -> AROME; dew point =
     INCA -> nowcast; gust = nowcast -> AROME; pressure (P0 Pa->hPa) and global
-    radiation = INCA only; cloud/CAPE/CIN = AROME; 1-h precip = INCA RR else the
-    sum of the last four 15-min nowcast rr buckets at/before now; precip type
-    from nowcast pt (255 = none).
+    radiation = INCA only; cloud/CAPE/CIN = AROME; 1-h precip = INCA RR only;
+    precip type from nowcast pt (255 = none).
     """
     arome_current = _arome_current(arome, now)
 
@@ -348,23 +350,68 @@ def merge_current_conditions(
     cin = arome_field("cin")
 
     p0, _ = inca_latest("P0")
-    rr_1h, _ = inca_latest("RR")
-    if rr_1h is None and nowcast is not None:
-        # Sum the last four 15-min nowcast buckets at/before now.
-        past = [
-            value
-            for ts, value in zip(nowcast.timestamps, nowcast.series("rr"), strict=True)
-            if ts <= now and value is not None
-        ]
-        rr_1h = round(sum(past[-4:]), 2) if past else None
+    # INCA `RR` is the only source for the hourly accumulation. Summing nowcast
+    # buckets was tried and removed: the endpoint serves a single model run,
+    # clamped to that run's own t0 ~25-35 min back, so the sum covered 15-45
+    # minutes and was published as an hour -- under-reporting by up to 4x on
+    # exactly the degraded path it existed for. Reconstructing a true hour
+    # needs the t0 bucket of four consecutive runs (`forecast_offset=0..3`),
+    # four requests per call against a shared rate limit. Absent is the honest
+    # answer here.
+    rr_1h, rr_1h_time = inca_latest("RR")
 
     pt_raw = now_value("pt")
     precipitation_type = int(pt_raw) if pt_raw is not None else None
     nowcast_rr = now_value("rr")
+    # `None`, not 0.0, when the nowcast observed nothing: `is_precipitating`
+    # has to tell "no precipitation" apart from "no observation", which it
+    # cannot do once the absence has been defaulted away.
+    #
+    # INCA's hourly `RR` is deliberately NOT a fallback here, though it is one
+    # for `rate_mm_h` below. "Is it precipitating right now" is an
+    # instantaneous question and `RR` is an accumulation over the hour it is
+    # stamped for, so it answers a different one: 2.4 mm falling in the hour to
+    # 15:00 would still read "wet" at 16:50. With no instantaneous source the
+    # honest answer is `None`.
+    nowcast_rate_mm_h = (
+        nowcast_rr * NOWCAST_BUCKETS_PER_HOUR if nowcast_rr is not None else None
+    )
+    # The condition has to name *something*, so unlike `is_precipitating` it
+    # does fall back to `RR` -- but not to a slice that has stopped updating.
+    # `inca_latest` returns the newest non-None value at any age, and GeoSphere
+    # keeps serving the last analysis it managed to produce, so an ungated read
+    # derives `rainy` under a clear sky from rain that stopped hours ago. Past
+    # INCA_RR_MAX_AGE_SECONDS the derivation falls through to cloud cover,
+    # which is what the sky actually says. The bound is deliberately well past
+    # INCA's own ~90 min worst-case lag so ordinary publishing never trips it
+    # -- see the constant.
+    #
+    # `precipitation_1h_mm` keeps reporting the accumulation regardless: it is
+    # a real measurement of a past hour. It is NOT dated by `observed_at`,
+    # which anchors to whichever source supplied the temperature (see below)
+    # and can therefore be newer than the `RR` stamp -- the two are read from
+    # the same slice but not the same row. `inca_latest` scans each parameter
+    # back independently, so an analysis carrying `T2M` but no `RR` pairs a
+    # current `observed_at` with an hours-old total. The stamp travels with
+    # the value as `precipitation_1h_at` and the renderer names the hour it
+    # covers, rather than letting the source line's time speak for it.
+    # Bounded at BOTH ends. A bare `age <= INCA_RR_MAX_AGE_SECONDS` is also
+    # satisfied by a negative age, so a future-stamped `RR` would read as the
+    # freshest reading there is and derive `pouring` from an hour that has not
+    # happened yet. The fetch path cannot currently produce one -- the INCA
+    # request is bounded `end=now` with the same `now` passed to this merge --
+    # but this is a pure function with its own `now` argument, and nothing in
+    # its signature enforces that pairing. `observed_at` below already clamps
+    # every rung to `now` on the same principle: an observation can never be
+    # in the future.
+    rr_1h_age_s = (now - rr_1h_time).total_seconds() if rr_1h_time is not None else None
+    rr_1h_is_current = (
+        rr_1h_age_s is not None and 0 <= rr_1h_age_s <= INCA_RR_MAX_AGE_SECONDS
+    )
     rate_mm_h = (
-        nowcast_rr * NOWCAST_BUCKETS_PER_HOUR
-        if nowcast_rr is not None
-        else (rr_1h or 0.0)
+        nowcast_rate_mm_h
+        if nowcast_rate_mm_h is not None
+        else ((rr_1h or 0.0) if rr_1h_is_current else 0.0)
     )
     # A single bucket can round to 0.0 in the gap between cells of an active
     # storm, reporting 0 mm/h mid-thunderstorm and starving both the `pouring`
@@ -441,10 +488,11 @@ def merge_current_conditions(
         ),
         "wind_gust_ms": gust,
         "precipitation_1h_mm": rr_1h,
+        # The hour this total covers ends at its stamp: `RR` is the
+        # accumulation over the hour it is stamped for.
+        "precipitation_1h_at": rr_1h_time if rr_1h is not None else None,
         "precipitation_type": precipitation_type,
-        "is_precipitating": (
-            precipitation_type is not None and precipitation_type != PT_NO_PRECIPITATION
-        ),
+        "is_precipitating": is_precipitating(precipitation_type, nowcast_rate_mm_h),
         "cloud_cover_pct": cloud,
         "global_radiation_wm2": inca_latest("GL")[0],
         "snow_limit_m": arome_field("snow_limit"),
@@ -494,6 +542,16 @@ async def async_fetch_current_conditions(
     arome_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(
         hours=HOURLY_LOOKBACK_HOURS
     )
+    # Anchored to the 15-min grid for the same reason: the API rounds a
+    # mid-interval `start` up to the next stamp, which would drop the bucket
+    # covering `now` along with everything before it. Unbounded, the endpoint
+    # begins at that bucket and the series carries a single stamp at/before
+    # now, which silently reduces the RATE_LOOKBACK peak below to the matched
+    # bucket it exists to widen.
+    nowcast_start = (
+        now.replace(minute=now.minute - now.minute % 15, second=0, microsecond=0)
+        - NOWCAST_LOOKBACK
+    )
 
     arome_res, nowcast_res, inca_res = await asyncio.gather(
         async_get_timeseries(
@@ -505,7 +563,12 @@ async def async_fetch_current_conditions(
             start=arome_start,
         ),
         async_get_timeseries(
-            session, *DATASET_NOWCAST, NOWCAST_PARAMETERS, latitude, longitude
+            session,
+            *DATASET_NOWCAST,
+            NOWCAST_PARAMETERS,
+            latitude,
+            longitude,
+            start=nowcast_start,
         ),
         async_get_timeseries(
             session,
