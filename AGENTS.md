@@ -97,6 +97,10 @@ indexes the per-concept files on data sources, condition derivation, and the too
 - AROME publishes convective inhibition as a NEGATIVE magnitude and `condition.is_thunder` assumes that
   sign without checking it; a source that publishes it positive must be negated before the gate, or the
   gate silently inverts
+- The nowcast bucket is matched nearest-in-*either*-direction, so every nowcast-sourced current value can
+  come from up to 7.5 min ahead (only `observed_at` is clamped to `now`). Reviewed and deliberately
+  accepted, not an oversight -- see [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md)
+  before "fixing" it
 
 ## Detailed Guides
 - [Technical Context](docs/tech/README.md) -- architecture, tech stack, conventions, testing

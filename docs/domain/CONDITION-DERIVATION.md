@@ -197,6 +197,24 @@ entirely and the forecast still renders.
 - **Duplicated Home Assistant condition literals**: keeps `condition.py` import-free and portable.
 - **Stepped POP over interpolation**: three ensemble percentiles cannot support a continuous curve
   honestly, so the mapping stays coarse and explicit.
+- **The nowcast bucket is matched nearest-in-either-direction**, so current values can come from up to
+  7.5 minutes ahead. `nearest_index` minimises the absolute distance to `now`, so once `now` is more than
+  7.5 minutes past a bucket the *next* one is closer and wins. At exactly 7.5 minutes the two tie, and
+  `min` keeps the first of equal keys — the earlier bucket — so the switch happens strictly *after* the
+  boundary, not at it. Every nowcast-sourced current field
+  rides that single index — `t2m`, `rh2m`, `td`, `dd`, `ff`, `fx`, `pt` and `rr` — so `is_precipitating`
+  can read `true` at 15:40 from rain the nowcast places at 15:45, and the same is true of the
+  temperature and the gust beside it. Only the reported *time* is clamped: `observed_at` takes
+  `min(stamp, now)` because an observation time in the future is simply wrong, while a *value* from the
+  nearest bucket is not.
+
+  Raised in review (2026-09-11) against `is_precipitating`, whose contract says "falling right now", and
+  **deliberately declined**. The nowcast is a short-range forecast at every bucket, including the one
+  behind `now`; there is no bucket that observes the present. Snapping backwards would therefore not buy
+  an observation, it would substitute a staler estimate for a nearer one, and at the 7.5-minute boundary
+  the next bucket genuinely is the better answer. The residual error sits inside the ordinary
+  uncertainty of the source. Recorded here because it is a decision rather than an oversight — the
+  `nearest_index` docstring states the behaviour and the clamping obligation, but not the verdict.
 
 ## Known Risks
 - `condition.py` duplicates Home Assistant condition strings — these could drift if a condition is renamed
