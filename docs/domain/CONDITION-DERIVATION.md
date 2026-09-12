@@ -198,8 +198,10 @@ entirely and the forecast still renders.
 - **Stepped POP over interpolation**: three ensemble percentiles cannot support a continuous curve
   honestly, so the mapping stays coarse and explicit.
 - **The nowcast bucket is matched nearest-in-either-direction**, so current values can come from up to
-  7.5 minutes ahead. `nearest_index` minimises the absolute distance to `now`, which means that from
-  `HH:MM+7:30` the *next* 15-min bucket is the closest one and wins. Every nowcast-sourced current field
+  7.5 minutes ahead. `nearest_index` minimises the absolute distance to `now`, so once `now` is more than
+  7.5 minutes past a bucket the *next* one is closer and wins. At exactly 7.5 minutes the two tie, and
+  `min` keeps the first of equal keys — the earlier bucket — so the switch happens strictly *after* the
+  boundary, not at it. Every nowcast-sourced current field
   rides that single index — `t2m`, `rh2m`, `td`, `dd`, `ff`, `fx`, `pt` and `rr` — so `is_precipitating`
   can read `true` at 15:40 from rain the nowcast places at 15:45, and the same is true of the
   temperature and the gust beside it. Only the reported *time* is clamped: `observed_at` takes
