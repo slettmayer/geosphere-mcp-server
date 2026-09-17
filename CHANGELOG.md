@@ -7,6 +7,10 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.5.1 - 2026-09-17
+
+- Build: bump ruff in the python-dependencies group.
+
 ## 0.5.0 - 2026-09-11
 
 - Fixed: the INCA `RR` freshness gate rejects a future-dated stamp. `age <= INCA_RR_MAX_AGE_SECONDS` is
