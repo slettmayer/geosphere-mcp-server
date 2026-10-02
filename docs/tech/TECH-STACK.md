@@ -72,8 +72,10 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 - `auto-release.yml`: manual dispatch cuts the next patch tag (or a given version); a merged
   `dependabot/uv/*` PR cuts one only if it changed the runtime dependencies in `pyproject.toml` -- see
   [RELEASING.md](RELEASING.md#what-dependabot-triggers)
-- `.github/dependabot.yml`: weekly grouped updates for Python dependencies (`uv` ecosystem) and GitHub
-  Actions. Only the Python group feeds `auto-release.yml`.
+- `.github/dependabot.yml`: weekly grouped updates for Python dependencies (`uv` ecosystem, Mondays) and
+  GitHub Actions (Thursdays). Only the Python group feeds `auto-release.yml`.
+- `dependabot-auto-merge.yml`: enables squash auto-merge on Dependabot PRs, so they land once `gate`
+  passes
 
 ### No Infrastructure
 No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed as a PyPI package, run locally via `uvx`.
