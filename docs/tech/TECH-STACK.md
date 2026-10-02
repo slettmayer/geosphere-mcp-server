@@ -69,7 +69,9 @@ Documents the languages, frameworks, build tools, and key libraries used in this
   consistency check) -> `pypi-publish` (Trusted Publishing over OIDC) -> then `github-release` and
   `mcp-registry` in **parallel**. The `mcp-registry` job rewrites the version in `server.json` and
   publishes with the `mcp-publisher` CLI.
-- `auto-release.yml`: merged `dependabot/uv/*` PRs (or manual dispatch) cut the next patch tag
+- `auto-release.yml`: manual dispatch cuts the next patch tag (or a given version); a merged
+  `dependabot/uv/*` PR cuts one only if it changed the runtime dependencies in `pyproject.toml` -- see
+  [RELEASING.md](RELEASING.md#what-dependabot-triggers)
 - `.github/dependabot.yml`: weekly grouped updates for Python dependencies (`uv` ecosystem) and GitHub
   Actions. Only the Python group feeds `auto-release.yml`.
 
