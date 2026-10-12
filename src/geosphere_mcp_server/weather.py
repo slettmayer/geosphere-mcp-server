@@ -22,6 +22,7 @@ from geosphere_mcp_server.condition import (
     apparent_temperature,
     derive_condition,
     derive_current_condition,
+    derive_precipitation_type,
     dew_point_from_t_rh,
     is_night,
     is_precipitating,
@@ -46,6 +47,7 @@ from geosphere_mcp_server.const import (
     POP_P50_WET_PCT,
     POP_P90_WET_PCT,
     PRECIP_MIN_MM,
+    PRECIPITATION_TYPES,
     PT_NO_PRECIPITATION,
     RATE_LOOKBACK,
 )
@@ -57,6 +59,10 @@ from geosphere_mcp_server.geosphere_api import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# `pt` codes outside GeoSphere's table already reported by this process, so a
+# new one warns once rather than on every call for as long as it is falling.
+_UNKNOWN_PT_CODES: set[int] = set()
 
 
 # --- Pure numeric helpers ---
@@ -362,6 +368,17 @@ def merge_current_conditions(
 
     pt_raw = now_value("pt")
     precipitation_type = int(pt_raw) if pt_raw is not None else None
+    if (
+        precipitation_type is not None
+        and precipitation_type not in PRECIPITATION_TYPES
+        and precipitation_type not in _UNKNOWN_PT_CODES
+    ):
+        _UNKNOWN_PT_CODES.add(precipitation_type)
+        _LOGGER.warning(
+            "Nowcast reported precipitation-type code %s, which is not in "
+            "GeoSphere's published table; reporting no kind for it",
+            precipitation_type,
+        )
     nowcast_rr = now_value("rr")
     # `None`, not 0.0, when the nowcast observed nothing: `is_precipitating`
     # has to tell "no precipitation" apart from "no observation", which it
@@ -492,6 +509,9 @@ def merge_current_conditions(
         # accumulation over the hour it is stamped for.
         "precipitation_1h_at": rr_1h_time if rr_1h is not None else None,
         "precipitation_type": precipitation_type,
+        # Decoded against the condition's own rate, so "no precipitation"
+        # never sits beside a rainy condition (see derive_precipitation_type).
+        "precipitation_kind": derive_precipitation_type(precipitation_type, rate_mm_h),
         "is_precipitating": is_precipitating(precipitation_type, nowcast_rate_mm_h),
         "cloud_cover_pct": cloud,
         "global_radiation_wm2": inca_latest("GL")[0],

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from geosphere_mcp_server.format import (
     normalize_air_quality_geosphere,
     normalize_current_geosphere,
@@ -31,6 +33,7 @@ SAMPLE_CURRENT_GEOSPHERE = {
     "precipitation_1h_mm": 0.0,
     "precipitation_1h_at": datetime(2026, 7, 15, 12, 0, tzinfo=UTC),  # 14:00 CEST
     "precipitation_type": 255,
+    "precipitation_kind": "no_precipitation",
     "is_precipitating": False,
     "cloud_cover_pct": 40.0,
     "condition": "partlycloudy",
@@ -118,6 +121,30 @@ def test_render_current_geosphere() -> None:
     # Vienna local time (CEST, UTC+2): observed 12:30 UTC -> 14:30 local.
     assert "🕐 Timezone: Europe/Vienna (CEST)" in out
     assert "📡 Source: GeoSphere (INCA + nowcast + AROME) — observed 14:30" in out
+
+
+@pytest.mark.parametrize(
+    ("kind", "line"),
+    [
+        ("rain", "🌧️ Falling now: rain"),
+        ("freezing_rain", "🧊 Falling now: freezing rain"),
+        ("snow", "🌨️ Falling now: snow"),
+        ("rain_and_snow", "🌨️ Falling now: rain and snow"),
+    ],
+)
+def test_render_current_names_what_is_falling(kind: str, line: str) -> None:
+    current = {**SAMPLE_CURRENT_GEOSPHERE, "precipitation_kind": kind}
+    assert line in render_current(normalize_current_geosphere(current, LAT, LON))
+
+
+@pytest.mark.parametrize("kind", ["no_precipitation", None])
+def test_render_current_omits_the_falling_line_without_a_kind(
+    kind: str | None,
+) -> None:
+    """Dry, or a kind nothing could name: no line, like a zero precipitation."""
+    current = {**SAMPLE_CURRENT_GEOSPHERE, "precipitation_kind": kind}
+    out = render_current(normalize_current_geosphere(current, LAT, LON))
+    assert "Falling now" not in out
 
 
 def test_render_current_geosphere_omits_none_fields() -> None:

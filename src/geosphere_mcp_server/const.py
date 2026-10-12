@@ -113,13 +113,35 @@ FOG_HEURISTIC_ENABLED = True
 FOG_MIN_RH_PCT = 98.0
 FOG_MAX_WIND_MS = 2.0
 FOG_MIN_TCC_PCT = 87.5
-# Rain/snow split when the nowcast precipitation-type code is unknown.
+# Rain/snow split when the nowcast `pt` code names no kind (absent, 255
+# beside an observed rate, or outside PRECIPITATION_TYPES).
 SNOW_MAX_T2M_C = 1.0
 
-# Nowcast `pt` (precipitation type): 255 = no precipitation. The remaining
-# code table is undocumented; codes are therefore only used as a
-# "precipitating" signal, with rain/snow decided by temperature.
+# Nowcast `pt` (precipitation type) code table. Not in the API's `/metadata`;
+# confirmed by GeoSphere against the data producer:
+# https://github.com/Geosphere-Austria/dataset-api-docs/issues/71#issuecomment-6125846140
+# 1/3/5/7 match GRIB2 Code Table 4.201, but 255 means "no precipitation", not
+# GRIB2's "Missing". The names are GeoSphere's keys.
+PT_RAIN = 1
+PT_FREEZING_RAIN = 3
+PT_SNOW = 5
+PT_RAIN_AND_SNOW = 7
 PT_NO_PRECIPITATION = 255
+PRECIPITATION_TYPES: dict[int, str] = {
+    PT_RAIN: "rain",
+    PT_FREEZING_RAIN: "freezing_rain",
+    PT_SNOW: "snow",
+    PT_RAIN_AND_SNOW: "rain_and_snow",
+    PT_NO_PRECIPITATION: "no_precipitation",
+}
+# How get_current_weather names a kind that is falling; "no_precipitation" has
+# no entry, since a dry reading gets no line at all.
+FALLING_NOW_LABELS: dict[str, tuple[str, str]] = {
+    "rain": ("🌧️", "rain"),
+    "freezing_rain": ("🧊", "freezing rain"),
+    "snow": ("🌨️", "snow"),
+    "rain_and_snow": ("🌨️", "rain and snow"),
+}
 
 # How far back the current precipitation rate may look for a wet 15-min
 # nowcast bucket. A single bucket can round to 0.0 in the gap between cells of
