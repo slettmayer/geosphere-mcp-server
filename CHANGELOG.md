@@ -7,6 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-13
+
 - Added: `get_current_weather` says what is falling: `🌧️ Falling now: rain`, `🧊 Falling now: freezing
   rain`, `🌨️ Falling now: snow` or `🌨️ Falling now: rain and snow`. It decodes the nowcast `pt` code
   through the table GeoSphere confirmed with the data producer
@@ -20,6 +22,10 @@ version being cut, so you never rename that heading by hand. See
   called any precipitation at or below 1 °C snow, and the code now says these are not. The 1 °C rule
   only decides the kind when the code names none. The hourly forecast is unchanged. Ported from ha-geosphere-next
   0.14.0.
+- Build: bump aiohttp.
+- Build: bump ruff.
+- Build: bump ruff.
+- Build: bump astral-sh/setup-uv.
 
 ## 0.5.2 - 2026-09-23
 
