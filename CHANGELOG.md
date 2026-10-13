@@ -14,8 +14,11 @@ version being cut, so you never rename that heading by hand. See
   rain only shows here, since the condition renders it as `snowy-rainy`.
 - Changed: the current condition takes rain vs snow from the `pt` code instead of temperature. pt 5 →
   `snowy`, pt 7 (rain and snow) and pt 3 (freezing rain) → `snowy-rainy`, and pt 1 is rain at any
-  temperature. A thunderstorm still shows `lightning-rainy` over every kind, except snow at or below
-  1 °C, as before. The 1 °C rule only decides the kind when the code names none. The hourly forecast is unchanged. Ported from ha-geosphere-next
+  temperature. A thunderstorm still shows `lightning-rainy` over every kind, except snow (pt 5, or a
+  code naming no kind) at or below 1 °C, as before; with no temperature from any source thunder wins.
+  Unlike before, a cold storm coded pt 7 or pt 3 shows `lightning-rainy`, not `snowy`: the old rule
+  called any precipitation at or below 1 °C snow, and the code now says these are not. The 1 °C rule
+  only decides the kind when the code names none. The hourly forecast is unchanged. Ported from ha-geosphere-next
   0.14.0.
 
 ## 0.5.2 - 2026-09-23
