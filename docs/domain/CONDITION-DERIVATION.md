@@ -88,8 +88,17 @@ rain/snow rule:
 | Fog requires cloud | >= 87.5 % | `FOG_MIN_TCC_PCT` |
 | Snow instead of rain at or below | 1.0 degC | `SNOW_MAX_T2M_C` |
 
-Snow versus rain is decided by temperature here because the nowcast precipitation-type code table is
-undocumented — it only signals *that* it is precipitating, not what kind. The fog heuristic can be
+Snow versus rain is decided by the nowcast `pt` code, through GeoSphere's table (`PRECIPITATION_TYPES`:
+1 rain, 3 freezing rain, 5 snow, 7 rain and snow, 255 no precipitation —
+[confirmed by GeoSphere](https://github.com/Geosphere-Austria/dataset-api-docs/issues/71#issuecomment-6125846140), not in the API's `/metadata`). When precipitating:
+`snowy` if T ≤ 1 °C and the kind is pt 5 or none; else `lightning-rainy` for thunder; else `snowy` for
+pt 5; else `snowy-rainy` for pt 7 or pt 3 (no condition exists for freezing rain); else `pouring` or
+`rainy`. pt 1 is rain at any temperature, and no kind is rain above 1 °C or with no temperature. So snow outranks thunder only
+at or below 1 °C (thundersnow is rare and still snow); above it, or when no source has a temperature, a
+storm wins over every kind, since a graupel or rain-and-snow shower can still be a thunderstorm and that
+is the hazard people act on. Cold pt 7 and pt 3 lose to thunder too: they are not snow.
+Temperature only decides the kind when the code names none: absent, 255 beside an observed rate, or a
+code outside the table. The fog heuristic can be
 switched off wholesale via the `FOG_HEURISTIC_ENABLED` flag in `const.py`. When it is not precipitating,
 the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone — and there the CIN cap
 does apply, since nothing observed contradicts it (see the thunder gate above).
@@ -109,6 +118,7 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | 1-hour precipitation | INCA `RR` only -- absent when INCA is |
 | Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR` if its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
 | Precipitation flag (`is_precipitating`) | `condition.is_precipitating` on the nowcast `pt` code (255 means none) and the nowcast rate -- never INCA `RR`. Tri-state: absent when neither spoke |
+| Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition. It can still disagree with the flag: with no nowcast `rr` and a current INCA `RR`, the kind is absent while the flag says not precipitating, since the flag reads the nowcast rate only |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
 **Why the hourly total has no nowcast fallback.** Summing the last four 15-min `rr` buckets was tried and
@@ -191,9 +201,9 @@ entirely and the forecast still renders.
 ## Design Decisions
 - **Physically derived conditions**: the condition comes from physical parameters rather than GeoSphere's
   proprietary `sy` symbol code, whose table is undocumented and could change under us without notice.
-- **Two derivation functions instead of one**: the current path has nowcast humidity and a usable
-  temperature signal, so it can afford a fog heuristic and a temperature-based snow rule; the hourly path
-  has accumulation deltas instead and must not guess at fog.
+- **Two derivation functions instead of one**: the current path has nowcast humidity and the nowcast
+  `pt` code, so it can afford a fog heuristic and take the precipitation kind from the code (temperature
+  only as a fallback); the hourly path has accumulation deltas instead and must not guess at fog.
 - **Duplicated Home Assistant condition literals**: keeps `condition.py` import-free and portable.
 - **Stepped POP over interpolation**: three ensemble percentiles cannot support a continuous curve
   honestly, so the mapping stays coarse and explicit.
@@ -219,8 +229,9 @@ entirely and the forecast still renders.
 ## Known Risks
 - `condition.py` duplicates Home Assistant condition strings — these could drift if a condition is renamed
   upstream.
-- The nowcast precipitation-type code table is undocumented, so the current path infers snow from
-  temperature alone.
+- The nowcast `pt` code table is hard-coded from GeoSphere's issue reply, as `/metadata` carries no code
+  list yet. GeoSphere plans to add `code_lists` there; until then a new code shows up only as a one-time
+  warning in the log.
 - The CIN threshold is a textbook boundary, not one validated against Austrian storm reports; too strict a
   value would suppress real storms and too loose a one would not filter anything.
 - Exact-timestamp POP matching yields no probability on any clock skew between the AROME and C-LAEF series.

@@ -44,10 +44,18 @@ opened.
 ### Current Weather Output
 The only renderer that uses per-field emoji. Fields are omitted when the value is unavailable:
 
-`🌡️ Temperature` (with an appended "feels like" suffix), `🌤️ Condition`, `💧 Humidity`, `💨 Wind`
+`🌡️ Temperature` (with an appended "feels like" suffix), `🌤️ Condition`, a `Falling now` line,
+`💧 Humidity`, `💨 Wind`
 (speed, bearing, gust), `🌧️ Precipitation (hour to HH:MM)`, `📊 Pressure`, `☁️ Cloud cover`,
 `🕐 Timezone`, and a closing `📡 Source: ...` line. There are no sunrise/sunset lines — no GeoSphere
 dataset publishes them.
+
+`Falling now` names what the nowcast `pt` code says is falling: `🌧️ Falling now: rain`,
+`🧊 Falling now: freezing rain`, `🌨️ Falling now: snow` or `🌨️ Falling now: rain and snow`. It is
+omitted when it is dry, when the code names no kind (a code outside GeoSphere's table, or 255 beside a
+rate that says it is precipitating), and on the AROME-only path. It is the only place freezing rain
+shows by name: the condition has no word for it and renders it as `snowy-rainy`. See
+[CONDITION-DERIVATION.md](CONDITION-DERIVATION.md#current-conditions-merge-chain).
 
 `🌧️ Precipitation` comes from INCA's hourly `RR` and from nothing else, so it is absent on the
 AROME-only path (inside the AROME grid but outside Austria) and whenever the INCA fetch fails. It is
@@ -120,8 +128,8 @@ there, having no figures left to explain. See [AIR-QUALITY.md](AIR-QUALITY.md).
 
 ### Values Computed but Never Rendered
 Several merged and assembled fields are dropped during normalization and never appear in any output.
-Current weather drops dew point, global radiation, snow limit, CAPE, CIN, precipitation type, and the
-precipitation flag. The hourly path additionally computes wind bearing, wind gust, dew point, humidity,
+Current weather drops dew point, global radiation, snow limit, CAPE, CIN, the raw precipitation-type
+code (only its decoded kind is rendered, as `Falling now`), and the precipitation flag. The hourly path additionally computes wind bearing, wind gust, dew point, humidity,
 cloud cover, snowfall, snow limit, CAPE, CIN, and global radiation, of which the renderer reads only time,
 temperature, condition, precipitation, probability, and wind speed. Surfacing any of them is a renderer
 change only — the data is already assembled.

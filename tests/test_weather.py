@@ -672,6 +672,76 @@ def test_merge_precip_type_signals_precipitation() -> None:
     assert merged["condition"] == "rainy"
 
 
+def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
+    """The default nowcast with one `pt` code and `rr` in every bucket."""
+    return _nowcast(
+        data={
+            "t2m": [15.0, 15.0, 15.0, 15.0],
+            "td": [12.0, 12.0, 12.0, 12.0],
+            "rh2m": [90.0, 90.0, 90.0, 90.0],
+            "rr": [rr, rr, rr, rr],
+            "pt": [pt, pt, pt, pt],
+            "dd": [180.0, 180.0, 180.0, 180.0],
+            "ff": [2.0, 2.0, 2.0, 2.0],
+            "fx": [5.0, 5.0, 5.0, 5.0],
+        }
+    )
+
+
+@pytest.fixture
+def _fresh_unknown_pt_codes():
+    """Each test starts with no unknown `pt` code already reported."""
+    weather._UNKNOWN_PT_CODES.clear()
+    yield
+    weather._UNKNOWN_PT_CODES.clear()
+
+
+def test_merge_precipitation_kind_reads_the_dry_code() -> None:
+    merged = merge_current_conditions(
+        _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_kind"] == "no_precipitation"
+
+
+def test_merge_precipitation_kind_decodes_snow_at_any_temperature() -> None:
+    """`pt` 5 is snow at the nowcast's 15 °C: temperature has no say."""
+    merged = merge_current_conditions(
+        _nowcast_with(5), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_kind"] == "snow"
+    assert merged["condition"] == "snowy"
+
+
+def test_merge_precipitation_kind_is_absent_when_255_meets_a_rate() -> None:
+    """255 beside a measured rate names no kind; it must not read "none"."""
+    merged = merge_current_conditions(
+        _nowcast_with(255), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["is_precipitating"] is True
+    assert merged["precipitation_kind"] is None
+
+
+def test_merge_unknown_pt_code_has_no_kind() -> None:
+    merged = merge_current_conditions(
+        _nowcast_with(2), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_kind"] is None
+    # Still precipitating: an unknown code says *that*, just not *what*.
+    assert merged["is_precipitating"] is True
+
+
+@pytest.mark.usefixtures("_fresh_unknown_pt_codes")
+def test_unknown_pt_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
+    """Reported once per process, not on every call while it is falling."""
+    for code in (2, 2, 1, 255, None):
+        weather._warn_unknown_pt_code(code)
+    messages = [record.getMessage() for record in caplog.records]
+    assert [m for m in messages if "precipitation-type code" in m] == [
+        "Nowcast reported precipitation-type code 2, which is not in "
+        "GeoSphere's published table; reporting no kind for it"
+    ]
+
+
 # --- async_fetch_current_conditions ---
 
 

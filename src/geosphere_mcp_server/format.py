@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 from geosphere_mcp_server.const import (
     AIR_QUALITY_POLLUTANTS,
     AROME_MAX_HOURS,
+    FALLING_NOW_LABELS,
     GEOSPHERE_TZ,
     OUTLOOK_LONG_HORIZON_HOURS,
     OUTLOOK_SHORT_HORIZON_HOURS,
@@ -96,6 +97,7 @@ def normalize_current_geosphere(
         "temperature_c": current.get("temperature_c"),
         "apparent_temperature_c": current.get("apparent_temperature_c"),
         "condition": current.get("condition"),
+        "precipitation_kind": current.get("precipitation_kind"),
         "humidity_pct": current.get("humidity_pct"),
         "wind_speed_ms": current.get("wind_speed_ms"),
         "wind_bearing_deg": current.get("wind_bearing_deg"),
@@ -125,6 +127,13 @@ def render_current(data: dict[str, Any]) -> str:
 
     if data.get("condition"):
         lines.append(f"🌤️ Condition: {data['condition']}")
+
+    # Only when something is falling and the nowcast named it: the condition
+    # cannot say "freezing rain" (it renders as snowy-rainy), this line can.
+    falling = FALLING_NOW_LABELS.get(data.get("precipitation_kind") or "")
+    if falling is not None:
+        emoji, label = falling
+        lines.append(f"{emoji} Falling now: {label}")
 
     humidity = _round_int(data.get("humidity_pct"))
     if humidity is not None:

@@ -26,7 +26,11 @@ from geosphere_mcp_server.const import (
     FOG_MIN_TCC_PCT,
     POURING_MM_PER_H,
     PRECIP_MIN_MM,
+    PRECIPITATION_TYPES,
+    PT_FREEZING_RAIN,
     PT_NO_PRECIPITATION,
+    PT_RAIN_AND_SNOW,
+    PT_SNOW,
     SNOW_MAX_T2M_C,
     THUNDER_CAPE_JKG,
     WINDY_CLOUD_TCC_PCT,
@@ -163,10 +167,27 @@ def is_precipitating(
         return precipitation_rate_mm_h >= PRECIP_MIN_MM
     # Reached only by a `pt` of 255 with no rate alongside it, which is rare —
     # the nowcast normally carries `rr` for the same bucket and the branch
-    # above decides. `False` here rests entirely on 255 meaning "no
-    # precipitation", the one value of the code table GeoSphere's silence
-    # leaves us reasonably sure of.
+    # above decides. 255 is GeoSphere's "no precipitation", not GRIB2's
+    # "Missing" (see PRECIPITATION_TYPES), so this is an observed "dry".
     return None if precipitation_type is None else False
+
+
+def derive_precipitation_type(
+    precipitation_type: int | None, precipitation_rate_mm_h: float | None
+) -> str | None:
+    """GeoSphere's name for a nowcast `pt` code, or `None` if it names no kind.
+
+    `None` outside GeoSphere's table, and for 255 beside a rate that says it
+    precipitates. Pass the rate :func:`derive_current_condition` gets, so a
+    "no precipitation" can never sit beside a rainy condition.
+    """
+    if precipitation_type is None:
+        return None
+    if precipitation_type == PT_NO_PRECIPITATION and is_precipitating(
+        precipitation_type, precipitation_rate_mm_h
+    ):
+        return None
+    return PRECIPITATION_TYPES.get(precipitation_type)
 
 
 def derive_current_condition(
@@ -184,9 +205,15 @@ def derive_current_condition(
 ) -> str | None:
     """Current condition: nowcast precipitation type overrides cloud logic.
 
-    The nowcast `pt` code table is undocumented (255 = none), so any other
-    code only signals *that* it precipitates; rain vs snow is decided by
-    temperature.
+    The nowcast `pt` code decides the kind: snow, rain and snow, or freezing
+    rain (no condition exists for it; `snowy-rainy` is the closest) win over
+    temperature, which cannot tell wet snow above freezing from rain. Only
+    when the code names no kind — absent, 255 beside an observed rate, or a
+    code outside GeoSphere's table — does temperature split rain from snow.
+    At or below SNOW_MAX_T2M_C snow (pt 5, or no kind) outranks thunder;
+    above it, or with no temperature at all, thunder outranks every kind.
+    Thunder also outranks the mixed kinds (pt 7, pt 3) when cold, where the
+    pre-code temperature rule called any cold precipitation snow.
 
     Note which evidence is which. Precipitation here is *observed* — INCA and
     the nowcast are anchored to measurements — while CAPE and CIN come from
@@ -204,14 +231,29 @@ def derive_current_condition(
     """
     rate = precipitation_rate_mm_h or 0.0
     if is_precipitating(precipitation_type, rate):
+        # `None` when the code names no kind; never "no_precipitation" here,
+        # since 255 only reaches this branch beside a wet rate.
+        kind = derive_precipitation_type(precipitation_type, rate)
+        cold = temperature is not None and temperature <= SNOW_MAX_T2M_C
+        # Snow outranks thunder only at or below SNOW_MAX_T2M_C, as it did
+        # under the temperature rule: thundersnow is rare and still snow.
+        # Unknown temperature is not cold, again as under that rule.
+        if cold and kind in (None, PRECIPITATION_TYPES[PT_SNOW]):
+            return "snowy"
         thunder = is_thunder(cape, cin) or (
             rate >= POURING_MM_PER_H and cape is not None and cape >= THUNDER_CAPE_JKG
         )
-        snow_likely = temperature is not None and temperature <= SNOW_MAX_T2M_C
-        if snow_likely:
-            return "snowy"
+        # Above it, thunder outranks every kind: it is the hazard people act
+        # on, and a graupel or rain-and-snow shower can still be a storm.
         if thunder:
             return "lightning-rainy"
+        if kind == PRECIPITATION_TYPES[PT_SNOW]:
+            return "snowy"
+        if kind in (
+            PRECIPITATION_TYPES[PT_RAIN_AND_SNOW],
+            PRECIPITATION_TYPES[PT_FREEZING_RAIN],
+        ):
+            return "snowy-rainy"
         if rate >= POURING_MM_PER_H:
             return "pouring"
         return "rainy"
