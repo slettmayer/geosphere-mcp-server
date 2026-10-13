@@ -196,11 +196,12 @@ def test_current_condition_falls_back_to_temperature_without_a_known_kind(
         # kinds: a spring shower coded rain-and-snow can still be a storm.
         (7, 1500.0, "lightning-rainy"),
         (3, 1500.0, "lightning-rainy"),
-        # Snow still outranks thunder, as the temperature rule always did.
-        (5, 1500.0, "snowy"),
+        # ...and snow above SNOW_MAX_T2M_C: a convective graupel shower.
+        (5, 1500.0, "lightning-rainy"),
         # Without thunder a downpour of mixed kinds stays mixed, not `pouring`.
         (7, 0.0, "snowy-rainy"),
         (3, 0.0, "snowy-rainy"),
+        (5, 0.0, "snowy"),
     ],
 )
 def test_current_condition_thunder_outranks_mixed_precipitation(
@@ -208,6 +209,26 @@ def test_current_condition_thunder_outranks_mixed_precipitation(
 ) -> None:
     """Observed downpour (8 mm/h) at 4 °C: the CAPE-alone override applies."""
     assert _current(precipitation_type, 4.0, rate=8.0, cape=cape, cin=-80.0) == (
+        expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("precipitation_type", "expected"),
+    [
+        # At or below SNOW_MAX_T2M_C snow outranks thunder, as the temperature
+        # rule always made it: thundersnow is rare and still snow.
+        (5, "snowy"),
+        (None, "snowy"),
+        # The mixed kinds do not get that precedence: thunder wins.
+        (7, "lightning-rainy"),
+        (3, "lightning-rainy"),
+    ],
+)
+def test_current_condition_cold_snow_outranks_thunder(
+    precipitation_type: int | None, expected: str
+) -> None:
+    assert _current(precipitation_type, -2.0, rate=8.0, cape=1500.0, cin=-80.0) == (
         expected
     )
 

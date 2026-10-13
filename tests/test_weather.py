@@ -721,24 +721,25 @@ def test_merge_precipitation_kind_is_absent_when_255_meets_a_rate() -> None:
     assert merged["precipitation_kind"] is None
 
 
+def test_merge_unknown_pt_code_has_no_kind() -> None:
+    merged = merge_current_conditions(
+        _nowcast_with(2), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_kind"] is None
+    # Still precipitating: an unknown code says *that*, just not *what*.
+    assert merged["is_precipitating"] is True
+
+
 @pytest.mark.usefixtures("_fresh_unknown_pt_codes")
-def test_merge_unknown_pt_code_is_absent_and_warned_once(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """An unpublished code has no kind, and is reported once per process."""
-    for _ in range(2):
-        merged = merge_current_conditions(
-            _nowcast_with(2), None, _arome_forecast(), 48.219, 16.362, NOW
-        )
-        assert merged["precipitation_kind"] is None
-        # Still precipitating: an unknown code says *that*, just not *what*.
-        assert merged["is_precipitating"] is True
-    warnings = [
-        record
-        for record in caplog.records
-        if "precipitation-type code 2" in record.getMessage()
+def test_unknown_pt_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
+    """Reported once per process, not on every call while it is falling."""
+    for code in (2, 2, 1, 255, None):
+        weather._warn_unknown_pt_code(code)
+    messages = [record.getMessage() for record in caplog.records]
+    assert [m for m in messages if "precipitation-type code" in m] == [
+        "Nowcast reported precipitation-type code 2, which is not in "
+        "GeoSphere's published table; reporting no kind for it"
     ]
-    assert len(warnings) == 1
 
 
 # --- async_fetch_current_conditions ---

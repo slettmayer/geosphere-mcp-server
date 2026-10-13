@@ -65,6 +65,26 @@ _LOGGER = logging.getLogger(__name__)
 _UNKNOWN_PT_CODES: set[int] = set()
 
 
+def _warn_unknown_pt_code(precipitation_type: int | None) -> None:
+    """Log a `pt` code outside GeoSphere's table, once per code per process.
+
+    Kept out of :func:`merge_current_conditions` so the merge stays pure; the
+    async fetch calls this on what the merge decoded.
+    """
+    if (
+        precipitation_type is None
+        or precipitation_type in PRECIPITATION_TYPES
+        or precipitation_type in _UNKNOWN_PT_CODES
+    ):
+        return
+    _UNKNOWN_PT_CODES.add(precipitation_type)
+    _LOGGER.warning(
+        "Nowcast reported precipitation-type code %s, which is not in "
+        "GeoSphere's published table; reporting no kind for it",
+        precipitation_type,
+    )
+
+
 # --- Pure numeric helpers ---
 
 
@@ -368,17 +388,6 @@ def merge_current_conditions(
 
     pt_raw = now_value("pt")
     precipitation_type = int(pt_raw) if pt_raw is not None else None
-    if (
-        precipitation_type is not None
-        and precipitation_type not in PRECIPITATION_TYPES
-        and precipitation_type not in _UNKNOWN_PT_CODES
-    ):
-        _UNKNOWN_PT_CODES.add(precipitation_type)
-        _LOGGER.warning(
-            "Nowcast reported precipitation-type code %s, which is not in "
-            "GeoSphere's published table; reporting no kind for it",
-            precipitation_type,
-        )
     nowcast_rr = now_value("rr")
     # `None`, not 0.0, when the nowcast observed nothing: `is_precipitating`
     # has to tell "no precipitation" apart from "no observation", which it
@@ -617,6 +626,7 @@ async def async_fetch_current_conditions(
     sources.append("AROME")
 
     merged = merge_current_conditions(nowcast, inca, arome, latitude, longitude, now)
+    _warn_unknown_pt_code(merged["precipitation_type"])
     merged["sources"] = sources
     merged["grid_latitude"] = arome.grid_latitude
     merged["grid_longitude"] = arome.grid_longitude

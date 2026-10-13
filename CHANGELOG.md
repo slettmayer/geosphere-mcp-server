@@ -13,9 +13,9 @@ version being cut, so you never rename that heading by hand. See
   ([dataset-api-docs#71](https://github.com/Geosphere-Austria/dataset-api-docs/issues/71#issuecomment-6125846140)). The line is omitted when it is dry or the code names no kind. Freezing
   rain only shows here, since the condition renders it as `snowy-rainy`.
 - Changed: the current condition takes rain vs snow from the `pt` code instead of temperature. pt 5 →
-  `snowy`, pt 7 (rain and snow) and pt 3 (freezing rain) → `snowy-rainy` unless a thunderstorm is
-  detected, which still shows `lightning-rainy`, and pt 1 is rain at any temperature. The 1 °C rule only
-  applies when the code names no kind. The hourly forecast is unchanged. Ported from ha-geosphere-next
+  `snowy`, pt 7 (rain and snow) and pt 3 (freezing rain) → `snowy-rainy`, and pt 1 is rain at any
+  temperature. A thunderstorm still shows `lightning-rainy` over every kind, except snow at or below
+  1 °C, as before. The 1 °C rule only decides the kind when the code names none. The hourly forecast is unchanged. Ported from ha-geosphere-next
   0.14.0.
 
 ## 0.5.2 - 2026-09-23
