@@ -93,7 +93,7 @@ Snow versus rain is decided by the nowcast `pt` code, through GeoSphere's table 
 [confirmed by GeoSphere](https://github.com/Geosphere-Austria/dataset-api-docs/issues/71#issuecomment-6125846140), not in the API's `/metadata`). When precipitating:
 `snowy` if T ≤ 1 °C and the kind is pt 5 or none; else `lightning-rainy` for thunder; else `snowy` for
 pt 5; else `snowy-rainy` for pt 7 or pt 3 (no condition exists for freezing rain); else `pouring` or
-`rainy`. pt 1 is rain at any temperature, and no kind above 1 °C is rain. So snow outranks thunder only
+`rainy`. pt 1 is rain at any temperature, and no kind is rain above 1 °C or with no temperature. So snow outranks thunder only
 at or below 1 °C (thundersnow is rare and still snow); above it, or when no source has a temperature, a
 storm wins over every kind, since a graupel or rain-and-snow shower can still be a thunderstorm and that
 is the hazard people act on. Cold pt 7 and pt 3 lose to thunder too: they are not snow.

@@ -220,9 +220,14 @@ def test_current_condition_thunder_outranks_every_kind_above_snow_max(
         # rule always made it: thundersnow is rare and still snow.
         (5, "snowy"),
         (None, "snowy"),
-        # The mixed kinds are not snow, so thunder wins over them even here.
+        # Codes that name no kind fall back to temperature, which says snow.
+        (2, "snowy"),
+        (255, "snowy"),
+        # The mixed kinds are not snow, so thunder wins over them even here,
+        # and so it does over rain.
         (7, "lightning-rainy"),
         (3, "lightning-rainy"),
+        (1, "lightning-rainy"),
     ],
 )
 def test_current_condition_cold_snow_outranks_thunder(
@@ -231,6 +236,17 @@ def test_current_condition_cold_snow_outranks_thunder(
     assert _current(precipitation_type, -2.0, rate=8.0, cape=1500.0, cin=-80.0) == (
         expected
     )
+
+
+@pytest.mark.parametrize(
+    ("temperature", "expected"),
+    [(-2.0, "snowy"), (4.0, "lightning-rainy")],
+)
+def test_current_condition_snow_thunder_split_through_the_normal_gate(
+    temperature: float, expected: str
+) -> None:
+    """Light snow, uncapped CAPE: thunder from `is_thunder`, not the override."""
+    assert _current(5, temperature, rate=1.0, cape=1500.0, cin=0.0) == expected
 
 
 @pytest.mark.parametrize(
