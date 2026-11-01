@@ -15,8 +15,6 @@ from geosphere_mcp_server.geosphere_api import (
     ParameterSeries,
 )
 from geosphere_mcp_server.weather import (
-    _diff,
-    _percent,
     _precipitation_probability,
     assemble_hourly_forecast,
     async_fetch_current_conditions,
@@ -55,15 +53,6 @@ def _response(
     )
 
 
-# --- _percent ---
-
-
-def test_percent_scales_0_1_to_pct() -> None:
-    assert _percent(0.5) == 50.0
-    assert _percent(1.0) == 100.0
-    assert _percent(None) is None
-
-
 # --- _precipitation_probability ---
 
 
@@ -80,27 +69,6 @@ def test_percent_scales_0_1_to_pct() -> None:
 )
 def test_precipitation_probability(p10, p50, p90, expected) -> None:
     assert _precipitation_probability(p10, p50, p90) == expected
-
-
-# --- _diff ---
-
-
-def test_diff_accumulation() -> None:
-    series = [0.0, 1.0, 3.0, 3.0]
-    assert _diff(series, 0) is None  # no predecessor
-    assert _diff(series, 1) == 1.0
-    assert _diff(series, 2) == 2.0
-    assert _diff(series, 3) == 0.0
-
-
-def test_diff_clamps_negative_reset() -> None:
-    """A model-run reset (accumulation drops) clamps to 0, not negative."""
-    assert _diff([5.0, 1.0], 1) == 0.0
-
-
-def test_diff_none_and_out_of_range() -> None:
-    assert _diff([None, 1.0], 1) is None
-    assert _diff([0.0, 1.0], 5) is None
 
 
 # --- GeoSphereResponse.nearest_index ---
@@ -126,46 +94,48 @@ def _arome_forecast() -> GeoSphereResponse:
     """Five stamps, 14:00-18:00. NOW is 15:30, so 15:00/16:00/17:00 are emitted.
 
     The series runs one stamp past the last emitted hour on purpose: interval
-    parameters (`ugust`/`vgust`, the `rr_acc`/`snow_acc` accumulations) describe
-    the interval *ending* at their stamp, so the hour beginning at 17:00 reads
-    them from 18:00. The accumulations are laid out so the hour beginning
-    15:00 catches 1 mm of rain and the one beginning 17:00 catches 1 mm of
-    snow.
+    parameters (`10fg`, `tp`, `sf`) and the weather symbol `sy` describe the
+    interval *ending* at their stamp, so the hour beginning at 17:00 reads
+    them from 18:00. Laid out so the hour beginning 15:00 brings 1 mm of rain
+    under a rain symbol, 16:00 is dry and partly cloudy, and 17:00 brings
+    1 mm of snow under a snow symbol.
     """
     stamps = _ts((14, 0), (15, 0), (16, 0), (17, 0), (18, 0))
     return _response(
-        "nwp-v1-1h-2500m",
+        "nwp-v2-1h-1km",
         stamps,
         {
-            "t2m": [10.0, 11.0, 12.0, 13.0, 14.0],
-            "rh2m": [80.0, 80.0, 80.0, 80.0, 80.0],
-            "u10m": [0.0, 0.0, 0.0, 0.0, 0.0],
-            "v10m": [-1.0, -2.0, -3.0, -4.0, -5.0],
-            "ugust": [0.0, 0.0, 0.0, 0.0, 0.0],
-            "vgust": [-2.0, -4.0, -6.0, -8.0, -10.0],
-            "tcc": [0.1, 0.2, 0.5, 0.9, 0.9],
-            "rr_acc": [0.0, 0.0, 1.0, 3.0, 3.0],
-            "snow_acc": [0.0, 0.0, 0.0, 0.0, 1.0],
+            "2t": [10.0, 11.0, 12.0, 13.0, 14.0],
+            "2r": [80.0, 80.0, 80.0, 80.0, 80.0],
+            "10u": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "10v": [-1.0, -2.0, -3.0, -4.0, -5.0],
+            "10fg": [None, 4.0, 6.0, 8.0, 10.0],
+            "tcc": [10.0, 20.0, 50.0, 90.0, 90.0],
+            "tp": [None, 0.0, 1.0, 0.0, 1.0],
+            "sf": [None, 0.0, 0.0, 0.0, 1.0],
             "snowlmt": [2000.0, 2000.0, 2000.0, 1000.0, 1000.0],
-            "grad": [0.0, 100.0, 200.0, 0.0, 0.0],
             "cape": [0.0, 0.0, 0.0, 1500.0, 1500.0],
+            "sy": [None, 3.0, 8.0, 3.0, 14.0],
         },
         reference_time=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
     )
 
 
 def _ensemble() -> GeoSphereResponse:
-    # Percentiles cover the hour *ending* at their stamp, so each one belongs
-    # to the forecast row an hour earlier: 16:00 -> row 15:00, and so on.
+    # The tp percentiles cover the hour *ending* at their stamp, so each one
+    # belongs to the forecast row an hour earlier: 16:00 -> row 15:00, and so
+    # on. `cape_p90` is instantaneous and stays on its own stamp.
     stamps = _ts((15, 0), (16, 0), (17, 0), (18, 0))
     return _response(
-        "ensemble-v1-1h-2500m",
+        "ensemble-v2-1h-1km",
         stamps,
         {
-            "rr_p10": [0.0, 0.0, 0.0, 0.5],  # 18:00 p10 wet -> row 17:00, 95
-            "rr_p50": [0.0, 0.0, 0.5, 0.8],  # 17:00 p50 wet -> row 16:00, 70
-            "rr_p90": [0.0, 0.0, 0.8, 0.9],  # 16:00 all dry -> row 15:00, 0
+            "tp_p10": [None, 0.0, 0.0, 0.5],  # 18:00 p10 wet -> row 17:00, 95
+            "tp_p50": [None, 0.0, 0.5, 0.8],  # 17:00 p50 wet -> row 16:00, 70
+            "tp_p90": [None, 0.0, 0.8, 0.9],  # 16:00 all dry -> row 15:00, 0
+            "cape_p90": [100.0, 200.0, 1200.0, 1300.0],
         },
+        reference_time=datetime(2026, 7, 15, 9, 0, tzinfo=UTC),
     )
 
 
@@ -181,37 +151,105 @@ def test_assemble_hourly_drops_past_hours_and_the_successorless_last() -> None:
     times = [h["time"] for h in result["hourly"]]
     assert times == _ts((15, 0), (16, 0), (17, 0))
     assert result["reference_time"] == datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+    assert result["ensemble_reference_time"] == datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
     assert result["grid_latitude"] == pytest.approx(48.219)
 
 
-def test_assemble_hourly_fields_and_diffs() -> None:
+def test_assemble_hourly_fields() -> None:
     result = assemble_hourly_forecast(
         _arome_forecast(), _ensemble(), 48.219, 16.362, NOW
     )
     first = result["hourly"][0]  # 15:00
     assert first["temperature_c"] == 11.0  # instantaneous at the stamp
-    # Interval field, so it comes from the following stamp: 1.0 - 0.0.
+    assert first["humidity_pct"] == 80.0
+    assert first["wind_speed_ms"] == pytest.approx(2.0)
+    # Per-hour amount, read as published from the following stamp.
     assert first["precipitation_mm"] == 1.0
-    # Same for the gust: |vgust| at 16:00, not at 15:00.
+    # Same for the gust: `10fg` at 16:00, not at 15:00.
     assert first["wind_gust_ms"] == 6.0
+    # `tcc` is already a percentage.
     assert first["cloud_cover_pct"] == 20.0
     assert first["snow_limit_m"] == 2000.0
-    assert first["global_radiation_wm2"] == 100.0
     assert first["dew_point_c"] is not None
+    assert first["weather_symbol"] == 8
+    assert first["condition"] == "rainy"
 
-    third = result["hourly"][2]  # 17:00, snow accumulates by 18:00 -> snowy
+    second = result["hourly"][1]  # 16:00, dry
+    assert second["precipitation_mm"] == 0.0
+    assert second["condition"] == "partlycloudy"
+
+    third = result["hourly"][2]  # 17:00, snow falls by 18:00 -> snowy
     assert third["snow_mm"] == 1.0
     assert third["condition"] == "snowy"
     assert third["cape_jkg"] == 1500.0
 
 
+def test_assemble_hourly_interval_fields_come_from_the_next_stamp() -> None:
+    """Rain that fell before the stamp must not be reported at it.
+
+    `tp` and `10fg` cover the interval *ending* at their stamp ("in the last
+    forecast interval"), and so do the precipitation classes of `sy`. A row
+    stamped T covers T..T+1h and has to read them one step on; reading at T
+    reports the hour that already ended.
+    """
+    arome = _response(
+        "nwp-v2-1h-1km",
+        _ts((15, 0), (16, 0), (17, 0)),
+        {
+            "2t": [20.0, 20.0, 20.0],
+            "tcc": [5.0, 5.0, 5.0],
+            # 5 mm fell between 14:00 and 15:00, under a heavy-rain symbol;
+            # nothing after.
+            "tp": [5.0, 0.0, 0.0],
+            "sf": [0.0, 0.0, 0.0],
+            "10fg": [30.0, 2.0, 2.0],
+            "sy": [10.0, 1.0, 1.0],
+        },
+    )
+    first = assemble_hourly_forecast(arome, None, 48.219, 16.362, NOW)["hourly"][0]
+    assert first["time"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+    assert first["precipitation_mm"] == 0.0
+    assert first["weather_symbol"] == 1
+    assert first["condition"] == "sunny"
+    # Likewise the 30 m/s gust belongs to 14:00-15:00, not to this hour.
+    assert first["wind_gust_ms"] == 2.0
+
+
+def test_assemble_hourly_judges_night_at_the_middle_of_the_hour() -> None:
+    """A clear hour that is mostly dark reads `clear-night`."""
+    seen: list[datetime] = []
+
+    def record(latitude: float, longitude: float, when: datetime) -> bool:
+        seen.append(when)
+        return True
+
+    with patch.object(weather, "is_night", record):
+        rows = assemble_hourly_forecast(_arome_forecast(), None, 48.219, 16.362, NOW)[
+            "hourly"
+        ]
+    assert seen == [row["time"] + timedelta(minutes=30) for row in rows]
+
+
+def test_assemble_hourly_unknown_symbol_leaves_the_condition_unknown() -> None:
+    arome = _response(
+        "nwp-v2-1h-1km",
+        _ts((15, 0), (16, 0), (17, 0)),
+        {"2t": [20.0, 20.0, 20.0], "sy": [None, 99.0, None]},
+    )
+    rows = assemble_hourly_forecast(arome, None, 48.219, 16.362, NOW)["hourly"]
+    assert [(row["weather_symbol"], row["condition"]) for row in rows] == [
+        (99, None),
+        (None, None),
+    ]
+
+
 def test_assemble_hourly_pop_comes_from_the_next_ensemble_stamp() -> None:
     """Probability is read one stamp on, so it describes the row's own hour.
 
-    The ensemble percentiles are interval values like AROME's accumulations,
-    covering the hour that *ends* at their stamp. Matching them to the row of
-    the same stamp would report the probability of the hour already gone --
-    and pair it with an amount from the hour the row is actually for.
+    The tp percentiles are interval values like `tp`, covering the hour that
+    *ends* at their stamp. Matching them to the row of the same stamp would
+    report the probability of the hour already gone -- and pair it with an
+    amount from the hour the row is actually for.
     """
     result = assemble_hourly_forecast(
         _arome_forecast(), _ensemble(), 48.219, 16.362, NOW
@@ -220,6 +258,15 @@ def test_assemble_hourly_pop_comes_from_the_next_ensemble_stamp() -> None:
     assert pop[datetime(2026, 7, 15, 15, 0, tzinfo=UTC)] == 0
     assert pop[datetime(2026, 7, 15, 16, 0, tzinfo=UTC)] == 70
     assert pop[datetime(2026, 7, 15, 17, 0, tzinfo=UTC)] == 95
+
+
+def test_assemble_hourly_ensemble_storm_inputs_follow_their_stampings() -> None:
+    """`tp_p90` covers the row's hour (next stamp); `cape_p90` is at the row's."""
+    rows = assemble_hourly_forecast(
+        _arome_forecast(), _ensemble(), 48.219, 16.362, NOW
+    )["hourly"]
+    assert [row["ensemble_precipitation_p90_mm"] for row in rows] == [0.0, 0.8, 0.9]
+    assert [row["ensemble_cape_p90_jkg"] for row in rows] == [100.0, 200.0, 1200.0]
 
 
 def test_assemble_hourly_pop_survives_a_coarsening_ensemble() -> None:
@@ -235,12 +282,12 @@ def test_assemble_hourly_pop_survives_a_coarsening_ensemble() -> None:
     describes the period beginning 16:00 and must land on that row.
     """
     ensemble = _response(
-        "ensemble-v1-1h-2500m",
+        "ensemble-v2-1h-1km",
         _ts((15, 0), (16, 0), (18, 0)),
         {
-            "rr_p10": [0.0, 0.0, 5.0],
-            "rr_p50": [0.0, 0.0, 5.0],
-            "rr_p90": [0.0, 0.0, 5.0],
+            "tp_p10": [None, 0.0, 5.0],
+            "tp_p50": [None, 0.0, 5.0],
+            "tp_p90": [None, 0.0, 5.0],
         },
     )
     result = assemble_hourly_forecast(_arome_forecast(), ensemble, 48.219, 16.362, NOW)
@@ -250,9 +297,13 @@ def test_assemble_hourly_pop_survives_a_coarsening_ensemble() -> None:
     assert pop[datetime(2026, 7, 15, 15, 0, tzinfo=UTC)] == 0
 
 
-def test_assemble_hourly_without_ensemble_omits_pop() -> None:
+def test_assemble_hourly_without_ensemble_omits_its_values() -> None:
     result = assemble_hourly_forecast(_arome_forecast(), None, 48.219, 16.362, NOW)
-    assert all(h["precipitation_probability_pct"] is None for h in result["hourly"])
+    assert result["ensemble_reference_time"] is None
+    for row in result["hourly"]:
+        assert row["precipitation_probability_pct"] is None
+        assert row["ensemble_cape_p90_jkg"] is None
+        assert row["ensemble_precipitation_p90_mm"] is None
 
 
 def test_assemble_hourly_start_and_hours_filters() -> None:
@@ -267,6 +318,30 @@ def test_assemble_hourly_start_and_hours_filters() -> None:
     )
     assert len(limited["hourly"]) == 1
     assert limited["hourly"][0]["time"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+def _fresh_unknown_codes():
+    """Each test starts with no unknown `pt` or `sy` code already reported."""
+    weather._UNKNOWN_PT_CODES.clear()
+    weather._UNKNOWN_SY_CODES.clear()
+    yield
+    weather._UNKNOWN_PT_CODES.clear()
+    weather._UNKNOWN_SY_CODES.clear()
+
+
+@pytest.mark.usefixtures("_fresh_unknown_codes")
+def test_unknown_sy_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
+    """Reported once per process, not on every call while it is served."""
+    for code in (99, 99, 8, None, 0):
+        weather._warn_unknown_sy_code(code)
+    messages = [record.getMessage() for record in caplog.records]
+    assert [m for m in messages if "weather-symbol code" in m] == [
+        "Forecast reported weather-symbol code 99, which is not in "
+        "GeoSphere's published table; its hours' condition reads unknown",
+        "Forecast reported weather-symbol code 0, which is not in "
+        "GeoSphere's published table; its hours' condition reads unknown",
+    ]
 
 
 # --- merge_current_conditions ---
@@ -290,7 +365,7 @@ def _nowcast(
     return _response("nowcast-v1-15min-1km", stamps, data or default)
 
 
-def _inca() -> GeoSphereResponse:
+def _inca(rr: list[float | None] | None = None) -> GeoSphereResponse:
     stamps = _ts((13, 30), (14, 30))
     return _response(
         "inca-v1-1h-1km",
@@ -299,12 +374,26 @@ def _inca() -> GeoSphereResponse:
             "T2M": [9.0, 9.5],
             "TD2M": [5.0, 5.5],
             "RH2M": [70.0, 72.0],
-            "RR": [0.4, 0.6],
+            "RR": rr if rr is not None else [0.4, 0.6],
             "P0": [101300.0, 101300.0],
             "GL": [100.0, 150.0],
             "UU": [0.0, 0.0],
             "VV": [-3.0, -3.0],
         },
+    )
+
+
+def _arome_now(symbol: int | None, cloud: float = 90.0) -> GeoSphereResponse:
+    """A run whose hour in progress (15:00, read from 16:00) has `symbol`."""
+    return _response(
+        "nwp-v2-1h-1km",
+        _ts((14, 0), (15, 0), (16, 0)),
+        {
+            "2t": [10.0, 11.0, 12.0],
+            "tcc": [cloud, cloud, cloud],
+            "sy": [None, 3.0, symbol],
+        },
+        reference_time=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
     )
 
 
@@ -320,10 +409,14 @@ def test_merge_prefers_inca_over_nowcast_and_arome() -> None:
     assert merged["global_radiation_wm2"] == 150.0
     assert merged["precipitation_1h_mm"] == 0.6  # INCA RR
     assert merged["observed_at"] == datetime(2026, 7, 15, 14, 30, tzinfo=UTC)
-    # Cloud/CAPE come from AROME's current-hour snapshot (15:00).
+    # Cloud, CAPE and the symbol come from AROME's hour in progress (15:00).
     assert merged["cloud_cover_pct"] == 20.0
+    assert merged["cape_jkg"] == 0.0
+    assert merged["weather_symbol"] == 8
     # Gust prefers nowcast fx.
     assert merged["wind_gust_ms"] == 5.0
+    # The nowcast observes no precipitation under a rain symbol.
+    assert merged["condition"] == "cloudy"
 
 
 def test_merge_arome_only_degraded() -> None:
@@ -333,12 +426,15 @@ def test_merge_arome_only_degraded() -> None:
     )
     assert merged["temperature_c"] == 11.0  # AROME 15:00
     assert merged["humidity_pct"] == 80.0
+    assert merged["wind_gust_ms"] == 6.0  # `10fg` covering 15:00-16:00
     assert merged["pressure_hpa"] is None  # INCA-only field
     assert merged["global_radiation_wm2"] is None
     assert merged["snow_limit_m"] == 2000.0
     # Nothing observed precipitation, so neither "wet" nor a confident "dry".
     assert merged["is_precipitating"] is None
     assert merged["precipitation_1h_mm"] is None
+    # ...and the symbol is the only evidence, so its rain stands.
+    assert merged["condition"] == "rainy"
     # AROME rows are stamped at the top of their hour, so at 15:30 these values
     # are half an hour old. Claiming `now` would hide that.
     assert merged["observed_at"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
@@ -428,28 +524,8 @@ def test_merge_observed_at_ignores_an_analysis_without_temperature() -> None:
     assert merged["observed_at"] == datetime(2026, 7, 15, 15, 30, tzinfo=UTC)
 
 
-def _capped_storm_arome() -> GeoSphereResponse:
-    """CAPE past the thunder threshold with the lid on.
-
-    Only the observed rate can carry this to `lightning-rainy`.
-    """
-    return _response(
-        "nwp-v1-1h-2500m",
-        _ts((14, 0), (15, 0), (16, 0)),
-        {
-            "t2m": [10.0, 11.0, 12.0],
-            "tcc": [0.9, 0.9, 0.9],
-            "cape": [1500.0, 1500.0, 1500.0],
-            "cin": [-80.0, -80.0, -80.0],
-            "rr_acc": [0.0, 0.0, 0.0],
-            "snow_acc": [0.0, 0.0, 0.0],
-        },
-        reference_time=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
-    )
-
-
-def _storm_nowcast(rr: list[float | None]) -> GeoSphereResponse:
-    """Nowcast buckets 15:00-15:45 with `pt` precipitating and `rr` as given.
+def _rain_nowcast(rr: list[float | None]) -> GeoSphereResponse:
+    """Nowcast buckets 15:00-15:45 with `pt` reporting rain and `rr` as given.
 
     NOW is 15:30, so the matched bucket is 15:30 and `RATE_LOOKBACK` reaches
     back to 15:00 -- the first three buckets.
@@ -460,65 +536,54 @@ def _storm_nowcast(rr: list[float | None]) -> GeoSphereResponse:
 
 
 def test_merge_dry_bucket_does_not_hide_the_cell_that_just_passed() -> None:
-    """The lull between cells of an active storm still reads as a storm.
+    """The lull between cells of an active downpour still reads as one.
 
     The matched bucket (15:30) reads 0.0 while 15:15 caught 2 mm (8 mm/h).
-    Taking the matched bucket alone reports 0 mm/h, which starves the downpour
-    override that lets observed rain overrule a modelled CIN lid.
+    Taking the matched bucket alone reports 0 mm/h, which starves `pouring`.
     """
     merged = merge_current_conditions(
-        _storm_nowcast([0.0, 2.0, 0.0, 0.0]),
-        None,
-        _capped_storm_arome(),
-        48.219,
-        16.362,
-        NOW,
+        _rain_nowcast([0.0, 2.0, 0.0, 0.0]), None, _arome_now(8), 48.219, 16.362, NOW
     )
-    assert merged["condition"] == "lightning-rainy"
+    assert merged["condition"] == "pouring"
 
 
 def test_merge_rate_lookback_reaches_the_edge_of_its_window() -> None:
     """The peak spans the full RATE_LOOKBACK, inclusive of its far edge.
 
-    Only reachable since the nowcast request gained an anchored `start`:
-    unbounded, the series held a single bucket and this window collapsed to the
-    matched one. 15:00 is exactly RATE_LOOKBACK behind NOW, so its 2 mm bucket
-    (8 mm/h) still drives the downpour override.
+    15:00 is exactly RATE_LOOKBACK behind NOW, so its 2 mm bucket (8 mm/h)
+    still counts.
     """
     merged = merge_current_conditions(
-        _storm_nowcast([2.0, 0.0, 0.0, 0.0]),
-        None,
-        _capped_storm_arome(),
-        48.219,
-        16.362,
-        NOW,
+        _rain_nowcast([2.0, 0.0, 0.0, 0.0]), None, _arome_now(8), 48.219, 16.362, NOW
     )
-    assert merged["condition"] == "lightning-rainy"
+    assert merged["condition"] == "pouring"
 
 
-def test_merge_a_shower_that_already_ended_does_not_derive_a_storm() -> None:
+def test_merge_a_shower_that_already_ended_does_not_pour() -> None:
     """Rain that stopped must not keep driving the condition.
 
     INCA's `RR` is a total over the whole past hour, so 6 mm that fell early in
     it and stopped is still on the books while only drizzle continues -- enough
     to keep `pt` non-zero. Reading that total as an instantaneous rate would
-    clear POURING_MM_PER_H and derive a thunderstorm from a capped, drizzling
-    sky. Every bucket inside RATE_LOOKBACK is dry, so it must not.
+    clear POURING_MM_PER_H. Every bucket inside RATE_LOOKBACK is dry, so it
+    must not.
     """
-    inca = _response(
-        "inca-v1-1h-1km",
-        _ts((13, 30), (14, 30)),
-        {"T2M": [9.0, 9.5], "RR": [6.0, 6.0]},
-    )
     merged = merge_current_conditions(
-        _storm_nowcast([0.0, 0.0, 0.0, 0.0]),
-        inca,
-        _capped_storm_arome(),
+        _rain_nowcast([0.0, 0.0, 0.0, 0.0]),
+        _inca(rr=[6.0, 6.0]),
+        _arome_now(8),
         48.219,
         16.362,
         NOW,
     )
     assert merged["condition"] == "rainy"
+
+
+def test_merge_observed_rain_under_a_thunder_symbol_is_a_storm() -> None:
+    merged = merge_current_conditions(
+        _rain_nowcast([0.1, 0.1, 0.1, 0.1]), None, _arome_now(26), 48.219, 16.362, NOW
+    )
+    assert merged["condition"] == "lightning-rainy"
 
 
 def test_merge_without_inca_rr_reports_no_hourly_accumulation() -> None:
@@ -556,34 +621,35 @@ def test_merge_is_precipitating_unknown_without_a_nowcast() -> None:
     assert merged["is_precipitating"] is None
 
 
-def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
-    """An INCA slice that stopped updating must not hold the sky on `rainy`."""
-    stale = _response(
+def _stale_inca(stamp: tuple[int, int], rr: float = 5.0) -> GeoSphereResponse:
+    """A single INCA analysis at `stamp` carrying `rr` of rain."""
+    return _response(
         "inca-v1-1h-1km",
-        _ts(
-            (12, 0),
-        ),
+        _ts(stamp),
         {
             "T2M": [20.0],
             "TD2M": [10.0],
             "RH2M": [60.0],
-            "RR": [5.0],
+            "RR": [rr],
             "P0": [101300.0],
             "GL": [150.0],
             "UU": [0.0],
             "VV": [-3.0],
         },
     )
+
+
+def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
+    """An INCA slice that stopped updating must not hold the sky on `rainy`.
+
+    The accumulation is still reported -- it is a real measurement of a past
+    hour -- but 3.5 h past its stamp it no longer counts as an observation,
+    so the symbol (partly cloudy) decides. Pinned to the exact value: an
+    ungated read of RR=5.0 clears POURING_MM_PER_H and derives `pouring`.
+    """
     merged = merge_current_conditions(
-        None, stale, _arome_forecast(), 48.219, 16.362, NOW
+        None, _stale_inca((12, 0)), _arome_now(3), 48.219, 16.362, NOW
     )
-    # The accumulation is still reported -- it is a real measurement of a past
-    # hour -- but 3.5 h past its stamp it no longer derives the condition,
-    # which falls through to AROME's 20% cloud cover.
-    #
-    # Pinned to the exact cloud-derived value, not `!= "rainy"`: an ungated
-    # read of RR=5.0 clears POURING_MM_PER_H and derives `pouring`, so the
-    # looser assertion passed with the gate removed and tested nothing.
     assert merged["precipitation_1h_mm"] == 5.0
     assert merged["condition"] == "partlycloudy"
 
@@ -596,51 +662,47 @@ def test_merge_future_dated_inca_rr_does_not_drive_the_condition() -> None:
     is. The fetch path bounds INCA at `end=now`, but this merge takes its own
     `now` and nothing in the signature ties the two together.
     """
-    future = _response(
-        "inca-v1-1h-1km",
-        _ts(
-            (17, 30),
-        ),
-        {
-            "T2M": [20.0],
-            "TD2M": [10.0],
-            "RH2M": [60.0],
-            "RR": [5.0],
-            "P0": [101300.0],
-            "GL": [150.0],
-            "UU": [0.0],
-            "VV": [-3.0],
-        },
-    )
     merged = merge_current_conditions(
-        None, future, _arome_forecast(), 48.219, 16.362, NOW
+        None, _stale_inca((17, 30)), _arome_now(3), 48.219, 16.362, NOW
     )
     assert merged["precipitation_1h_mm"] == 5.0
     assert merged["condition"] == "partlycloudy"
 
 
 def test_merge_fresh_inca_rr_still_drives_the_condition() -> None:
-    """Inside INCA_RR_MAX_AGE_SECONDS the accumulation is still evidence."""
-    fresh = _response(
-        "inca-v1-1h-1km",
-        _ts(
-            (14, 30),
-        ),
-        {
-            "T2M": [20.0],
-            "TD2M": [10.0],
-            "RH2M": [60.0],
-            "RR": [5.0],
-            "P0": [101300.0],
-            "GL": [150.0],
-            "UU": [0.0],
-            "VV": [-3.0],
-        },
-    )
+    """Without a nowcast, a current wet `RR` is evidence of rain."""
     merged = merge_current_conditions(
-        None, fresh, _arome_forecast(), 48.219, 16.362, NOW
+        None, _stale_inca((14, 30)), _arome_now(3), 48.219, 16.362, NOW
     )
     assert merged["condition"] == "pouring"
+
+
+def test_merge_dry_inca_rr_leaves_the_symbol_standing() -> None:
+    """Only the nowcast can say "dry"; a dry `RR` is an hour already over."""
+    merged = merge_current_conditions(
+        None, _stale_inca((14, 30), rr=0.0), _arome_now(8), 48.219, 16.362, NOW
+    )
+    assert merged["condition"] == "rainy"
+
+
+def test_merge_the_nowcast_decides_over_a_wet_inca_rr() -> None:
+    """A dry nowcast is an observation; an hour-old wet `RR` must not overrule it."""
+    merged = merge_current_conditions(
+        _nowcast(), _stale_inca((14, 30)), _arome_now(8), 48.219, 16.362, NOW
+    )
+    assert merged["condition"] == "cloudy"
+
+
+def test_merge_a_dry_pt_without_a_rate_still_decides() -> None:
+    """`pt` 255 with no `rr` beside it is still the nowcast saying "dry"."""
+    nowcast = _nowcast(
+        data={"t2m": [20.0, 20.5, 21.0, 21.5], "pt": [255, 255, 255, 255]}
+    )
+    merged = merge_current_conditions(
+        nowcast, _stale_inca((14, 30)), _arome_now(8), 48.219, 16.362, NOW
+    )
+    assert merged["is_precipitating"] is False
+    assert merged["condition"] == "cloudy"
 
 
 def test_merge_precip_type_255_not_precipitating() -> None:
@@ -688,14 +750,6 @@ def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
     )
 
 
-@pytest.fixture
-def _fresh_unknown_pt_codes():
-    """Each test starts with no unknown `pt` code already reported."""
-    weather._UNKNOWN_PT_CODES.clear()
-    yield
-    weather._UNKNOWN_PT_CODES.clear()
-
-
 def test_merge_precipitation_kind_reads_the_dry_code() -> None:
     merged = merge_current_conditions(
         _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
@@ -730,7 +784,7 @@ def test_merge_unknown_pt_code_has_no_kind() -> None:
     assert merged["is_precipitating"] is True
 
 
-@pytest.mark.usefixtures("_fresh_unknown_pt_codes")
+@pytest.mark.usefixtures("_fresh_unknown_codes")
 def test_unknown_pt_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
     """Reported once per process, not on every call while it is falling."""
     for code in (2, 2, 1, 255, None):
@@ -757,14 +811,14 @@ async def test_async_fetch_current_all_sources() -> None:
 
 @pytest.mark.asyncio
 async def test_async_fetch_current_anchors_the_arome_request() -> None:
-    """The AROME call names a `start`, or the hour in progress is not in it.
+    """The AROME call names a `start`, or the hour in progress may not be in it.
 
-    An unbounded request begins well after the current hour (measured
-    2026-08-12 05:54Z: first stamp 07:00), so `_arome_current` would take the
-    first row it finds -- a future one -- and present its cloud, CAPE and CIN
-    as current. CIN gates the current condition's thunder verdict, so this is
-    not cosmetic. The anchor is the top of the hour, not `now`, because a
-    mid-hour `start` rounds up to the next stamp.
+    Where an unbounded request begins is the API's choice; past the current
+    hour, `_arome_current` would take the first row it finds -- a future one --
+    and present its cloud, CAPE and weather symbol as current. The symbol
+    feeds the current condition, so this is not cosmetic. The anchor is the top
+    of the hour, not `now`, because a mid-hour `start` rounds up to the next
+    stamp.
     """
     mock = AsyncMock(side_effect=[_arome_forecast(), _nowcast(), _inca()])
     with patch.object(weather, "async_get_timeseries", mock):
@@ -872,9 +926,9 @@ async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
 async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
     """Both requests ask for one hour before the current top of the hour.
 
-    An unbounded request begins well after the current hour, so `start` has to
-    be named or the hour already under way is dropped -- which breaks the storm
-    outlook's "first entry is the in-progress hour" contract.
+    Where an unbounded request begins is the API's choice, so `start` has to be
+    named or the hour already under way can be dropped -- which breaks the
+    storm outlook's "first entry is the in-progress hour" contract.
 
     The anchor is the top of the hour, not `now`: the API honours a `start`
     that lands exactly on a stamp and rounds a mid-hour one *up* to the next,
@@ -900,51 +954,44 @@ async def test_async_fetch_hourly_keeps_the_in_progress_hour() -> None:
 
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     assert result["hourly"][0]["time"] == top_of_hour
-    # And it carries a real accumulation delta rather than a None hole.
+    # And it carries its own hour's precipitation rather than a None hole.
     assert result["hourly"][0]["precipitation_mm"] is not None
 
 
 def test_arome_current_reads_the_hour_in_progress() -> None:
-    """The snapshot must not skip index 0 when the API trims to the current hour.
+    """The snapshot is the row covering now, with that row's stamping.
 
-    The live forecast endpoint starts the series at the current top-of-hour, so
-    a `range(1, ...)` scan lands on the hour *after* now. Every field read here
-    is instantaneous -- unlike the accumulation deltas that force the hourly
-    assembly to skip its first step -- and CIN from the wrong hour flips the
-    current condition's thunder verdict.
+    The forecast endpoint can start the series at the current top-of-hour, so
+    a scan that skipped index 0 would land on the hour *after* now. Cloud and
+    CAPE are instantaneous at the row's stamp; the gust and the symbol cover
+    the hour, so they come from the next stamp.
     """
     trimmed = _response(
-        "nwp-v1-1h-2500m",
-        _ts((15, 0), (16, 0)),  # NOW is 15:30, so index 0 is the hour under way
+        "nwp-v2-1h-1km",
+        _ts((15, 0), (16, 0), (17, 0)),  # NOW is 15:30: 15:00 is under way
         {
-            "t2m": [20.0, 30.0],
-            "tcc": [0.9, 0.1],
-            "cape": [1800.0, 50.0],
-            "cin": [-5.0, -400.0],
+            "2t": [20.0, 30.0, 30.0],
+            "tcc": [90.0, 10.0, 10.0],
+            "cape": [1800.0, 50.0, 50.0],
+            "10fg": [30.0, 9.0, 1.0],
+            "sy": [1.0, 26.0, 1.0],
         },
     )
-    current = weather._arome_current(trimmed, NOW)
+    current = weather._arome_current(trimmed, 48.219, 16.362, NOW)
     assert current is not None
-    assert current["temperature"] == 20.0
-    assert current["cape"] == 1800.0
-    assert current["cin"] == -5.0
+    assert current["time"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+    assert current["temperature_c"] == 20.0
+    assert current["cloud_cover_pct"] == 90.0
+    assert current["cape_jkg"] == 1800.0
+    assert current["wind_gust_ms"] == 9.0
+    assert current["weather_symbol"] == 26
 
 
-def test_merge_current_gates_thunder_on_the_current_hour() -> None:
-    """A storm under way is not cancelled by the next hour being capped."""
-    trimmed = _response(
-        "nwp-v1-1h-2500m",
-        _ts((15, 0), (16, 0)),
-        {
-            "t2m": [20.0, 20.0],
-            "tcc": [0.9, 0.9],
-            "cape": [1800.0, 1800.0],
-            "cin": [-5.0, -400.0],  # uncapped now, strongly capped next hour
-        },
-    )
-    merged = merge_current_conditions(None, None, trimmed, 48.219, 16.362, NOW)
-    assert merged["cin_jkg"] == -5.0
-    assert merged["condition"] == "lightning"
+def test_arome_current_needs_a_successor() -> None:
+    """A run ending at the current hour has nothing to read the hour from."""
+    ending = _response("nwp-v2-1h-1km", _ts((15, 0)), {"2t": [20.0]})
+    assert weather._arome_current(ending, 48.219, 16.362, NOW) is None
+    assert weather._arome_current(None, 48.219, 16.362, NOW) is None
 
 
 @pytest.mark.asyncio
@@ -958,9 +1005,9 @@ async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
     for call in mock.await_args_list:
         assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
         # Two hours of slack past the requested window: one because the last
-        # hour's interval fields (gust, precipitation) live on the following
-        # stamp, and one so rounding at the boundary cannot clip that
-        # successor.
+        # hour's interval fields (gust, precipitation, symbol) live on the
+        # following stamp, and one so rounding at the boundary cannot clip
+        # that successor.
         assert call.kwargs["end"] == top_of_hour + timedelta(hours=8)
 
 
@@ -992,52 +1039,3 @@ async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> N
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     for call in mock.await_args_list:
         assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
-
-
-def test_assemble_hourly_interval_fields_come_from_the_next_stamp() -> None:
-    """Rain that fell before the stamp must not be reported at it.
-
-    AROME's `rr_acc` is accumulated since the run start and `ugust`/`vgust` are
-    the maximum "in the last forecast intervall", so both describe the interval
-    *ending* at their stamp. A row stamped T covers T..T+1h and has to read
-    them one step on; reading at T reports the hour that already ended.
-    """
-    arome = _response(
-        "nwp-v1-1h-2500m",
-        _ts((15, 0), (16, 0), (17, 0)),
-        {
-            "t2m": [20.0, 20.0, 20.0],
-            "tcc": [0.1, 0.1, 0.1],
-            # 5 mm fell between 14:00 and 15:00; nothing after.
-            "rr_acc": [5.0, 5.0, 5.0],
-            "snow_acc": [0.0, 0.0, 0.0],
-            "ugust": [0.0, 0.0, 0.0],
-            "vgust": [-30.0, -2.0, -2.0],
-        },
-    )
-    first = assemble_hourly_forecast(arome, None, 48.219, 16.362, NOW)["hourly"][0]
-    assert first["time"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
-    # Reading rr_acc at index 1 would have differenced against the 14:00 total
-    # and reported 5 mm of rain for an hour that is dry.
-    assert first["precipitation_mm"] == 0.0
-    assert first["condition"] == "sunny"
-    # Likewise the 30 m/s gust belongs to 14:00-15:00, not to this hour.
-    assert first["wind_gust_ms"] == 2.0
-
-
-def test_arome_current_gust_covers_the_hour_in_progress() -> None:
-    """The gust is the one interval field in the current snapshot."""
-    trimmed = _response(
-        "nwp-v1-1h-2500m",
-        _ts((15, 0), (16, 0)),  # NOW is 15:30, so 15:00 is the hour under way
-        {
-            "t2m": [20.0, 20.0],
-            # The 15:00 stamp's gust peaked over 14:00-15:00 and is history;
-            # the hour in progress is the one ending at 16:00.
-            "ugust": [0.0, 0.0],
-            "vgust": [-30.0, -9.0],
-        },
-    )
-    current = weather._arome_current(trimmed, NOW)
-    assert current is not None
-    assert current["wind_gust_speed"] == 9.0

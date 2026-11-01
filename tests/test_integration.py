@@ -55,6 +55,11 @@ async def test_hourly_forecast_vienna_uses_geosphere() -> None:
     result = await get_hourly_forecast(*VIENNA, hours=6)
     _assert_rendered(result)
     assert "AROME" in result
+    # A retired dataset answers HTTP 200 with all-null data, which renders as
+    # `n/a` rows with no condition rather than as an error.
+    assert "n/a" not in result, result
+    assert " — " in result, result
+    assert "C-LAEF ensemble" in result, result
 
 
 @pytest.mark.asyncio
@@ -62,6 +67,7 @@ async def test_storm_outlook_vienna_uses_geosphere() -> None:
     result = await get_storm_outlook(*VIENNA)
     _assert_rendered(result)
     assert "AROME" in result
+    assert "Max gust next 1 h: unknown" not in result, result
 
 
 @pytest.mark.asyncio

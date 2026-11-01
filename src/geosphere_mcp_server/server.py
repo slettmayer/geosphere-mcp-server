@@ -39,10 +39,10 @@ RATE_LIMIT_RETRY_MAX_S = 5.0
 # that the request failed — retrying will not help.
 #
 # Deliberately does NOT name a grid. The tools do not all query the same one:
-# the three forecast tools go to AROME (2.5 km) while `get_air_quality` goes to
-# WRF-Chem (3 km), so a point can be inside one and outside the other. Naming
-# AROME here would tell an air-quality caller its location is unservable when
-# the other three tools answer it fine.
+# the three forecast tools go to the 1 km forecast grid while
+# `get_air_quality` goes to WRF-Chem (3 km), so a point can be inside one and
+# outside the other. Naming the forecast grid here would tell an air-quality
+# caller its location is unservable when the other three tools answer it fine.
 OUT_OF_DOMAIN_MESSAGE = (
     "⚠️ Outside coverage — this server only serves Austria and the Alpine region."
 )
@@ -62,8 +62,9 @@ mcp = MCPServer(
         "rest of the world. The forecast horizon is ~60 h; there is no "
         "multi-day outlook beyond it. Use get_current_weather for conditions "
         "now, get_hourly_forecast for the next hours, get_storm_outlook for "
-        "peak gusts and thunderstorm timing, and get_air_quality for "
-        "pollutant concentrations and the European AQI."
+        "peak gusts and thunderstorm timing (from GeoSphere's weather symbol "
+        "and the C-LAEF ensemble), and get_air_quality for pollutant "
+        "concentrations and the European AQI."
     ),
 )
 
@@ -136,6 +137,9 @@ async def get_current_weather(latitude: float, longitude: float) -> str:
     and the Alpine region only; a point outside that grid returns an
     out-of-coverage notice. The response states which datasets served it.
 
+    Observations decide whether and what is falling; the rest of the condition
+    comes from GeoSphere's weather symbol for the current hour.
+
     Args:
         latitude: Decimal latitude (e.g. 48.2208 for Vienna). Geocode city
             names to coordinates yourself.
@@ -162,9 +166,11 @@ async def get_hourly_forecast(
 ) -> str:
     """Get an hour-by-hour weather forecast for a location.
 
-    High-resolution GeoSphere AROME data (up to ~60 h, with C-LAEF
-    precipitation probability). Serves Austria and the Alpine region only; a
-    point outside that grid returns an out-of-coverage notice.
+    High-resolution GeoSphere AROME data (1 km, up to ~60 h). Each hour's
+    condition is GeoSphere's own weather symbol; the precipitation chance is an
+    estimate derived from C-LAEF ensemble percentiles (0/30/70/95 %), not a
+    probability GeoSphere publishes. Serves Austria and the Alpine region only;
+    a point outside that grid returns an out-of-coverage notice.
 
     Args:
         latitude: Decimal latitude (e.g. 48.2208 for Vienna). Geocode city
@@ -204,16 +210,24 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
     Reports the peak wind gust within the next hour and the next 12 hours,
     whether a thunderstorm is expected within the next hour, when the next
     thunderstorm is expected across the whole forecast horizon, and the peak
-    CAPE over the next 12 hours. Deliberately reports no severity verdict —
-    what counts as dangerous is the caller's judgement.
+    CAPE over the next 12 hours as a diagnostic. Deliberately reports no
+    severity verdict — what counts as dangerous is the caller's judgement.
 
-    High-resolution GeoSphere AROME data, whose CAPE is gated by convective
-    inhibition. Serves Austria and the Alpine region only; a point outside that
-    grid returns an out-of-coverage notice.
+    An hour counts as a thunderstorm when GeoSphere's weather symbol for it is
+    a thunderstorm, or when the C-LAEF ensemble's 90th percentiles reach
+    1000 J/kg CAPE and 0.1 mm precipitation (only from an ensemble run less
+    than 12 h old). Each thunderstorm answer names its signal: symbol,
+    ensemble or both. CAPE does not decide anything on its own.
 
-    The thunderstorm scan covers the AROME horizon, nominally ~60 h but shorter
-    when a run is stale or truncated. A "none in the next N h" answer names the
-    horizon it actually covered; it is not an all-clear beyond that.
+    High-resolution GeoSphere AROME data (1 km) and the C-LAEF ensemble. Serves
+    Austria and the Alpine region only; a point outside that grid returns an
+    out-of-coverage notice.
+
+    The thunderstorm scan covers the forecast horizon, nominally ~60 h but
+    shorter after publication lag or when a run is stale or truncated. A "none
+    in the next N h" answer names the horizon it actually covered; it is not
+    an all-clear beyond that. "Thunderstorm expected" is unknown only when no
+    forecast hour falls in its window.
 
     Horizons round up to whole hours: the "next hour" window covers the hour
     already under way plus the next one. A thunderstorm timestamp at or before
@@ -228,13 +242,7 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
     async def work() -> str:
         async with aiohttp.ClientSession() as session:
             assembled = await weather.async_fetch_hourly_forecast(
-                session,
-                latitude,
-                longitude,
-                hours=AROME_MAX_HOURS,
-                # The ensemble only adds precipitation probability, which the
-                # outlook does not report — skip the request.
-                include_ensemble=False,
+                session, latitude, longitude, hours=AROME_MAX_HOURS
             )
             data = fmt.normalize_outlook_geosphere(assembled, latitude, longitude)
             return fmt.render_outlook(data)

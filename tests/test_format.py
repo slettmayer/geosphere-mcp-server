@@ -249,9 +249,50 @@ def test_render_hourly_geosphere_no_note_when_satisfied() -> None:
     assert "horizon" not in out
 
 
+def test_render_hourly_labels_the_chance_as_an_estimate() -> None:
+    """GeoSphere publishes no probability; the chance shown is derived here."""
+    out = render_hourly(
+        normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 2)
+    )
+    assert out.splitlines()[-1] == (
+        "Precipitation chance is an estimate derived from the C-LAEF ensemble "
+        "percentiles (0/30/70/95 %), not a probability GeoSphere publishes."
+    )
+
+
+def test_render_hourly_omits_the_estimate_note_without_a_chance() -> None:
+    dry = {
+        **SAMPLE_HOURLY_GEOSPHERE,
+        "hourly": SAMPLE_HOURLY_GEOSPHERE["hourly"][1:],
+    }
+    out = render_hourly(normalize_hourly_geosphere(dry, LAT, LON, 1))
+    assert "estimate" not in out
+
+
+def test_render_hourly_treats_a_trace_as_dry() -> None:
+    """A trace that rounds to 0 mm shows neither an amount nor a chance."""
+    trace = {
+        **SAMPLE_HOURLY_GEOSPHERE,
+        "hourly": [
+            {
+                "time": datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+                "condition": "cloudy",
+                "temperature_c": 12.0,
+                "wind_speed_ms": 1.0,
+                "precipitation_mm": 0.04,
+                "precipitation_probability_pct": 30,
+            }
+        ],
+    }
+    out = render_hourly(normalize_hourly_geosphere(trace, LAT, LON, 1))
+    assert "  14:00: 12.0°C — cloudy, wind 1 m/s" in out
+    assert "estimate" not in out
+
+
 # --- Storm outlook ---
 
 NOW_OUTLOOK = datetime(2026, 7, 15, 14, 30, tzinfo=UTC)  # 16:30 CEST
+CURRENT_ENSEMBLE_RUN = datetime(2026, 7, 15, 6, 0, tzinfo=UTC)
 
 
 def _geosphere_hour(offset_hours: int, **fields) -> dict:
@@ -259,28 +300,22 @@ def _geosphere_hour(offset_hours: int, **fields) -> dict:
     return {
         "time": datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
         + timedelta(hours=offset_hours),
-        "condition": fields.get("condition"),
+        "weather_symbol": fields.get("symbol"),
         "wind_gust_ms": fields.get("gust"),
         "cape_jkg": fields.get("cape"),
-        "cin_jkg": fields.get("cin"),
-        "precipitation_mm": fields.get("precipitation"),
+        "ensemble_cape_p90_jkg": fields.get("cape_p90"),
+        "ensemble_precipitation_p90_mm": fields.get("precipitation_p90"),
     }
 
 
 SAMPLE_OUTLOOK_ASSEMBLED = {
     "reference_time": datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
-    "sources": ["AROME"],
+    "ensemble_reference_time": CURRENT_ENSEMBLE_RUN,
+    "sources": ["AROME", "C-LAEF ensemble"],
     "hourly": [
-        _geosphere_hour(0, condition="partlycloudy", gust=8.0, cape=200.0, cin=0.0),
-        _geosphere_hour(1, condition="cloudy", gust=12.0, cape=400.0, cin=0.0),
-        _geosphere_hour(
-            4,
-            condition="lightning-rainy",
-            gust=24.0,
-            cape=1800.0,
-            cin=-5.0,
-            precipitation=3.0,
-        ),
+        _geosphere_hour(0, symbol=3, gust=8.0, cape=200.0),
+        _geosphere_hour(1, symbol=5, gust=12.0, cape=400.0),
+        _geosphere_hour(4, symbol=26, gust=24.0, cape=1800.0),
     ],
 }
 
@@ -294,8 +329,10 @@ def test_normalize_outlook_geosphere_localizes_only_the_output() -> None:
     assert data["max_gust_short_at"].hour == 17  # 15:00Z -> 17:00 CEST
     assert data["max_gust_long_ms"] == 24.0
     assert data["thunderstorm_short"] is False
+    assert data["thunderstorm_short_source"] is None
     assert data["next_thunderstorm_at"].hour == 20  # 18:00Z -> 20:00 CEST
-    assert data["next_thunderstorm_cape_jkg"] == 1800.0
+    assert data["next_thunderstorm_source"] == "symbol"
+    assert data["ensemble_current"] is True
     assert data["max_cape_long_jkg"] == 1800.0
 
 
@@ -304,16 +341,58 @@ def test_render_outlook_geosphere() -> None:
         normalize_outlook_geosphere(SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK)
     )
     assert out.splitlines()[0] == "# Storm Outlook for 48.2208, 16.3738"
-    assert "Source: GeoSphere (AROME)" in out
+    assert "Source: GeoSphere (AROME + C-LAEF ensemble)" in out
     assert "💨 Max gust next 1 h: 12 m/s (at Wed 2026-07-15 17:00)" in out
     assert "💨 Max gust next 12 h: 24 m/s (at Wed 2026-07-15 20:00)" in out
     assert "⛈️ Thunderstorm expected next 1 h: no" in out
-    assert "⚡ Next thunderstorm: Wed 2026-07-15 20:00 (CAPE 1800 J/kg)" in out
+    assert "⚡ Next thunderstorm: Wed 2026-07-15 20:00 (signal: symbol)" in out
     assert "🌡️ Max CAPE next 12 h: 1800 J/kg" in out
+    assert "Ensemble signal" not in out
+    assert out.splitlines()[-1] == (
+        "A thunderstorm hour is one whose GeoSphere weather symbol is a "
+        "thunderstorm, or where the C-LAEF ensemble's 90th percentiles reach "
+        "1000 J/kg CAPE and 0.1 mm precipitation; `signal` names which fired "
+        "(symbol, ensemble or both). Max CAPE is a diagnostic and decides nothing."
+    )
+
+
+def test_render_outlook_names_the_signal_of_an_expected_storm() -> None:
+    assembled = {
+        **SAMPLE_OUTLOOK_ASSEMBLED,
+        "hourly": [
+            _geosphere_hour(0, symbol=5),
+            _geosphere_hour(1, symbol=27, cape_p90=1500.0, precipitation_p90=2.0),
+        ],
+    }
+    out = render_outlook(
+        normalize_outlook_geosphere(assembled, LAT, LON, now=NOW_OUTLOOK)
+    )
+    assert "⛈️ Thunderstorm expected next 1 h: yes (signal: both)" in out
+    assert "⚡ Next thunderstorm: Wed 2026-07-15 17:00 (signal: both)" in out
+
+
+def test_render_outlook_says_when_the_ensemble_could_not_vote() -> None:
+    """A run older than 12 h, or none at all, leaves the symbol alone."""
+    for run in (datetime(2026, 7, 15, 2, 0, tzinfo=UTC), None):
+        assembled = {
+            **SAMPLE_OUTLOOK_ASSEMBLED,
+            "ensemble_reference_time": run,
+            "hourly": [
+                _geosphere_hour(0, symbol=5, cape_p90=1500.0, precipitation_p90=2.0)
+            ],
+        }
+        out = render_outlook(
+            normalize_outlook_geosphere(assembled, LAT, LON, now=NOW_OUTLOOK)
+        )
+        assert "⛈️ Thunderstorm expected next 1 h: no" in out
+        assert (
+            "ℹ️ Ensemble signal: unavailable (no C-LAEF run under 12 h old); "
+            "thunderstorms from the weather symbol only"
+        ) in out
 
 
 def test_render_outlook_reports_unknowns_distinctly() -> None:
-    """No gust data, no storm, and an undecidable window each read differently."""
+    """No gust data reads unknown; an hour with no symbol is no storm."""
     data = normalize_outlook_geosphere(
         {"sources": ["AROME"], "hourly": [_geosphere_hour(0)]},
         LAT,
@@ -322,39 +401,36 @@ def test_render_outlook_reports_unknowns_distinctly() -> None:
     )
     out = render_outlook(data)
     assert "💨 Max gust next 1 h: unknown" in out
-    assert "⛈️ Thunderstorm expected next 1 h: unknown (no usable forecast hours)" in out
-    # An unreadable series must not render a confident all-clear.
-    assert "⚡ Next thunderstorm: unknown (no usable forecast hours)" in out
+    assert "⛈️ Thunderstorm expected next 1 h: no" in out
+    assert "⚡ Next thunderstorm: none in the forecast horizon" in out
 
 
-def test_render_outlook_reports_a_readable_calm_series_as_no_storm() -> None:
-    """A decidable series with no storm still gets the confident "none"."""
+def test_render_outlook_is_unknown_only_without_an_hour_in_the_window() -> None:
     data = normalize_outlook_geosphere(
-        {
-            "sources": ["AROME"],
-            "hourly": [_geosphere_hour(0, condition="cloudy", cape=100.0, cin=0.0)],
-        },
+        {"sources": ["AROME"], "hourly": [_geosphere_hour(6, symbol=5)]},
         LAT,
         LON,
         now=NOW_OUTLOOK,
     )
     out = render_outlook(data)
-    assert "⚡ Next thunderstorm: none in the forecast horizon" in out
-    assert "⛈️ Thunderstorm expected next 1 h: no" in out
+    assert (
+        "⛈️ Thunderstorm expected next 1 h: unknown (no forecast hours in the window)"
+    ) in out
 
 
 def test_render_outlook_names_the_horizon_an_all_clear_covers() -> None:
     """ "No storm" over 4 h and over 60 h are different claims.
 
-    AROME nominally runs ~60 h, but a stale or truncated run hands over
-    fewer hours, so the span has to be stated rather than implied.
+    The forecast nominally runs ~60 h, but publication lag and a stale or
+    truncated run hand over fewer hours, so the span has to be stated rather
+    than implied.
     """
     data = normalize_outlook_geosphere(
         {
             "sources": ["AROME"],
             "hourly": [
-                _geosphere_hour(0, condition="cloudy", cape=100.0, cin=0.0),
-                _geosphere_hour(40, condition="cloudy", cape=100.0, cin=0.0),
+                _geosphere_hour(0, symbol=5, cape=100.0),
+                _geosphere_hour(40, symbol=5, cape=100.0),
             ],
         },
         LAT,

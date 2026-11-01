@@ -20,17 +20,25 @@ from zoneinfo import ZoneInfo
 from geosphere_mcp_server.const import (
     AIR_QUALITY_POLLUTANTS,
     AROME_MAX_HOURS,
+    ENSEMBLE_MAX_AGE,
     FALLING_NOW_LABELS,
     GEOSPHERE_TZ,
     OUTLOOK_LONG_HORIZON_HOURS,
     OUTLOOK_SHORT_HORIZON_HOURS,
+    POP_DRY_PCT,
+    POP_P10_WET_PCT,
+    POP_P50_WET_PCT,
+    POP_P90_WET_PCT,
+    PRECIP_MIN_MM,
+    THUNDER_CAPE_JKG,
     aqi_label,
 )
 from geosphere_mcp_server.outlook import (
+    ensemble_is_current,
     horizon_hours,
     max_cape,
     max_gust,
-    scan_thunderstorm,
+    next_thunderstorm,
     thunderstorm_outlook,
     window,
 )
@@ -183,9 +191,22 @@ def render_current(data: dict[str, Any]) -> str:
 
 # --- Hourly forecast ---
 
+# GeoSphere publishes no probability, so the chance shown is labelled as the
+# estimate it is wherever it appears.
+_CHANCE_NOTE = (
+    "Precipitation chance is an estimate derived from the C-LAEF ensemble "
+    f"percentiles ({POP_DRY_PCT}/{POP_P90_WET_PCT}/{POP_P50_WET_PCT}/"
+    f"{POP_P10_WET_PCT} %), not a probability GeoSphere publishes."
+)
+
 
 def _hourly_line(hour: dict[str, Any]) -> str:
-    """Render one hourly entry, omitting zero/None precip and probability."""
+    """Render one hourly entry, omitting zero/None precip and probability.
+
+    An amount that rounds to ``0`` counts as zero: the forecast publishes
+    traces to a thousandth of a millimetre, and "0 mm" beside a chance of
+    rain reads as a contradiction.
+    """
     tstr = _hm(hour.get("time")) or "??:??"
     temp = _temp(hour.get("temperature_c"))
     head = f"{tstr}: {temp}°C" if temp is not None else f"{tstr}: n/a"
@@ -193,9 +214,8 @@ def _hourly_line(hour: dict[str, Any]) -> str:
         head += f" — {hour['condition']}"
 
     segments: list[str] = []
-    precip = hour.get("precipitation_mm")
-    precip_str = _mm(precip)
-    if precip is not None and precip > 0 and precip_str is not None:
+    precip_str = _mm(hour.get("precipitation_mm"))
+    if precip_str is not None and precip_str != "0":
         seg = f"{precip_str} mm"
         prob = hour.get("precipitation_probability_pct")
         if prob:
@@ -270,6 +290,7 @@ def render_hourly(data: dict[str, Any]) -> str:
     lines.append("")
 
     hours = data.get("hours", [])
+    shows_chance = False
     if hours:
         current_day: date | None = None
         for hour in hours:
@@ -279,13 +300,18 @@ def render_hourly(data: dict[str, Any]) -> str:
                 lines.append(f"{when:%a} {when:%Y-%m-%d}")
                 current_day = day
             indent = "  " if current_day is not None else ""
-            lines.append(f"{indent}{_hourly_line(hour)}")
+            line = _hourly_line(hour)
+            shows_chance = shows_chance or "% chance)" in line
+            lines.append(f"{indent}{line}")
     else:
         lines.append("No forecast hours available for the requested window.")
 
-    if data.get("note"):
+    notes = [data["note"]] if data.get("note") else []
+    if shows_chance:
+        notes.append(_CHANCE_NOTE)
+    if notes:
         lines.append("")
-        lines.append(data["note"])
+        lines.extend(notes)
 
     return "\n".join(lines)
 
@@ -296,6 +322,7 @@ def render_hourly(data: dict[str, Any]) -> str:
 def _outlook(
     rows: list[dict[str, Any]],
     now: datetime,
+    ensemble_reference_time: datetime | None,
     localize: Callable[[datetime], datetime] | None = None,
 ) -> dict[str, Any]:
     """Run every outlook derivation over one hourly series.
@@ -305,16 +332,16 @@ def _outlook(
     zone the renderer prints.
 
     Each horizon is windowed once and read from, rather than every derivation
-    re-walking the series for itself.
+    re-walking the series for itself. Whether the ensemble may vote is decided
+    once, so the windowed answer and the full scan cannot disagree on it.
     """
+    ensemble = ensemble_is_current(ensemble_reference_time, now)
     short_window = window(rows, OUTLOOK_SHORT_HORIZON_HOURS, now)
     long_window = window(rows, OUTLOOK_LONG_HORIZON_HOURS, now)
     gust_short, gust_short_at = max_gust(short_window)
     gust_long, gust_long_at = max_gust(long_window)
-    # The third element separates "no storm ahead" from "nothing readable
-    # here"; without it the renderer would print a confident all-clear over an
-    # unreadable series.
-    storm_at, storm_cape, storm_decidable = scan_thunderstorm(rows, now)
+    storm_short, storm_short_source = thunderstorm_outlook(short_window, ensemble)
+    storm_at, storm_source = next_thunderstorm(rows, now, ensemble)
 
     def _when(value: datetime | None) -> datetime | None:
         if value is None or localize is None:
@@ -328,15 +355,16 @@ def _outlook(
         "max_gust_short_at": _when(gust_short_at),
         "max_gust_long_ms": gust_long,
         "max_gust_long_at": _when(gust_long_at),
-        "thunderstorm_short": thunderstorm_outlook(short_window),
+        "thunderstorm_short": storm_short,
+        "thunderstorm_short_source": storm_short_source,
         "next_thunderstorm_at": _when(storm_at),
-        "next_thunderstorm_cape_jkg": storm_cape,
-        "next_thunderstorm_decidable": storm_decidable,
+        "next_thunderstorm_source": storm_source,
+        "ensemble_current": ensemble,
         "max_cape_long_jkg": max_cape(long_window),
         "hours_available": len(rows),
         # How far ahead the all-clear above actually reaches. Nominally ~60 h,
-        # but a run that is stale or was truncated hands over fewer, and the
-        # all-clear must name the span it was actually scanned over.
+        # but publication lag and a stale or truncated run hand over fewer,
+        # and the all-clear must name the span it was actually scanned over.
         "scanned_horizon_hours": horizon_hours(rows, now),
     }
 
@@ -355,7 +383,12 @@ def normalize_outlook_geosphere(
     now = now or datetime.now(UTC)
     tz = ZoneInfo(GEOSPHERE_TZ)
     rows = assembled.get("hourly", [])
-    data = _outlook(rows, now, localize=lambda when: when.astimezone(tz))
+    data = _outlook(
+        rows,
+        now,
+        assembled.get("ensemble_reference_time"),
+        localize=lambda when: when.astimezone(tz),
+    )
     sources = assembled.get("sources") or ["AROME"]
     reference = assembled.get("reference_time")
     reference_local = reference.astimezone(tz) if reference is not None else None
@@ -376,11 +409,27 @@ def _stamp(when: datetime | None) -> str | None:
     return None if when is None else f"{when:%a %Y-%m-%d %H:%M}"
 
 
-def _tristate(value: bool | None) -> str:
-    """Render the tri-state thunderstorm outlook."""
+def _tristate(value: bool | None, source: str | None) -> str:
+    """Render the tri-state thunderstorm outlook and the signal behind a yes."""
     if value is None:
-        return "unknown (no usable forecast hours)"
-    return "yes" if value else "no"
+        return "unknown (no forecast hours in the window)"
+    if not value:
+        return "no"
+    return f"yes (signal: {source})" if source else "yes"
+
+
+_STORM_NOTE = (
+    "A thunderstorm hour is one whose GeoSphere weather symbol is a "
+    "thunderstorm, or where the C-LAEF ensemble's 90th percentiles reach "
+    f"{THUNDER_CAPE_JKG:.0f} J/kg CAPE and {PRECIP_MIN_MM} mm precipitation; "
+    "`signal` names which fired (symbol, ensemble or both). Max CAPE is a "
+    "diagnostic and decides nothing."
+)
+_NO_ENSEMBLE_LINE = (
+    "ℹ️ Ensemble signal: unavailable (no C-LAEF run under "
+    f"{ENSEMBLE_MAX_AGE.total_seconds() / 3600:.0f} h old); thunderstorms "
+    "from the weather symbol only"
+)
 
 
 def render_outlook(data: dict[str, Any]) -> str:
@@ -418,24 +467,26 @@ def render_outlook(data: dict[str, Any]) -> str:
         suffix = f" (at {at})" if at is not None else ""
         lines.append(f"💨 Max gust {label}: {gust} m/s{suffix}")
 
-    lines.append(
-        f"⛈️ Thunderstorm expected next {short} h: "
-        f"{_tristate(data.get('thunderstorm_short'))}"
+    expected = _tristate(
+        data.get("thunderstorm_short"), data.get("thunderstorm_short_source")
     )
+    lines.append(f"⛈️ Thunderstorm expected next {short} h: {expected}")
 
     storm_at = _stamp(data.get("next_thunderstorm_at"))
-    scanned = data.get("scanned_horizon_hours")
-    if storm_at is None and not data.get("next_thunderstorm_decidable"):
-        lines.append("⚡ Next thunderstorm: unknown (no usable forecast hours)")
-    elif storm_at is None:
+    if storm_at is None:
         # Name the horizon the all-clear covers rather than implying it runs to
-        # the nominal ~60 h: a stale or truncated AROME run reaches less far.
+        # the nominal ~60 h: publication lag and a stale or truncated run
+        # reach less far.
+        scanned = data.get("scanned_horizon_hours")
         span = f"next {scanned} h" if scanned else "forecast horizon"
         lines.append(f"⚡ Next thunderstorm: none in the {span}")
     else:
-        cape = _round_int(data.get("next_thunderstorm_cape_jkg"))
-        suffix = f" (CAPE {cape} J/kg)" if cape is not None else ""
+        source = data.get("next_thunderstorm_source")
+        suffix = f" (signal: {source})" if source else ""
         lines.append(f"⚡ Next thunderstorm: {storm_at}{suffix}")
+
+    if not data.get("ensemble_current"):
+        lines.append(_NO_ENSEMBLE_LINE)
 
     cape_max = _round_int(data.get("max_cape_long_jkg"))
     if cape_max is not None:
@@ -451,6 +502,7 @@ def render_outlook(data: dict[str, Any]) -> str:
         "hour already under way plus the next one. A thunderstorm timestamp at "
         "or before now means one is already in progress."
     )
+    lines.append(_STORM_NOTE)
 
     return "\n".join(lines)
 

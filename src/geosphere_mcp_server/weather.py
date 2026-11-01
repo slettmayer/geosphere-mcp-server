@@ -20,7 +20,7 @@ import aiohttp
 
 from geosphere_mcp_server.condition import (
     apparent_temperature,
-    derive_condition,
+    derive_condition_from_symbol,
     derive_current_condition,
     derive_precipitation_type,
     dew_point_from_t_rh,
@@ -35,6 +35,7 @@ from geosphere_mcp_server.const import (
     DATASET_INCA,
     DATASET_NOWCAST,
     ENSEMBLE_PARAMETERS,
+    FORECAST_ROW_MIDPOINT,
     HOURLY_LOOKBACK_HOURS,
     INCA_LOOKBACK_HOURS,
     INCA_PARAMETERS,
@@ -50,6 +51,7 @@ from geosphere_mcp_server.const import (
     PRECIPITATION_TYPES,
     PT_NO_PRECIPITATION,
     RATE_LOOKBACK,
+    SY_CODES,
 )
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereApiError,
@@ -60,9 +62,10 @@ from geosphere_mcp_server.geosphere_api import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# `pt` codes outside GeoSphere's table already reported by this process, so a
-# new one warns once rather than on every call for as long as it is falling.
+# Codes outside GeoSphere's tables already reported by this process, so a new
+# one warns once rather than on every call for as long as it is served.
 _UNKNOWN_PT_CODES: set[int] = set()
+_UNKNOWN_SY_CODES: set[int] = set()
 
 
 def _warn_unknown_pt_code(precipitation_type: int | None) -> None:
@@ -85,22 +88,32 @@ def _warn_unknown_pt_code(precipitation_type: int | None) -> None:
     )
 
 
+def _warn_unknown_sy_code(symbol: int | None) -> None:
+    """Log a `sy` code outside GeoSphere's table, once per code per process.
+
+    Kept out of :func:`assemble_hourly_forecast` so the assembly stays pure;
+    the async fetches call this on the symbols it read.
+    """
+    if symbol is None or symbol in SY_CODES or symbol in _UNKNOWN_SY_CODES:
+        return
+    _UNKNOWN_SY_CODES.add(symbol)
+    _LOGGER.warning(
+        "Forecast reported weather-symbol code %s, which is not in "
+        "GeoSphere's published table; its hours' condition reads unknown",
+        symbol,
+    )
+
+
 # --- Pure numeric helpers ---
-
-
-def _percent(value: float | None) -> float | None:
-    """Normalize AROME tcc (verified 0-1 scale) to percent."""
-    if value is None:
-        return None
-    return round(value * 100.0, 0)
 
 
 def _precipitation_probability(
     p10: float | None, p50: float | None, p90: float | None
 ) -> int | None:
-    """Stepped probability of a wet hour (>= PRECIP_MIN_MM) from rr percentiles.
+    """Stepped chance of a wet hour (>= PRECIP_MIN_MM) from tp percentiles.
 
-    The ensemble API only publishes p10/p50/p90 (no member fractions), so the
+    An estimate derived here, not a probability GeoSphere publishes: the
+    ensemble API only exposes p10/p50/p90 (no member fractions), so the
     wettest percentile above the threshold bounds the share of wet members and
     the midpoint of that range is reported: 95 / 70 / 30 / 0 %.
     """
@@ -115,48 +128,40 @@ def _precipitation_probability(
     return POP_DRY_PCT
 
 
-def _diff(series: list[float | None], index: int) -> float | None:
-    """Hourly value from a run-accumulated series: acc[i] - acc[i-1].
-
-    Negative deltas (accumulation reset on a new model run) clamp to 0.
-    Index 0 has no predecessor and returns None.
-    """
-    if index < 1 or index >= len(series):
-        return None
-    current, previous = series[index], series[index - 1]
-    if current is None or previous is None:
-        return None
-    return max(round(current - previous, 2), 0.0)
-
-
-def _pop_by_timestamp(
+def _ensemble_by_timestamp(
     ensemble: GeoSphereResponse | None,
-) -> dict[datetime, int | None]:
-    """Map each forecast hour to its stepped precipitation probability.
+) -> dict[datetime, dict[str, Any]]:
+    """Map each forecast hour to the ensemble values that describe it.
 
-    The percentiles are interval values, like AROME's gust/min-max/accumulation
-    parameters: "Total amount of ... precipitation in the last forecast
-    period". The probability stamped `ts` therefore belongs to the period
-    *ending* at `ts`, so it is keyed by that period's start -- simply the
-    preceding stamp, the row that reports the matching amount.
+    The tp percentiles are interval values, like the deterministic `tp`: "in
+    the last forecast interval". A percentile stamped `ts` therefore belongs to
+    the period *ending* at `ts`, so the probability and `tp_p90` are keyed by
+    that period's start -- simply the preceding stamp, the row that reports
+    the matching amount. `cape_p90` is instantaneous, like `cape`, so it stays
+    on its own stamp.
 
     The cadence comes from the series itself rather than a fixed step: if
     C-LAEF ever coarsens along its horizon (3-hourly tails are common for
     ensembles) or drops a stamp, a fixed step would miss every key and silently
     blank the probability across the whole forecast with nothing logged. The
-    predecessor is right at any cadence. Index 0 is the run start, whose "last
-    period" precedes the run, so it has no row to land on.
+    predecessor is right at any cadence. Index 0 has no predecessor, so the
+    interval values stamped there have no row to land on.
     """
-    pop: dict[datetime, int | None] = {}
+    by_ts: dict[datetime, dict[str, Any]] = {}
     if ensemble is None:
-        return pop
-    for i in range(1, len(ensemble.timestamps)):
-        pop[ensemble.timestamps[i - 1]] = _precipitation_probability(
-            ensemble.value_at("rr_p10", i),
-            ensemble.value_at("rr_p50", i),
-            ensemble.value_at("rr_p90", i),
+        return by_ts
+    for i, ts in enumerate(ensemble.timestamps):
+        by_ts.setdefault(ts, {})["cape_p90"] = ensemble.value_at("cape_p90", i)
+        if i == 0:
+            continue
+        start = by_ts.setdefault(ensemble.timestamps[i - 1], {})
+        start["pop"] = _precipitation_probability(
+            ensemble.value_at("tp_p10", i),
+            ensemble.value_at("tp_p50", i),
+            ensemble.value_at("tp_p90", i),
         )
-    return pop
+        start["tp_p90"] = ensemble.value_at("tp_p90", i)
+    return by_ts
 
 
 # --- Hourly forecast assembly (AROME + ensemble) ---
@@ -171,28 +176,33 @@ def assemble_hourly_forecast(
     hours: int | None = None,
     start: datetime | None = None,
 ) -> dict[str, Any]:
-    """Assemble the per-hour AROME forecast (+ ensemble precip probability).
+    """Assemble the per-hour AROME forecast (+ ensemble values per hour).
 
-    A row stamped ``ts`` describes the hour *beginning* at ``ts``. AROME mixes
-    two stampings, and the dataset metadata is explicit about which is which:
+    A row stamped ``ts`` describes the hour *beginning* at ``ts``. The dataset
+    mixes two stampings (see ``AROME_PARAMETERS`` for how each was classified):
 
-    * instantaneous AT the stamp — ``t2m``, ``rh2m``, ``u10m``/``v10m``,
-      ``tcc``, ``cape``, ``cin``, ``snowlmt``, ``grad``;
-    * the interval ENDING at the stamp — ``ugust``/``vgust`` ("... in the last
-      forecast intervall"), plus the ``rr_acc`` / ``snow_acc`` deltas, which
-      are accumulations since the run start, so ``acc[i] - acc[i-1]`` spans
-      ``(ts[i-1], ts[i]]``.
+    * instantaneous AT the stamp — ``2t``, ``2r``, ``10u``/``10v``, ``tcc``,
+      ``cape``, ``snowlmt``;
+    * the interval ENDING at the stamp — ``10fg``, ``tp`` and ``sf`` ("... in
+      the last forecast interval"), each already a per-hour value.
 
     The interval fields covering the hour that *starts* at ``ts`` therefore
     live one step later, at ``nxt``. Reading them at ``i`` would report the
     hour that already ended — rain that has stopped, the previous hour's gust
     peak, and a thunderstorm the outlook would then place in the future.
 
+    ``sy`` is read at ``nxt`` too. Its precipitation classes follow ``tp`` at
+    their own stamp, so only there does the symbol agree with the row's
+    precipitation: at ``i`` a row would show rain for the hour after it
+    stopped and none for the hour it started. Its cloud classes bin ``tcc`` at
+    that same later stamp, i.e. the sky at the end of the row's hour. Night is
+    judged at the middle of the row's hour.
+
     The final stamp has no successor and so cannot be emitted. Hours before
     the current top-of-hour are dropped; ``start`` filters to hours at/after a
     given instant, and ``hours`` truncates the result length.
     """
-    pop_by_ts = _pop_by_timestamp(ensemble)
+    ensemble_by_ts = _ensemble_by_timestamp(ensemble)
     cutoff = now.replace(minute=0, second=0, microsecond=0)
     hourly: list[dict[str, Any]] = []
 
@@ -202,44 +212,37 @@ def assemble_hourly_forecast(
             continue
         nxt = i + 1
         wind_speed, wind_bearing = wind_from_components(
-            arome.value_at("u10m", i), arome.value_at("v10m", i)
+            arome.value_at("10u", i), arome.value_at("10v", i)
         )
-        gust_speed, _ = wind_from_components(
-            arome.value_at("ugust", nxt), arome.value_at("vgust", nxt)
-        )
-        precipitation = _diff(arome.series("rr_acc"), nxt)
-        snow = _diff(arome.series("snow_acc"), nxt)
-        cloud = _percent(arome.value_at("tcc", i))
-        cape = arome.value_at("cape", i)
-        cin = arome.value_at("cin", i)
-        temperature = arome.value_at("t2m", i)
-        humidity = arome.value_at("rh2m", i)
+        temperature = arome.value_at("2t", i)
+        humidity = arome.value_at("2r", i)
+        raw_symbol = arome.value_at("sy", nxt)
+        symbol = int(raw_symbol) if raw_symbol is not None else None
+        members = ensemble_by_ts.get(ts, {})
         hourly.append(
             {
                 "time": ts,
-                "condition": derive_condition(
-                    precipitation,
-                    snow,
-                    cloud,
-                    cape,
-                    cin,
-                    gust_speed,
-                    is_night(latitude, longitude, ts),
+                "weather_symbol": symbol,
+                "condition": derive_condition_from_symbol(
+                    symbol,
+                    is_night(latitude, longitude, ts + FORECAST_ROW_MIDPOINT),
                 ),
                 "temperature_c": temperature,
                 "humidity_pct": humidity,
                 "dew_point_c": dew_point_from_t_rh(temperature, humidity),
                 "wind_speed_ms": wind_speed,
                 "wind_bearing_deg": wind_bearing,
-                "wind_gust_ms": gust_speed,
-                "cloud_cover_pct": cloud,
-                "precipitation_mm": precipitation,
-                "snow_mm": snow,
+                "wind_gust_ms": arome.value_at("10fg", nxt),
+                "cloud_cover_pct": arome.value_at("tcc", i),
+                "precipitation_mm": arome.value_at("tp", nxt),
+                "snow_mm": arome.value_at("sf", nxt),
                 "snow_limit_m": arome.value_at("snowlmt", i),
-                "precipitation_probability_pct": pop_by_ts.get(ts),
-                "cape_jkg": cape,
-                "cin_jkg": cin,
-                "global_radiation_wm2": arome.value_at("grad", i),
+                "precipitation_probability_pct": members.get("pop"),
+                "cape_jkg": arome.value_at("cape", i),
+                # C-LAEF 90th percentiles behind the ensemble thunderstorm
+                # signal: CAPE at the row's stamp, precipitation over its hour.
+                "ensemble_cape_p90_jkg": members.get("cape_p90"),
+                "ensemble_precipitation_p90_mm": members.get("tp_p90"),
             }
         )
 
@@ -250,6 +253,9 @@ def assemble_hourly_forecast(
 
     return {
         "reference_time": arome.reference_time,
+        "ensemble_reference_time": (
+            ensemble.reference_time if ensemble is not None else None
+        ),
         "grid_latitude": arome.grid_latitude,
         "grid_longitude": arome.grid_longitude,
         "hourly": hourly,
@@ -261,58 +267,31 @@ def assemble_hourly_forecast(
 
 def _arome_current(
     arome: GeoSphereResponse | None,
+    latitude: float,
+    longitude: float,
     now: datetime,
 ) -> dict[str, Any] | None:
-    """AROME snapshot of the hour in progress, for the fallback chain.
+    """The assembled AROME row for the hour in progress, for the fallback chain.
 
-    Scans from index 0 for the hour already under way, so that hour has to be
-    present in the series. It is not there for free: an unbounded request
-    begins well after the current hour, so the caller anchors an explicit
-    ``start`` (see :func:`async_fetch_current_conditions`). Without it the
-    first row is a future one, and this function would read cloud, CAPE and
-    CIN from it and present them as current — CIN in particular gates the
-    current condition's thunder verdict.
+    Taken from :func:`assemble_hourly_forecast`, so every field follows the
+    same stamping as the hourly forecast: the gust and the weather symbol are
+    the ones covering the hour under way, read one stamp on.
 
-    Every field here is instantaneous at the stamp except the gust:
-    ``ugust``/``vgust`` are the maximum over the interval *ending* at their
-    stamp, so the peak for the hour in progress is the one stamped an hour
-    later — see :func:`assemble_hourly_forecast` for the full convention. A
-    missing successor leaves the gust unknown rather than reporting the
-    previous hour's peak as the gust now: that only happens when the run ends
-    at the current hour, and "unknown" beats a number that is known to be for
-    the wrong hour. Outside the nowcast grid there is no ``fx`` behind it, so
-    the gust and any windy verdict simply drop out until the next run lands.
+    That hour has to be present in the series, and it is not there for free:
+    an unbounded request begins well after the current hour, so the caller
+    anchors an explicit ``start`` (see :func:`async_fetch_current_conditions`).
+    Without it the first row is a future one, and this function would present
+    its cloud, CAPE and symbol as current -- the symbol feeds the current
+    condition.
+
+    ``None`` when the run has no row at or after the current hour, which
+    includes a run whose final stamp is the current hour: that stamp has no
+    successor to read the interval fields from.
     """
     if arome is None:
         return None
-    cutoff = now.replace(minute=0, second=0, microsecond=0)
-    index: int | None = None
-    for i in range(len(arome.timestamps)):
-        if arome.timestamps[i] >= cutoff:
-            index = i
-            break
-    if index is None:
-        return None
-    wind_speed, wind_bearing = wind_from_components(
-        arome.value_at("u10m", index), arome.value_at("v10m", index)
-    )
-    gust_speed, _ = wind_from_components(
-        arome.value_at("ugust", index + 1), arome.value_at("vgust", index + 1)
-    )
-    return {
-        # The row's own stamp, so a merge with no INCA or nowcast behind it can
-        # report when these values are actually for instead of claiming `now`.
-        "time": arome.timestamps[index],
-        "temperature": arome.value_at("t2m", index),
-        "humidity": arome.value_at("rh2m", index),
-        "wind_speed": wind_speed,
-        "wind_bearing": wind_bearing,
-        "wind_gust_speed": gust_speed,
-        "cloud_coverage": _percent(arome.value_at("tcc", index)),
-        "cape": arome.value_at("cape", index),
-        "cin": arome.value_at("cin", index),
-        "snow_limit": arome.value_at("snowlmt", index),
-    }
+    rows = assemble_hourly_forecast(arome, None, latitude, longitude, now, hours=1)
+    return rows["hourly"][0] if rows["hourly"] else None
 
 
 def merge_current_conditions(
@@ -328,10 +307,10 @@ def merge_current_conditions(
     Per-field preference (ported from GeoSphereCurrentCoordinator._merge):
     temp/humidity/wind speed+bearing = INCA -> nowcast -> AROME; dew point =
     INCA -> nowcast; gust = nowcast -> AROME; pressure (P0 Pa->hPa) and global
-    radiation = INCA only; cloud/CAPE/CIN = AROME; 1-h precip = INCA RR only;
-    precip type from nowcast pt (255 = none).
+    radiation = INCA only; cloud/CAPE/snow limit/weather symbol = AROME; 1-h
+    precip = INCA RR only; precip type from nowcast pt (255 = none).
     """
-    arome_current = _arome_current(arome, now)
+    arome_current = _arome_current(arome, latitude, longitude, now)
 
     # One scan, reused by every nowcast field below and by `observed_at`: the
     # bucket cannot change within this call.
@@ -367,13 +346,13 @@ def merge_current_conditions(
     # thermodynamic fields and wind: the nowcast extrapolates from an analysis
     # ~2 h behind, lagging diurnal ramps by up to ~2 °C.
     inca_t2m, inca_t2m_at = inca_latest("T2M")
-    temperature = chain(inca_t2m, now_value("t2m"), arome_field("temperature"))
-    humidity = chain(inca_latest("RH2M")[0], now_value("rh2m"), arome_field("humidity"))
-    wind_speed = chain(inca_wind_speed, now_value("ff"), arome_field("wind_speed"))
-    gust = chain(now_value("fx"), arome_field("wind_gust_speed"))
-    cloud = arome_field("cloud_coverage")
-    cape = arome_field("cape")
-    cin = arome_field("cin")
+    temperature = chain(inca_t2m, now_value("t2m"), arome_field("temperature_c"))
+    humidity = chain(
+        inca_latest("RH2M")[0], now_value("rh2m"), arome_field("humidity_pct")
+    )
+    wind_speed = chain(inca_wind_speed, now_value("ff"), arome_field("wind_speed_ms"))
+    gust = chain(now_value("fx"), arome_field("wind_gust_ms"))
+    symbol = arome_field("weather_symbol")
 
     p0, _ = inca_latest("P0")
     # INCA `RR` is the only source for the hourly accumulation. Summing nowcast
@@ -407,10 +386,10 @@ def merge_current_conditions(
     # `inca_latest` returns the newest non-None value at any age, and GeoSphere
     # keeps serving the last analysis it managed to produce, so an ungated read
     # derives `rainy` under a clear sky from rain that stopped hours ago. Past
-    # INCA_RR_MAX_AGE_SECONDS the derivation falls through to cloud cover,
-    # which is what the sky actually says. The bound is deliberately well past
-    # INCA's own ~90 min worst-case lag so ordinary publishing never trips it
-    # -- see the constant.
+    # INCA_RR_MAX_AGE_SECONDS it no longer counts as an observation, and with
+    # no nowcast either the condition is the weather symbol's alone. The bound
+    # is deliberately well past INCA's own ~90 min worst-case lag so ordinary
+    # publishing never trips it -- see the constant.
     #
     # `precipitation_1h_mm` keeps reporting the accumulation regardless: it is
     # a real measurement of a past hour. It is NOT dated by `observed_at`,
@@ -424,34 +403,40 @@ def merge_current_conditions(
     # Bounded at BOTH ends. A bare `age <= INCA_RR_MAX_AGE_SECONDS` is also
     # satisfied by a negative age, so a future-stamped `RR` would read as the
     # freshest reading there is and derive `pouring` from an hour that has not
-    # happened yet. The fetch path cannot currently produce one -- the INCA
-    # request is bounded `end=now` with the same `now` passed to this merge --
-    # but this is a pure function with its own `now` argument, and nothing in
-    # its signature enforces that pairing. `observed_at` below already clamps
+    # happened yet. The fetch path cannot produce one -- the INCA request is
+    # bounded `end=now` with the same `now` passed to this merge -- but this
+    # is a pure function with its own `now` argument, and nothing in its
+    # signature enforces that pairing. `observed_at` below already clamps
     # every rung to `now` on the same principle: an observation can never be
     # in the future.
     rr_1h_age_s = (now - rr_1h_time).total_seconds() if rr_1h_time is not None else None
     rr_1h_is_current = (
         rr_1h_age_s is not None and 0 <= rr_1h_age_s <= INCA_RR_MAX_AGE_SECONDS
     )
+    # Only the nowcast decides while it reports either `pt` or `rr`: a `pt` of
+    # 255 is an observed "dry" that an hour-old `RR` must not overrule. Without
+    # it, only a *wet* `RR` stands in. A dry one would demote a rain or thunder
+    # symbol to `cloudy`, but it describes an hour that ended up to ~90 min ago
+    # in ordinary publishing, so it cannot rule out rain that has started
+    # since; with no nowcast, "dry" is never observed and the symbol stands.
+    nowcast_observes = precipitation_type is not None or nowcast_rate_mm_h is not None
+    rr_1h_is_wet = rr_1h_is_current and rr_1h is not None and rr_1h >= PRECIP_MIN_MM
+    # `None` when nothing observes precipitation, which the condition
+    # derivation tells apart from an observed "dry".
     rate_mm_h = (
-        nowcast_rate_mm_h
-        if nowcast_rate_mm_h is not None
-        else ((rr_1h or 0.0) if rr_1h_is_current else 0.0)
+        nowcast_rate_mm_h if nowcast_observes else (rr_1h if rr_1h_is_wet else None)
     )
     # A single bucket can round to 0.0 in the gap between cells of an active
-    # storm, reporting 0 mm/h mid-thunderstorm and starving both the `pouring`
-    # branch and the downpour override that lets observed rain overrule a
-    # modelled CIN lid -- the very case that override exists for (see
-    # `condition.derive_current_condition`). So once the nowcast's own `pt`
-    # code says it is precipitating, take the peak across the last
-    # RATE_LOOKBACK rather than the matched bucket alone.
+    # storm, reporting 0 mm/h mid-downpour and starving the `pouring` branch of
+    # `condition.derive_current_condition`. So once the nowcast's own `pt` code
+    # says it is precipitating, take the peak across the last RATE_LOOKBACK
+    # rather than the matched bucket alone.
     #
     # INCA's hourly `RR` is deliberately not used here. It is a total over the
     # whole past hour, so substituting it for an instantaneous rate reports
     # rain that has already stopped: 6 mm falling in the first 20 minutes and
     # ending, with drizzle keeping `pt` non-zero, would read as 6 mm/h and
-    # derive a thunderstorm from a capped, drizzling sky.
+    # derive `pouring` from a drizzling sky.
     if (
         nowcast is not None
         and precipitation_type is not None
@@ -463,7 +448,7 @@ def merge_current_conditions(
             if now - RATE_LOOKBACK <= ts <= now and value is not None
         ]
         if recent:
-            rate_mm_h = max(rate_mm_h, max(recent) * NOWCAST_BUCKETS_PER_HOUR)
+            rate_mm_h = max(rate_mm_h or 0.0, max(recent) * NOWCAST_BUCKETS_PER_HOUR)
     night = is_night(latitude, longitude, now)
 
     # When these conditions actually describe: the stamp of whichever source
@@ -510,7 +495,7 @@ def merge_current_conditions(
         "pressure_hpa": round(p0 / 100.0, 1) if p0 is not None else None,
         "wind_speed_ms": wind_speed,
         "wind_bearing_deg": chain(
-            inca_wind_bearing, now_value("dd"), arome_field("wind_bearing")
+            inca_wind_bearing, now_value("dd"), arome_field("wind_bearing_deg")
         ),
         "wind_gust_ms": gust,
         "precipitation_1h_mm": rr_1h,
@@ -522,21 +507,16 @@ def merge_current_conditions(
         # never sits beside a rainy condition (see derive_precipitation_type).
         "precipitation_kind": derive_precipitation_type(precipitation_type, rate_mm_h),
         "is_precipitating": is_precipitating(precipitation_type, nowcast_rate_mm_h),
-        "cloud_cover_pct": cloud,
+        "cloud_cover_pct": arome_field("cloud_cover_pct"),
         "global_radiation_wm2": inca_latest("GL")[0],
-        "snow_limit_m": arome_field("snow_limit"),
-        "cape_jkg": cape,
-        "cin_jkg": cin,
+        "snow_limit_m": arome_field("snow_limit_m"),
+        "cape_jkg": arome_field("cape_jkg"),
+        "weather_symbol": symbol,
         "condition": derive_current_condition(
             precipitation_type=precipitation_type,
             precipitation_rate_mm_h=rate_mm_h,
             temperature=temperature,
-            humidity=humidity,
-            wind_speed=wind_speed,
-            cloud_coverage=cloud,
-            cape=cape,
-            cin=cin,
-            gust_speed=gust,
+            symbol=symbol,
             night=night,
         ),
     }
@@ -562,12 +542,12 @@ async def async_fetch_current_conditions(
     """
     now = now or datetime.now(UTC)
     inca_start = now - timedelta(hours=INCA_LOOKBACK_HOURS)
-    # Anchored exactly as the hourly fetch is, and for the same reason: an
-    # unbounded request begins well after the current hour (measured
-    # 2026-08-12 05:54Z: first stamp 07:00), so `_arome_current` would take
-    # cloud, CAPE and CIN from a row over an hour ahead and present them as
-    # current. See HOURLY_LOOKBACK_HOURS for why the anchor is the top of the
-    # hour rather than `now`.
+    # Anchored exactly as the hourly fetch is, and for the same reason: where
+    # an unbounded request begins is the API's choice, and if it is past the
+    # current hour `_arome_current` would take cloud, CAPE and the weather
+    # symbol from a later row and present them as current. See
+    # HOURLY_LOOKBACK_HOURS for why the anchor is the top of the hour rather
+    # than `now`.
     arome_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(
         hours=HOURLY_LOOKBACK_HOURS
     )
@@ -627,6 +607,7 @@ async def async_fetch_current_conditions(
 
     merged = merge_current_conditions(nowcast, inca, arome, latitude, longitude, now)
     _warn_unknown_pt_code(merged["precipitation_type"])
+    _warn_unknown_sy_code(merged["weather_symbol"])
     merged["sources"] = sources
     merged["grid_latitude"] = arome.grid_latitude
     merged["grid_longitude"] = arome.grid_longitude
@@ -640,16 +621,14 @@ async def async_fetch_hourly_forecast(
     hours: int = 24,
     start: datetime | None = None,
     now: datetime | None = None,
-    include_ensemble: bool = True,
 ) -> dict[str, Any]:
-    """Fetch AROME (+ C-LAEF ensemble) concurrently and assemble the hourly forecast.
+    """Fetch AROME + C-LAEF ensemble concurrently and assemble the hourly forecast.
 
-    Ensemble failure just omits precipitation probability. Pass
-    ``include_ensemble=False`` to skip that request entirely — the storm
-    outlook does not report probability and should not spend the call. Raises
-    :class:`GeoSphereOutOfDomainError` only when AROME is out of domain, which
-    the server renders as an out-of-coverage notice; other AROME errors
-    propagate. The result carries a ``sources`` list.
+    Ensemble failure just omits the precipitation probability and the
+    ensemble's thunderstorm signal. Raises :class:`GeoSphereOutOfDomainError`
+    only when AROME is out of domain, which the server renders as an
+    out-of-coverage notice; other AROME errors propagate. The result carries a
+    ``sources`` list.
     """
     now = now or datetime.now(UTC)
 
@@ -668,8 +647,8 @@ async def async_fetch_hourly_forecast(
     )
     # And no further than the caller asked for: `hours=6` has no use for the
     # other ~54 h of the AROME horizon. Two hours of slack past the last
-    # requested hour: one because its interval fields (gust, precipitation)
-    # live on the *following* stamp, and one so rounding at the boundary
+    # requested hour: one because its interval fields (gust, precipitation,
+    # weather symbol) live on the *following* stamp, and one so rounding at the boundary
     # cannot clip that successor. The storm outlook asks for AROME_MAX_HOURS,
     # so its scan still spans the full horizon — where the slack buys nothing,
     # since the run itself ends there and the assembly drops its successorless
@@ -677,7 +656,7 @@ async def async_fetch_hourly_forecast(
     # all-clear stays honest about covering an hour less than the run.
     series_end = window_start + timedelta(hours=max(hours, 1) + 2)
 
-    requests = [
+    arome_res, ensemble_res = await asyncio.gather(
         async_get_timeseries(
             session,
             *DATASET_AROME,
@@ -686,33 +665,30 @@ async def async_fetch_hourly_forecast(
             longitude,
             start=series_start,
             end=series_end,
-        )
-    ]
-    if include_ensemble:
-        requests.append(
-            async_get_timeseries(
-                session,
-                *DATASET_ENSEMBLE,
-                ENSEMBLE_PARAMETERS,
-                latitude,
-                longitude,
-                start=series_start,
-                end=series_end,
-            )
-        )
-    results = await asyncio.gather(*requests, return_exceptions=True)
-
-    if isinstance(results[0], BaseException):
-        raise results[0]
-    arome: GeoSphereResponse = results[0]
-
-    ensemble = (
-        _optional_response(results[1], "C-LAEF ensemble") if include_ensemble else None
+        ),
+        async_get_timeseries(
+            session,
+            *DATASET_ENSEMBLE,
+            ENSEMBLE_PARAMETERS,
+            latitude,
+            longitude,
+            start=series_start,
+            end=series_end,
+        ),
+        return_exceptions=True,
     )
+
+    if isinstance(arome_res, BaseException):
+        raise arome_res
+    arome: GeoSphereResponse = arome_res
+
+    ensemble = _optional_response(ensemble_res, "C-LAEF ensemble")
 
     assembled = assemble_hourly_forecast(
         arome, ensemble, latitude, longitude, now, hours=hours, start=start
     )
+    for row in assembled["hourly"]:
+        _warn_unknown_sy_code(row["weather_symbol"])
     sources = ["AROME"]
     if ensemble is not None:
         sources.append("C-LAEF ensemble")
