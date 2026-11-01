@@ -7,6 +7,65 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Fixed: the forecast works again. GeoSphere stopped publishing `nwp-v1-1h-2500m` (its last run is
+  2026-10-30T21:00Z; the endpoint now answers HTTP 200 with all-null data, and GeoSphere's older dataset
+  versions are due to shut down on 2026-11-04), so `get_hourly_forecast` rendered `n/a` rows, `get_storm_outlook` had no
+  gusts or thunderstorms, and `get_current_weather` lost its cloud cover and forecast-based condition. The
+  server now reads `nwp-v2-1h-1km` — the 1 km deterministic control run of GeoSphere's C-LAEF AlpeAdria
+  ensemble, still called AROME in the output — and `ensemble-v2-1h-1km`. Forecast values follow the new
+  datasets' semantics: precipitation and snow are per-hour amounts (`tp`, `sf`) rather than differenced
+  run totals, the gust is the dataset's own peak (`10fg`), cloud cover is published in percent, and the
+  ensemble percentiles are `tp_p10/p50/p90`. Interval values still describe the hour beginning at each
+  row. Ported from ha-geosphere-next 0.15.0.
+- Changed: **output.** Every condition now follows GeoSphere's own weather symbol (`sy`), mapped through
+  the [code table GeoSphere published](https://github.com/Geosphere-Austria/dataset-api-docs/issues/30#issuecomment-2042539848),
+  instead of this server's cloud, gust, fog and CAPE/CIN thresholds. Hourly rows read the symbol of their
+  own hour; night is judged at the middle of the hour. `windy`, `windy-variant` and dry `lightning` no
+  longer occur; every thunderstorm code reads `lightning-rainy`; `fog` comes only from GeoSphere's fog
+  symbols, which did not appear in sampled `nwp-v2` data, so it may not occur at all. A missing or unknown
+  code leaves the hour's condition out (and logs one warning per code). Ported from ha-geosphere-next
+  0.16.0.
+- Changed: **output.** `get_current_weather`'s condition lets observations decide what is falling and
+  takes the rest from the symbol for the current hour. Observed rain reads `pouring` from 5 mm/h (was
+  4 mm/h), where GeoSphere's heavy-rain symbols start. Observed precipitation reads `lightning-rainy`
+  under a thunderstorm symbol (observed snow at or below 1 °C stays `snowy`). Nothing falling under a
+  rain, snow or thunder symbol reads `cloudy`. Only the nowcast can say "dry": with the nowcast
+  unavailable, a current INCA analysis still counts when it shows rain, while a dry one leaves the symbol
+  standing. With no observation at all (outside Austria) the symbol applies unchanged, so those locations
+  can now show rain and thunderstorms. The fog heuristic is gone.
+- Fixed: the current condition no longer shows rain from INCA's hourly analysis while the nowcast reports
+  no precipitation (`pt` 255) without a rate beside it; the analysis stands in only when the nowcast
+  reports nothing.
+- Changed: **output.** `get_storm_outlook` rests on GeoSphere's symbol and the C-LAEF ensemble. An hour is
+  a thunderstorm hour when its symbol is a thunderstorm (26–32) **or** when the ensemble's 90th
+  percentiles reach 1000 J/kg CAPE and 0.1 mm precipitation in it; the ensemble counts only while its run
+  is less than 12 h old. Line by line:
+  - the header's source now reads `GeoSphere (AROME + C-LAEF ensemble)`: the tool fetches the ensemble
+    (two requests instead of one);
+  - `⛈️ Thunderstorm expected next 1 h: yes` becomes `yes (signal: symbol|ensemble|both)`;
+  - `⚡ Next thunderstorm: … (CAPE N J/kg)` becomes `… (signal: symbol|ensemble|both)`;
+  - `unknown (no usable forecast hours)` becomes `unknown (no forecast hours in the window)` on the
+    thunderstorm-expected line, and only when no forecast hour falls in the window; an hour with a
+    missing symbol now counts as no storm. `⚡ Next thunderstorm` no longer reports `unknown`;
+  - new line `ℹ️ Ensemble signal: unavailable (no C-LAEF run under 12 h old); thunderstorms from the
+    weather symbol only` when the ensemble failed or is too old;
+  - new trailing note defining a thunderstorm hour and the `signal` values;
+  - `🌡️ Max CAPE next 12 h` stays as a diagnostic; it no longer decides anything.
+
+  GeoSphere flags thunderstorms at far lower CAPE than the old 1000 J/kg rule, so expect more thunderstorm
+  answers in convective weather. The tool description and the server instructions say all of this.
+- Changed: **output.** `get_hourly_forecast` labels its precipitation chance for what it is: a trailing
+  note says it is an estimate derived from the C-LAEF ensemble percentiles (0/30/70/95 %), not a
+  probability GeoSphere publishes. The values are unchanged.
+- Changed: **output.** `get_hourly_forecast` no longer prints an amount that rounds to `0 mm` (and the
+  chance beside it). The new dataset publishes traces to a thousandth of a millimetre, so `0 mm (30%
+  chance)` had become common.
+- Removed: convective inhibition, global radiation from the forecast, and the run-accumulated
+  precipitation series, none of which the new dataset publishes. None was rendered.
+- Added: `scripts/record_fixtures.py` records live v2 responses into `tests/fixtures/` and prints each
+  forecast parameter's stamping; the tests now check the stamping and the symbol/precipitation agreement on
+  a real recording.
+
 ## 0.6.0 - 2026-10-13
 
 - Added: `get_current_weather` says what is falling: `🌧️ Falling now: rain`, `🧊 Falling now: freezing
