@@ -14,6 +14,7 @@
 - **Run server**: `uvx --from . geosphere-mcp-server` or `python -m geosphere_mcp_server.server`
 - **Validate (CI)**: Ruff + pytest unit tests (all must pass via the `gate` job)
 - **Release**: run the Auto Release workflow; the version comes from the git tag -- see [RELEASING.md](docs/tech/RELEASING.md)
+- **Re-record test fixtures**: `uv run python scripts/record_fixtures.py` (live v2 responses; also prints each parameter's stamping) -- see [TESTING.md](docs/tech/TESTING.md)
 
 ## Where to Find Things
 | I need to... | Read |
@@ -25,8 +26,8 @@
 | Cut a release, or add a changelog entry | [RELEASING.md](docs/tech/RELEASING.md) |
 | Understand the business domain | [docs/domain/](docs/domain/README.md) |
 | Know a tool's signature, validation, or exact output | [OUTPUT-CONTRACT.md](docs/domain/OUTPUT-CONTRACT.md) |
-| Change a condition threshold or the merge chain | [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md) |
-| Work on gusts, thunderstorm timing, or the outlook windows | [STORM-OUTLOOK.md](docs/domain/STORM-OUTLOOK.md) |
+| Change the `sy` mapping, the current condition, or the merge chain | [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md) |
+| Work on gusts, the thunderstorm signals, or the outlook windows | [STORM-OUTLOOK.md](docs/domain/STORM-OUTLOOK.md) |
 | Work on pollutants or the air quality index | [AIR-QUALITY.md](docs/domain/AIR-QUALITY.md) |
 | Add or bump a dataset, or check coverage rules | [DATA-SOURCES-AND-COVERAGE.md](docs/domain/DATA-SOURCES-AND-COVERAGE.md) |
 
@@ -39,8 +40,8 @@ All code lives in `src/geosphere_mcp_server/`.
 - `weather.py` -- merge chain, hourly assembly, POP mapping, unit conversions (orchestration)
 - `air_quality.py` -- WRF-Chem pollutant merge + daily AQI by local calendar day (orchestration)
 - `geosphere_api.py` -- pure async client for the GeoSphere Dataset API
-- `condition.py` -- pure condition derivation, incl. the CAPE/CIN thunder gate (ported from ha-geosphere-next)
-- `outlook.py` -- pure storm-outlook derivation over the hourly rows (ported from ha-geosphere-next)
+- `condition.py` -- pure condition derivation from GeoSphere's `sy` weather symbol, with observations overriding it for now (ported from ha-geosphere-next)
+- `outlook.py` -- pure storm-outlook derivation over the hourly rows: symbol or current-ensemble thunderstorm signal (ported from ha-geosphere-next)
 - `format.py` -- emoji-markdown renderers for the four tools
 - `const.py` -- most constants (URLs, resource IDs, parameter lists, thresholds)
 
@@ -73,11 +74,12 @@ See [Conventions](docs/tech/CONVENTIONS.md) for naming tables and full rules.
 ## Business Domain
 Weather MCP gateway. Four tools: `get_current_weather` and `get_hourly_forecast` match the
 OpenWeatherMap server surface they replace; `get_storm_outlook` and `get_air_quality` are additions.
-GeoSphere Austria's gridded datasets (AROME ~60 h, INCA analysis/nowcast, C-LAEF ensemble, WRF-Chem air
-quality) drive all four, for Austria and the Alps only -- a point outside the AROME grid is answered with
-an out-of-coverage line rather than served from elsewhere. There is no multi-day forecast, because no
-GeoSphere dataset reaches past AROME's horizon. Conditions are derived physically from the parameters,
-using the Home Assistant condition vocabulary.
+GeoSphere Austria's gridded datasets (AROME ~60 h -- `nwp-v2-1h-1km`, the 1 km control run of C-LAEF --
+INCA analysis/nowcast, C-LAEF ensemble, WRF-Chem air quality) drive all four, for Austria and the Alps only
+-- a point outside the AROME grid is answered with an out-of-coverage line rather than served from
+elsewhere. There is no multi-day forecast, because no GeoSphere dataset reaches past AROME's horizon.
+Conditions come from GeoSphere's own weather symbol (`sy`), in the Home Assistant condition vocabulary;
+observations decide what is falling now.
 
 See [Domain Overview](docs/domain/OVERVIEW.md) for the concept catalogue, API surfaces, and glossary; it
 indexes the per-concept files on data sources, condition derivation, and the tool/output contract.
@@ -92,11 +94,13 @@ indexes the per-concept files on data sources, condition derivation, and the too
 - Clients never let a bare `TimeoutError` escape (each wraps it in a typed `*TimeoutError`), so the server
   layer must catch those explicitly -- a new client that skips this regresses timeouts to the generic
   "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
-- Several merged fields (dew point, CAPE, global radiation, hourly wind bearing) are computed and then
-  dropped in normalization -- surfacing them is a `format.py` change only
-- AROME publishes convective inhibition as a NEGATIVE magnitude and `condition.is_thunder` assumes that
-  sign without checking it; a source that publishes it positive must be negated before the gate, or the
-  gate silently inverts
+- Several merged fields (dew point, CAPE, global radiation, weather-symbol code, hourly wind bearing) are
+  computed and then dropped in normalization -- surfacing them is a `format.py` change only
+- Forecast parameters are either instantaneous or cover the interval ENDING at their stamp, decided by
+  measurement (null at the run's t0), not by name; a misclassified parameter shifts a field by an hour
+  silently -- classify with `scripts/record_fixtures.py` (see [DATA-SOURCES-AND-COVERAGE.md](docs/domain/DATA-SOURCES-AND-COVERAGE.md))
+- The `sy` code table is published for `nwp-v1` and assumed for `nwp-v2`; fog codes have not been seen
+  there, so `fog` may never be reported (see [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md))
 - The nowcast bucket is matched nearest-in-*either*-direction, so every nowcast-sourced current value can
   come from up to 7.5 min ahead (only `observed_at` is clamped to `now`). Reviewed and deliberately
   accepted, not an oversight -- see [CONDITION-DERIVATION.md](docs/domain/CONDITION-DERIVATION.md)

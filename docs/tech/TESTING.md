@@ -21,13 +21,28 @@ tests/
   test_geosphere_api.py   -- unit tests, mocked HTTP (runs in CI)
   test_server.py          -- unit tests for the four MCP tool functions (runs in CI)
   test_condition.py       -- unit tests, pure derivation table tests (runs in CI)
-  test_weather.py         -- unit tests, merge chain / POP / differencing (runs in CI)
+  test_weather.py         -- unit tests, merge chain / POP / stamping, plus recorded v2 fixtures (runs in CI)
   test_format.py          -- unit tests, markdown renderer snapshots (runs in CI)
   test_outlook.py         -- unit tests, gust/thunderstorm windows (runs in CI)
   test_air_quality.py     -- unit tests, pollutant merge + AQI day matching (runs in CI)
   test_server_json.py     -- MCP Registry publish constraints (runs in CI)
   test_integration.py     -- integration tests, live APIs (CI-excluded)
+  fixtures/               -- live GeoSphere responses, recorded by scripts/record_fixtures.py
 ```
+
+### Recorded Fixtures
+`tests/fixtures/` holds live responses for one point (Pörtschach by default): the deterministic forecast
+(`nwp.json`) and the C-LAEF ensemble (`ensemble.json`), each requested from its run's own t0 so index 0
+keeps the null that marks an interval-ending parameter, plus the nowcast and INCA requested exactly as the
+server requests them, and `manifest.json` with the point and the recording instant. The tests use that
+instant as their frozen clock.
+
+Re-record after a dataset or parameter change: `uv run python scripts/record_fixtures.py [--lat-lon LAT,LON]`
+from the repository root. The script also prints each forecast parameter's stamping (null at t0 =
+interval-ending), which is how a new parameter is classified before it is wired in. Rows are compared
+against the live recording, so the fixture tests assert *properties* (stamping, symbol/precipitation
+agreement, the merge's verdict for that recording), and a re-record may need the last of those adjusted
+to the new weather.
 
 ### Release-metadata tests
 `test_server_json.py` checks `server.json` against constraints the MCP Registry only enforces at publish
@@ -46,12 +61,13 @@ into CI, minutes before a release rather than during one.
 
 ### Test Method Naming
 - Pattern: `test_<function>_<scenario>()` with `-> None` return annotation
-- Examples: `test_fetch_arome_success`, `test_fetch_geosphere_out_of_domain`, `test_derive_condition_fog`, `test_pop_mapping_steps`
+- Examples: `test_async_get_timeseries_builds_url_and_params`, `test_derive_condition_from_symbol_by_night`, `test_precipitation_probability`
 
 ### Test Organization
 - Arrange-Act-Assert pattern
 - Tests grouped by function with `# --- Section header ---` comment banners
-- Sample data defined as module-level `SAMPLE_*` constants, not inline (e.g. captured GeoJSON payloads)
+- Sample data defined as module-level `SAMPLE_*` constants, not inline (e.g. captured GeoJSON payloads);
+  whole live responses live in `tests/fixtures/` instead
 
 ### Async Testing
 - `pytest-asyncio` with `asyncio_mode = "auto"` in `pyproject.toml`
@@ -72,8 +88,9 @@ into CI, minutes before a release rather than during one.
 
 ### Coverage Targets (unit)
 - The API client: success, timeout, 429, out-of-domain 400
-- Condition derivation: full threshold table incl. fog heuristic and day/night
-- Merge-chain preference (INCA -> nowcast -> AROME), POP stepped mapping, accumulation differencing
+- Condition derivation: the full `sy` table code by code, by day and night, plus every observed/dry/unobserved path of the current condition
+- Merge-chain preference (INCA -> nowcast -> AROME), POP stepped mapping, interval-ending parameters read one stamp on
+- Storm outlook: symbol, ensemble and both signals, the 12 h ensemble age rule, unknown only for an empty window
 - Every tool's out-of-coverage line, kept distinct from the retryable failure lines
 - Markdown renderer snapshots for each tool
 

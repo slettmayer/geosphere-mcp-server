@@ -25,7 +25,7 @@ Documents naming patterns, code style, import ordering, error handling, and logg
 |----------|---------|---------|
 | MCP tools | `<verb>_<noun>` (no prefix) | `get_current_weather`, `get_hourly_forecast` |
 | Async API fetch | `<verb>_<noun>` module-level async | `async_get_timeseries`, `async_fetch_current_conditions` |
-| Derived logic | `derive_<noun>` | `derive_condition`, `derive_current_condition` |
+| Derived logic | `derive_<noun>` | `derive_condition_from_symbol`, `derive_current_condition` |
 | Private helpers | `_<verb>_<noun>` | `_diff`, `_percent`, `_wind_from_components` |
 
 - Module-level async functions only -- no client classes.

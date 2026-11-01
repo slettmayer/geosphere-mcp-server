@@ -23,7 +23,7 @@ produces — fields, source attribution, day-divider headers, and horizon notes.
 |------|-----------|---------|---------|
 | `get_current_weather` | `(latitude, longitude) -> str` | INCA + nowcast + AROME merge | now |
 | `get_hourly_forecast` | `(latitude, longitude, hours=24, start=None) -> str` | AROME (+C-LAEF) | 1-60 h |
-| `get_storm_outlook` | `(latitude, longitude) -> str` | AROME (no ensemble) | fixed 1 h / 12 h windows over the full series |
+| `get_storm_outlook` | `(latitude, longitude) -> str` | AROME + C-LAEF | fixed 1 h / 12 h windows over the full series |
 | `get_air_quality` | `(latitude, longitude) -> str` | WRF-Chem | now + 3 days |
 
 Location input is plain decimal `latitude`/`longitude`. The calling model geocodes place names; the server
@@ -91,8 +91,15 @@ later ones, and the leading hour's precipitation figure covers the whole hour, i
 that has already elapsed.
 
 Each hour renders as `HH:MM: {temp}°C — {condition}, {precip} mm ({prob}% chance), wind {speed} m/s`.
-Precipitation is omitted when zero or unavailable, the probability is omitted when it is absent or zero,
-and the whole line degrades to `HH:MM: n/a` when there is no temperature.
+The condition is GeoSphere's weather symbol for that hour (see
+[CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)) and is omitted when the symbol is missing or unknown.
+Precipitation is omitted when unavailable or when it rounds to `0` at one decimal (the forecast publishes
+traces to a thousandth of a millimetre), the chance is omitted with it and when it is absent or zero, and
+the whole line degrades to `HH:MM: n/a` when there is no temperature.
+
+Whenever at least one line shows a chance, a trailing note labels it:
+`Precipitation chance is an estimate derived from the C-LAEF ensemble percentiles (0/30/70/95 %), not a
+probability GeoSphere publishes.`
 
 When fewer hours come back than were requested, a trailing note is appended:
 `Note: AROME forecast horizon ends {timestamp} (~60 h). This server publishes nothing beyond it.`
@@ -100,19 +107,25 @@ An empty window renders `No forecast hours available for the requested window.`
 
 ### Storm Outlook Output
 Per-field emoji, like current weather. The header carries model, reference time, and source on one line
-(`AROME model, reference 2026-08-10 14:00 CEST · Source: GeoSphere (AROME)`).
+(`AROME model, reference 2026-08-10 14:00 CEST · Source: GeoSphere (AROME + C-LAEF ensemble)`); the
+ensemble drops out of the source when its fetch failed.
 
 `💨 Max gust next 1 h` and `💨 Max gust next 12 h` render as `{N} m/s (at {Day} {YYYY-MM-DD} {HH:MM})`, or
-`unknown` when the window holds no gust value. `⛈️ Thunderstorm expected next 1 h` is tri-state: `yes`,
-`no`, or `unknown (no usable forecast hours)`. `⚡ Next thunderstorm` renders the stamp and that hour's
-CAPE, `none in the next {N} h` when the series is readable and calm — naming the horizon actually
-scanned, which is nominally ~60 h but less when a run is stale or truncated — or
-`unknown (no usable forecast hours)` when no hour ahead can be judged at all. `🌡️ Max CAPE next 12 h` is omitted when unavailable. A
-`🕐 Timezone` line closes the block.
+`unknown` when the window holds no gust value. `⛈️ Thunderstorm expected next 1 h` is tri-state:
+`yes (signal: {symbol|ensemble|both})`, `no`, or `unknown (no forecast hours in the window)` — unknown
+only when no forecast hour falls in the window. `⚡ Next thunderstorm` renders the stamp and the signal of
+that hour, `{Day} {YYYY-MM-DD} {HH:MM} (signal: …)`, or `none in the next {N} h`, naming the horizon
+actually scanned — nominally ~60 h, less after publication lag or when a run is stale or truncated.
 
-A trailing note always explains the round-up horizon and the storm-in-progress timestamp. A series with no
-hours at all renders `No forecast hours available for the outlook window.` See
-[STORM-OUTLOOK.md](STORM-OUTLOOK.md) for the semantics behind each figure.
+When no C-LAEF run under 12 h old is available (fetch failed, or the run is older), the line
+`ℹ️ Ensemble signal: unavailable (no C-LAEF run under 12 h old); thunderstorms from the weather symbol only`
+follows. `🌡️ Max CAPE next 12 h` (deterministic CAPE, a diagnostic that decides nothing) is omitted when
+unavailable. A `🕐 Timezone` line closes the block.
+
+Two trailing notes always follow: one explains the round-up horizon and the storm-in-progress timestamp,
+the other defines a thunderstorm hour and the `signal` values. A series with no hours at all renders
+`No forecast hours available for the outlook window.` See [STORM-OUTLOOK.md](STORM-OUTLOOK.md) for the
+semantics behind each figure.
 
 ### Air Quality Output
 Two content lines plus attribution. `🏷️ European AQI` joins the available days with ` · `, each as
@@ -128,10 +141,11 @@ there, having no figures left to explain. See [AIR-QUALITY.md](AIR-QUALITY.md).
 
 ### Values Computed but Never Rendered
 Several merged and assembled fields are dropped during normalization and never appear in any output.
-Current weather drops dew point, global radiation, snow limit, CAPE, CIN, the raw precipitation-type
-code (only its decoded kind is rendered, as `Falling now`), and the precipitation flag. The hourly path additionally computes wind bearing, wind gust, dew point, humidity,
-cloud cover, snowfall, snow limit, CAPE, CIN, and global radiation, of which the renderer reads only time,
-temperature, condition, precipitation, probability, and wind speed. Surfacing any of them is a renderer
+Current weather drops dew point, global radiation, snow limit, CAPE, the weather-symbol code, the raw
+precipitation-type code (only its decoded kind is rendered, as `Falling now`), and the precipitation flag.
+The hourly path additionally computes wind bearing, wind gust, dew point, humidity, cloud cover, snowfall,
+snow limit, CAPE, the weather-symbol code and the ensemble's `cape_p90`/`tp_p90`, of which the renderer
+reads only time, temperature, condition, precipitation, chance, and wind speed. Surfacing any of them is a renderer
 change only — the data is already assembled.
 
 ### Error Lines
@@ -151,9 +165,10 @@ Every line but the coverage one describes a **transient** condition worth retryi
 describes the location, and no amount of retrying will change it — which is why it is worded and handled
 separately (`server.OUT_OF_DOMAIN_MESSAGE`) rather than folded into the generic failure line.
 
-It names **no specific grid**, deliberately. The forecast tools query AROME (2.5 km) while
+It names **no specific grid**, deliberately. The forecast tools query the 1 km forecast grid while
 `get_air_quality` queries WRF-Chem (3 km), so a point can be inside one and outside the other; naming
-AROME would tell an air-quality caller its location is unservable when the other three tools answer it.
+the forecast grid would tell an air-quality caller its location is unservable when the other three tools
+answer it.
 
 ## Dependencies
 - `server.py` owns argument parsing, validation, and clamping

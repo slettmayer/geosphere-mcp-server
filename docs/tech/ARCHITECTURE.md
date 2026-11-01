@@ -62,11 +62,11 @@ One module per responsibility. No sub-packages.
 - `RATE_LIMIT_RETRY_MAX_S = 5.0` is defined here (not in `const.py`) -- the only literal threshold outside the central constants module
 
 **`weather.py` (Orchestration Layer)**
-- Owns: the current-conditions merge chain (INCA -> nowcast -> AROME per field), hourly assembly (accumulation differencing, wind-from-components, POP mapping), unit conversions
+- Owns: the current-conditions merge chain (INCA -> nowcast -> AROME per field), hourly assembly (interval-ending parameters and the weather symbol read one stamp on, wind-from-components, the ensemble's POP estimate and storm inputs per row), the once-per-code warnings for unknown `pt` and `sy` codes
 - Does not own: HTTP calls (delegates to `geosphere_api`), the out-of-domain response (raises `GeoSphereOutOfDomainError` up to `server.py`), rendering, MCP concerns
 - Calls: `geosphere_api`, `condition`
-- `async_fetch_hourly_forecast(include_ensemble=False)` skips the C-LAEF request; the storm outlook uses
-  this, since it reports no precipitation probability
+- `async_fetch_hourly_forecast` always requests AROME and C-LAEF together; the hourly tool uses the
+  ensemble for the precipitation chance, the storm outlook for its ensemble storm signal
 
 **`air_quality.py` (Orchestration Layer)**
 - Owns: the WRF-Chem pollutant merge (nearest forecast hour, full series retained) and the daily AQI
@@ -82,15 +82,16 @@ One module per responsibility. No sub-packages.
 - Raises typed exceptions on failure (see Error Signaling)
 
 **`condition.py` (Pure Derivation)**
-- Owns: `derive_condition`, `derive_current_condition`, `is_thunder` (the CAPE/CIN gate), fog heuristic, `is_night` (astral), Magnus dew point, apparent temperature, wind-from-components
+- Owns: `derive_condition_from_symbol` (the `sy` mapping), `derive_current_condition`, `is_thunder_symbol`, `is_precipitating`, `derive_precipitation_type`, `is_night` (astral), Magnus dew point, apparent temperature, wind-from-components
 - No I/O, no HTTP, no MCP/HA imports
 
 **`outlook.py` (Pure Derivation)**
-- Owns: the round-up `window`, the window readers `max_gust` / `max_cape` / `thunderstorm_outlook`, the
-  full-series `scan_thunderstorm` (storm hour, its CAPE, and whether the scan counts), and `horizon_hours`
+- Owns: the round-up `window`, `ensemble_is_current` (the 12 h age rule), the window readers
+  `max_gust` / `max_cape` / `thunderstorm_outlook`, the full-series `next_thunderstorm` (storm hour and
+  its signal), and `horizon_hours`
 - Reads the hourly **row dicts** `weather.assemble_hourly_forecast` produces, through `.get`, so an hour
   missing a field degrades rather than raising
-- Depends only on `condition.is_thunder` and `const.py`; no I/O, no MCP/HA imports
+- Depends only on `condition.is_thunder_symbol` and `const.py`; no I/O, no MCP/HA imports
 
 **`format.py` (Normalization + Rendering)**
 - Owns: the `normalize_*` functions (shape a merged/assembled dict into a render-ready one) and the
