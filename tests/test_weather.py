@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from geosphere_mcp_server import weather
-from geosphere_mcp_server.const import NOWCAST_LOOKBACK
+from geosphere_mcp_server.const import (
+    AROME_PARAMETERS,
+    ENSEMBLE_PARAMETERS,
+    NOWCAST_LOOKBACK,
+    PRECIP_MIN_MM,
+    SY_PRECIPITATION,
+)
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereResponse,
     ParameterSeries,
+    _parse_geojson,
 )
 from geosphere_mcp_server.weather import (
     _precipitation_probability,
@@ -1039,3 +1048,88 @@ async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> N
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     for call in mock.await_args_list:
         assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
+
+
+# --- Recorded v2 responses ---
+#
+# Live responses recorded by `scripts/record_fixtures.py` (Pörtschach, light
+# rain easing). The forecast fixtures start at their run's t0, so index 0
+# still carries the null that marks an interval-ending parameter.
+
+FIXTURES = Path(__file__).parent / "fixtures"
+MANIFEST = json.loads((FIXTURES / "manifest.json").read_text())
+RECORDED_AT = datetime.fromisoformat(MANIFEST["recorded_at"])
+RECORDED_LAT = MANIFEST["latitude"]
+RECORDED_LON = MANIFEST["longitude"]
+
+
+def _recorded(name: str) -> GeoSphereResponse:
+    return _parse_geojson(name, json.loads((FIXTURES / f"{name}.json").read_text()))
+
+
+def test_recorded_stampings_match_the_parameter_tables() -> None:
+    """Null at t0 means interval-ending; a value there means instantaneous.
+
+    Pins the classification `AROME_PARAMETERS` and `ENSEMBLE_PARAMETERS` are
+    read by: a parameter that moved class would shift its field by an hour.
+    """
+    interval = {"10fg", "tp", "sf", "sy", "tp_p10", "tp_p50", "tp_p90"}
+    for name, parameters in (
+        ("nwp", AROME_PARAMETERS),
+        ("ensemble", ENSEMBLE_PARAMETERS),
+    ):
+        response = _recorded(name)
+        assert response.timestamps[0] == response.reference_time
+        for parameter in parameters:
+            first = response.value_at(parameter, 0)
+            assert (first is None) == (parameter in interval), (name, parameter)
+
+
+def test_recorded_forecast_rows_read_the_hour_they_start() -> None:
+    nwp = _recorded("nwp")
+    rows = assemble_hourly_forecast(
+        nwp, _recorded("ensemble"), RECORDED_LAT, RECORDED_LON, RECORDED_AT
+    )["hourly"]
+    assert rows[0]["time"] == RECORDED_AT.replace(minute=0)
+    index = {ts: i for i, ts in enumerate(nwp.timestamps)}
+    for row in rows:
+        nxt = index[row["time"]] + 1
+        assert row["precipitation_mm"] == nwp.value_at("tp", nxt)
+        assert row["wind_gust_ms"] == nwp.value_at("10fg", nxt)
+        assert row["weather_symbol"] == int(nwp.value_at("sy", nxt))
+        assert row["condition"] is not None
+        assert row["precipitation_probability_pct"] is not None
+        assert row["ensemble_cape_p90_jkg"] is not None
+
+
+def test_recorded_symbol_agrees_with_the_rows_precipitation() -> None:
+    """Read one stamp on, a precipitation symbol sits exactly on the wet rows.
+
+    Read at the row's own stamp it would not: the rain symbol of 22:00Z
+    belongs to the hour ending then, while the hour starting there brings
+    only a trace.
+    """
+    rows = assemble_hourly_forecast(
+        _recorded("nwp"), None, RECORDED_LAT, RECORDED_LON, RECORDED_AT
+    )["hourly"]
+    for row in rows:
+        wet = (row["precipitation_mm"] or 0.0) >= PRECIP_MIN_MM
+        assert (row["weather_symbol"] in SY_PRECIPITATION) == wet, row["time"]
+
+
+@pytest.mark.asyncio
+async def test_recorded_current_conditions_end_to_end() -> None:
+    """A dry nowcast under the hour's rain symbol reads `cloudy`."""
+    mock = AsyncMock(
+        side_effect=[_recorded("nwp"), _recorded("nowcast"), _recorded("inca")]
+    )
+    with patch.object(weather, "async_get_timeseries", mock):
+        result = await async_fetch_current_conditions(
+            None, RECORDED_LAT, RECORDED_LON, now=RECORDED_AT
+        )
+    assert result["sources"] == ["INCA", "nowcast", "AROME"]
+    assert result["weather_symbol"] == 8
+    assert result["precipitation_type"] == 255
+    assert result["is_precipitating"] is False
+    assert result["condition"] == "cloudy"
+    assert result["cloud_cover_pct"] == 100.0
