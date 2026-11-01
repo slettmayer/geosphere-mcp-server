@@ -47,8 +47,8 @@ version being cut, so you never rename that heading by hand. See
   - `unknown (no usable forecast hours)` becomes `unknown (no forecast hours in the window)` on the
     thunderstorm-expected line, and only when no forecast hour falls in the window; an hour with a
     missing symbol now counts as no storm. `⚡ Next thunderstorm` no longer reports `unknown`;
-  - new line `ℹ️ Ensemble signal: unavailable (no C-LAEF run under 12 h old); thunderstorms from the
-    weather symbol only` when the ensemble failed or is too old;
+  - new line `ℹ️ Ensemble signal: unavailable (the C-LAEF request failed or its run is 12 h old or
+    more); thunderstorms from the weather symbol only` when the ensemble failed or is too old;
   - new trailing note defining a thunderstorm hour and the `signal` values;
   - `🌡️ Max CAPE next 12 h` stays as a diagnostic; it no longer decides anything.
 

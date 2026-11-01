@@ -386,8 +386,8 @@ def test_render_outlook_says_when_the_ensemble_could_not_vote() -> None:
         )
         assert "⛈️ Thunderstorm expected next 1 h: no" in out
         assert (
-            "ℹ️ Ensemble signal: unavailable (no C-LAEF run under 12 h old); "
-            "thunderstorms from the weather symbol only"
+            "ℹ️ Ensemble signal: unavailable (the C-LAEF request failed or its "
+            "run is 12 h old or more); thunderstorms from the weather symbol only"
         ) in out
 
 

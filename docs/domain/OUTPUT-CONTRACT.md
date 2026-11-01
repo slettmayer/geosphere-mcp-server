@@ -118,7 +118,7 @@ that hour, `{Day} {YYYY-MM-DD} {HH:MM} (signal: …)`, or `none in the next {N} 
 actually scanned — nominally ~60 h, less after publication lag or when a run is stale or truncated.
 
 When no C-LAEF run under 12 h old is available (fetch failed, or the run is older), the line
-`ℹ️ Ensemble signal: unavailable (no C-LAEF run under 12 h old); thunderstorms from the weather symbol only`
+`ℹ️ Ensemble signal: unavailable (the C-LAEF request failed or its run is 12 h old or more); thunderstorms from the weather symbol only`
 follows. `🌡️ Max CAPE next 12 h` (deterministic CAPE, a diagnostic that decides nothing) is omitted when
 unavailable. A `🕐 Timezone` line closes the block.
 

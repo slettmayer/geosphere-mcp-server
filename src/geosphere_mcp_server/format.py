@@ -426,9 +426,9 @@ _STORM_NOTE = (
     "diagnostic and decides nothing."
 )
 _NO_ENSEMBLE_LINE = (
-    "ℹ️ Ensemble signal: unavailable (no C-LAEF run under "
-    f"{ENSEMBLE_MAX_AGE.total_seconds() / 3600:.0f} h old); thunderstorms "
-    "from the weather symbol only"
+    "ℹ️ Ensemble signal: unavailable (the C-LAEF request failed or its run "
+    f"is {ENSEMBLE_MAX_AGE.total_seconds() / 3600:.0f} h old or more); "
+    "thunderstorms from the weather symbol only"
 )
 
 
