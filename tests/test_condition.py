@@ -12,144 +12,105 @@ import pytest
 from geosphere_mcp_server import const
 from geosphere_mcp_server.condition import (
     apparent_temperature,
-    derive_condition,
+    derive_condition_from_symbol,
     derive_current_condition,
     derive_precipitation_type,
     dew_point_from_t_rh,
     is_night,
     is_precipitating,
-    is_thunder,
+    is_thunder_symbol,
     wind_from_components,
 )
-from geosphere_mcp_server.const import CAP_CIN_JKG, THUNDER_CAPE_JKG
 
-# --- is_thunder ---
+# --- derive_condition_from_symbol ---
+
+# GeoSphere's published table, code by code: every code 1-32 has a condition.
+SYMBOL_TABLE = {
+    1: "sunny",  # Wolkenlos
+    2: "sunny",  # Heiter
+    3: "partlycloudy",  # Wolkig
+    4: "cloudy",  # Stark bewölkt
+    5: "cloudy",  # Bedeckt
+    6: "fog",  # Bodennebel
+    7: "fog",  # Hochnebel
+    8: "rainy",  # Leichter Regen
+    9: "rainy",  # Mäßiger Regen
+    10: "pouring",  # Starker Regen
+    11: "snowy-rainy",  # Schneeregen
+    12: "snowy-rainy",
+    13: "snowy-rainy",
+    14: "snowy",  # Leichter Schneefall
+    15: "snowy",  # Mäßiger Schneefall
+    16: "snowy",  # Starker Schneefall
+    17: "rainy",  # Regenschauer
+    18: "rainy",
+    19: "pouring",  # Starker Regenschauer
+    20: "snowy-rainy",  # Schneeregenschauer
+    21: "snowy-rainy",
+    22: "snowy-rainy",
+    23: "snowy",  # Schneeschauer
+    24: "snowy",
+    25: "snowy",  # Starker Schneeschauer
+    26: "lightning-rainy",  # Gewitter
+    27: "lightning-rainy",
+    28: "lightning-rainy",  # Starkes Gewitter
+    29: "lightning-rainy",  # Gewitter mit Schneeregen
+    30: "lightning-rainy",  # Starkes Gewitter mit Schneeregen
+    31: "lightning-rainy",  # Gewitter mit Schneefall
+    32: "lightning-rainy",  # Starkes Gewitter mit Schneefall
+}
+
+
+@pytest.mark.parametrize(("symbol", "expected"), sorted(SYMBOL_TABLE.items()))
+def test_derive_condition_from_symbol_by_day(symbol: int, expected: str) -> None:
+    assert derive_condition_from_symbol(symbol, night=False) == expected
+
+
+@pytest.mark.parametrize(("symbol", "expected"), sorted(SYMBOL_TABLE.items()))
+def test_derive_condition_from_symbol_by_night(symbol: int, expected: str) -> None:
+    """Only the clear codes have a night variant; every other code keeps its."""
+    night_expected = "clear-night" if expected == "sunny" else expected
+    assert derive_condition_from_symbol(symbol, night=True) == night_expected
+
+
+@pytest.mark.parametrize("symbol", [None, 0, 33, 99, 255, -1])
+def test_derive_condition_from_symbol_is_unknown_outside_the_table(
+    symbol: int | None,
+) -> None:
+    """A missing or unpublished code is unknown, never a guess."""
+    assert derive_condition_from_symbol(symbol, night=False) is None
+    assert derive_condition_from_symbol(symbol, night=True) is None
 
 
 @pytest.mark.parametrize(
-    ("cape", "cin", "expected"),
-    [
-        (None, None, False),
-        (0.0, 0.0, False),
-        # Below the CAPE threshold, inhibition is irrelevant.
-        (THUNDER_CAPE_JKG - 1, 0.0, False),
-        (THUNDER_CAPE_JKG, 0.0, True),
-        # A missing cin counts as uncapped, so the gate cannot suppress it --
-        # an hour AROME left blank keeps the pre-CIN, CAPE-only behaviour.
-        (1500.0, None, True),
-        # Weak inhibition passes, a strong lid suppresses.
-        (1500.0, -10.0, True),
-        (1500.0, -200.0, False),
-        # The boundary itself is exclusive: exactly -CAP_CIN_JKG is capped.
-        (1500.0, -CAP_CIN_JKG, False),
-        (1500.0, -CAP_CIN_JKG + 0.1, True),
-    ],
+    ("symbol", "expected"),
+    [(26, True), (29, True), (32, True), (25, False), (33, False), (None, False)],
 )
-def test_is_thunder(cape, cin, expected) -> None:
-    assert is_thunder(cape, cin) is expected
-
-
-# --- derive_condition ---
-
-
-@pytest.mark.parametrize(
-    ("precip", "snow", "tcc", "cape", "cin", "gust", "night", "expected"),
-    [
-        # clear / cloud buckets
-        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, "sunny"),
-        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, True, "clear-night"),
-        (0.0, 0.0, 12.5, None, None, None, False, "sunny"),
-        (0.0, 0.0, 40.0, 0.0, 0.0, 0.0, False, "partlycloudy"),
-        (0.0, 0.0, 62.5, 0.0, 0.0, 0.0, False, "partlycloudy"),
-        (0.0, 0.0, 80.0, 0.0, 0.0, 0.0, True, "cloudy"),
-        # precipitation
-        (0.5, 0.0, 90.0, 0.0, 0.0, 0.0, False, "rainy"),
-        (4.0, 0.0, 90.0, 0.0, 0.0, 0.0, False, "pouring"),
-        (0.5, 0.0, 90.0, 1500.0, 0.0, 0.0, False, "lightning-rainy"),
-        (0.5, 0.5, 90.0, 0.0, 0.0, 0.0, False, "snowy"),
-        (1.0, 0.3, 90.0, 0.0, 0.0, 0.0, False, "snowy-rainy"),
-        # dry thunder / wind
-        (0.0, 0.0, 80.0, 1500.0, 0.0, 0.0, False, "lightning"),
-        (0.0, 0.0, 30.0, 0.0, 0.0, 16.0, False, "windy"),
-        (0.0, 0.0, 80.0, 0.0, 0.0, 16.0, False, "windy-variant"),
-        # missing cloud data
-        (0.0, 0.0, None, 0.0, 0.0, 0.0, False, None),
-        # A strong cap demotes both thunder branches to their non-thunder peers.
-        (0.5, 0.0, 90.0, 1500.0, -200.0, 0.0, False, "rainy"),
-        (0.0, 0.0, 80.0, 1500.0, -200.0, 0.0, False, "cloudy"),
-    ],
-)
-def test_derive_condition(precip, snow, tcc, cape, cin, gust, night, expected) -> None:
-    assert derive_condition(precip, snow, tcc, cape, cin, gust, night) == expected
-
-
-# --- is_precipitating ---
-
-
-def test_is_precipitating_any_pt_code_but_255() -> None:
-    """Any code other than "no precipitation" is sufficient on its own."""
-    assert is_precipitating(1, None) is True
-    assert is_precipitating(1, 0.0) is True
-
-
-def test_is_precipitating_rate_alone_is_sufficient() -> None:
-    assert is_precipitating(None, 0.5) is True
-    assert is_precipitating(None, 0.0) is False
-    assert is_precipitating(255, 0.5) is True
-
-
-def test_is_precipitating_unknown_when_nothing_observed() -> None:
-    """`None` is not "dry": nothing observed precipitation at all."""
-    assert is_precipitating(None, None) is None
-
-
-def test_is_precipitating_pt_255_alone_reads_as_dry() -> None:
-    """255 is the one code GeoSphere's silence leaves us sure of."""
-    assert is_precipitating(255, None) is False
-
-
-# --- derive_current_condition ---
-
-
-def test_current_condition_pt_override_rain() -> None:
-    """A precipitation-type code other than 255 forces a precipitation state."""
-    assert (
-        derive_current_condition(
-            precipitation_type=1,
-            precipitation_rate_mm_h=0.4,
-            temperature=12.0,
-            humidity=80.0,
-            wind_speed=3.0,
-            cloud_coverage=10.0,  # cloud says clear, pt wins
-            cape=0.0,
-            cin=0.0,
-            gust_speed=5.0,
-            night=False,
-        )
-        == "rainy"
-    )
+def test_is_thunder_symbol(symbol: int | None, expected: bool) -> None:
+    assert is_thunder_symbol(symbol) is expected
 
 
 def _current(
     precipitation_type: int | None,
     temperature: float | None,
-    rate: float = 1.0,
-    cape: float = 0.0,
-    cin: float = 0.0,
+    rate: float | None = 1.0,
+    *,
+    symbol: int | None = 5,
+    night: bool = False,
 ) -> str | None:
-    """`derive_current_condition` in an overcast setting."""
+    """`derive_current_condition` under an overcast, storm-free symbol."""
     return derive_current_condition(
         precipitation_type=precipitation_type,
         precipitation_rate_mm_h=rate,
         temperature=temperature,
-        humidity=90.0,
-        wind_speed=3.0,
-        cloud_coverage=100.0,
-        cape=cape,
-        cin=cin,
-        gust_speed=5.0,
-        night=False,
+        symbol=symbol,
+        night=night,
     )
+
+
+def test_current_condition_pt_override_rain() -> None:
+    """Observed precipitation wins over a symbol that says clear sky."""
+    assert _current(1, 12.0, 0.4, symbol=1) == "rainy"
 
 
 @pytest.mark.parametrize(
@@ -170,6 +131,80 @@ def test_current_condition_pt_decides_the_precipitation_kind(
     assert _current(precipitation_type, temperature) == expected
 
 
+@pytest.mark.parametrize("symbol", [14, 8, 11, 10])
+def test_current_condition_kind_comes_from_observation_not_the_symbol(
+    symbol: int,
+) -> None:
+    """The symbol's own kind never overrides what is observed falling."""
+    assert _current(1, 12.0, symbol=symbol) == "rainy"
+    assert _current(5, 0.0, symbol=symbol) == "snowy"
+
+
+@pytest.mark.parametrize(
+    ("precipitation_type", "symbol", "expected"),
+    [
+        # Above SNOW_MAX_T2M_C a thunderstorm, the hazard people act on,
+        # outranks every kind: a spring shower coded rain-and-snow, or a
+        # convective graupel shower coded snow, can still be a storm.
+        (7, 26, "lightning-rainy"),
+        (3, 28, "lightning-rainy"),
+        (5, 31, "lightning-rainy"),
+        (1, 32, "lightning-rainy"),
+        # Without a thunder symbol a downpour keeps its kind, not `pouring`.
+        (7, 5, "snowy-rainy"),
+        (3, 5, "snowy-rainy"),
+        (5, 5, "snowy"),
+        (1, 5, "pouring"),
+    ],
+)
+def test_current_condition_thunder_outranks_every_kind_above_snow_max(
+    precipitation_type: int, symbol: int, expected: str
+) -> None:
+    """Observed downpour (8 mm/h) at 4 °C."""
+    assert _current(precipitation_type, 4.0, 8.0, symbol=symbol) == expected
+
+
+@pytest.mark.parametrize(
+    ("precipitation_type", "expected"),
+    [
+        # At or below SNOW_MAX_T2M_C observed snow outranks a thunder symbol:
+        # thundersnow is rare and still snow.
+        (5, "snowy"),
+        (None, "snowy"),
+        # Codes that name no kind fall back to temperature, which says snow.
+        (2, "snowy"),
+        (255, "snowy"),
+        # The mixed kinds are not snow, so thunder wins over them even here,
+        # and so it does over rain.
+        (7, "lightning-rainy"),
+        (3, "lightning-rainy"),
+        (1, "lightning-rainy"),
+    ],
+)
+def test_current_condition_cold_snow_outranks_thunder(
+    precipitation_type: int | None, expected: str
+) -> None:
+    assert _current(precipitation_type, -2.0, 8.0, symbol=31) == expected
+
+
+@pytest.mark.parametrize(
+    ("precipitation_type", "temperature", "expected"),
+    [
+        # SNOW_MAX_T2M_C itself is cold: the comparison is inclusive.
+        (5, 1.0, "snowy"),
+        (None, 1.0, "snowy"),
+        # No temperature from any source is not cold, so thunder wins even
+        # over a snow code.
+        (5, None, "lightning-rainy"),
+        (None, None, "lightning-rainy"),
+    ],
+)
+def test_current_condition_snow_thunder_split_edges(
+    precipitation_type: int | None, temperature: float | None, expected: str
+) -> None:
+    assert _current(precipitation_type, temperature, 8.0, symbol=26) == expected
+
+
 @pytest.mark.parametrize(
     ("precipitation_type", "temperature", "expected"),
     [
@@ -187,87 +222,6 @@ def test_current_condition_falls_back_to_temperature_without_a_known_kind(
     precipitation_type: int | None, temperature: float, expected: str
 ) -> None:
     assert _current(precipitation_type, temperature) == expected
-
-
-@pytest.mark.parametrize(
-    ("precipitation_type", "cape", "expected"),
-    [
-        # Above SNOW_MAX_T2M_C a thunderstorm, the hazard people act on,
-        # outranks every kind: a spring shower coded rain-and-snow, or a
-        # convective graupel shower coded snow, can still be a storm.
-        (7, 1500.0, "lightning-rainy"),
-        (3, 1500.0, "lightning-rainy"),
-        (5, 1500.0, "lightning-rainy"),
-        # Without thunder a downpour keeps its kind, not `pouring`.
-        (7, 0.0, "snowy-rainy"),
-        (3, 0.0, "snowy-rainy"),
-        (5, 0.0, "snowy"),
-    ],
-)
-def test_current_condition_thunder_outranks_every_kind_above_snow_max(
-    precipitation_type: int, cape: float, expected: str
-) -> None:
-    """Observed downpour (8 mm/h) at 4 °C: the CAPE-alone override applies."""
-    assert _current(precipitation_type, 4.0, rate=8.0, cape=cape, cin=-80.0) == (
-        expected
-    )
-
-
-@pytest.mark.parametrize(
-    ("precipitation_type", "expected"),
-    [
-        # At or below SNOW_MAX_T2M_C snow outranks thunder, as the temperature
-        # rule always made it: thundersnow is rare and still snow.
-        (5, "snowy"),
-        (None, "snowy"),
-        # Codes that name no kind fall back to temperature, which says snow.
-        (2, "snowy"),
-        (255, "snowy"),
-        # The mixed kinds are not snow, so thunder wins over them even here,
-        # and so it does over rain.
-        (7, "lightning-rainy"),
-        (3, "lightning-rainy"),
-        (1, "lightning-rainy"),
-    ],
-)
-def test_current_condition_cold_snow_outranks_thunder(
-    precipitation_type: int | None, expected: str
-) -> None:
-    assert _current(precipitation_type, -2.0, rate=8.0, cape=1500.0, cin=-80.0) == (
-        expected
-    )
-
-
-@pytest.mark.parametrize(
-    ("temperature", "expected"),
-    [(-2.0, "snowy"), (4.0, "lightning-rainy")],
-)
-def test_current_condition_snow_thunder_split_through_the_normal_gate(
-    temperature: float, expected: str
-) -> None:
-    """Light snow, uncapped CAPE: thunder from `is_thunder`, not the override."""
-    assert _current(5, temperature, rate=1.0, cape=1500.0, cin=0.0) == expected
-
-
-@pytest.mark.parametrize(
-    ("precipitation_type", "temperature", "expected"),
-    [
-        # SNOW_MAX_T2M_C itself is cold: the comparison is inclusive.
-        (5, 1.0, "snowy"),
-        (None, 1.0, "snowy"),
-        # No temperature from any source is not cold, as under the old
-        # temperature rule, so thunder wins even over a snow code.
-        (5, None, "lightning-rainy"),
-        (None, None, "lightning-rainy"),
-    ],
-)
-def test_current_condition_snow_thunder_split_edges(
-    precipitation_type: int | None, temperature: float | None, expected: str
-) -> None:
-    assert (
-        _current(precipitation_type, temperature, rate=8.0, cape=1500.0, cin=-80.0)
-        == expected
-    )
 
 
 @pytest.mark.parametrize(
@@ -295,154 +249,117 @@ def test_derive_precipitation_type(
     assert derive_precipitation_type(code, rate) == expected
 
 
-def test_current_condition_thunder_ignores_the_forecast_cap() -> None:
-    """An observed storm is not vetoed by AROME's inhibition for the hour.
+@pytest.mark.parametrize(
+    ("rate", "expected"), [(4.9, "rainy"), (5.0, "pouring"), (12.0, "pouring")]
+)
+def test_current_condition_pours_where_the_heavy_rain_symbols_start(
+    rate: float, expected: str
+) -> None:
+    """Observed rain turns `pouring` at 5 mm/h, the floor of codes 10 and 19."""
+    assert _current(1, 12.0, rate, symbol=8) == expected
 
-    Precipitation here comes from INCA/the nowcast -- measurements -- while
-    CAPE and CIN are forecast. Inhibition answers "can convection start?", and
-    the observation has already settled that, so a strong modelled cap must
-    not turn a thunderstorm in progress into plain `rainy`. The hourly path,
-    forecast end to end, still applies the full gate.
+
+def test_current_condition_light_rain_under_a_thunder_symbol_is_a_storm() -> None:
+    """Observed rain plus a thunder symbol is a storm, whatever the rate."""
+    assert _current(1, 18.0, 0.4, symbol=26) == "lightning-rainy"
+
+
+@pytest.mark.parametrize("symbol", [8, 10, 11, 14, 17, 19, 20, 23, 26, 29, 32])
+def test_current_condition_dry_under_a_precipitation_symbol_is_cloudy(
+    symbol: int,
+) -> None:
+    """The model expects precipitation that observations do not show.
+
+    The run behind the symbol is routinely 3-6 h old; with nothing falling,
+    the sky it describes is an overcast one, not a wet or stormy one.
     """
-    assert (
-        derive_current_condition(
-            precipitation_type=1,
-            precipitation_rate_mm_h=6.0,
-            temperature=18.0,
-            humidity=85.0,
-            wind_speed=4.0,
-            cloud_coverage=95.0,
-            cape=1800.0,
-            cin=-60.0,  # past CAP_CIN_JKG: capped, per the model
-            gust_speed=8.0,
-            night=False,
-        )
-        == "lightning-rainy"
-    )
+    assert _current(255, 12.0, 0.0, symbol=symbol) == "cloudy"
+    assert _current(255, 12.0, 0.0, symbol=symbol, night=True) == "cloudy"
 
 
-def test_current_condition_light_rain_does_not_override_the_cap() -> None:
-    """Only convective-intensity rain overrides the modelled lid.
+@pytest.mark.parametrize(
+    ("symbol", "night", "expected"),
+    [
+        (1, False, "sunny"),
+        (2, True, "clear-night"),
+        (3, False, "partlycloudy"),
+        (5, True, "cloudy"),
+        # Fog comes only from the symbol.
+        (6, False, "fog"),
+        (7, True, "fog"),
+    ],
+)
+def test_current_condition_dry_follows_the_symbol(
+    symbol: int, night: bool, expected: str
+) -> None:
+    assert _current(255, 2.0, 0.0, symbol=symbol, night=night) == expected
 
-    Same capped, high-CAPE air as the test above, but the observation is
-    drizzle off a frontal deck rather than a downpour. `precipitating` is true
-    of any rate at all, so without the intensity qualifier this returned
-    `lightning-rainy` -- and contradicted the hourly path, which keeps the full
-    gate and calls the same hour `rainy`.
+
+@pytest.mark.parametrize("symbol", [None, 0, 99])
+def test_current_condition_dry_without_a_known_symbol_is_unknown(
+    symbol: int | None,
+) -> None:
+    """No symbol to read and nothing falling: unknown, not a guess."""
+    assert _current(255, 2.0, 0.0, symbol=symbol) is None
+    # Observed precipitation still decides without any symbol at all.
+    assert _current(1, 12.0, 0.5, symbol=symbol) == "rainy"
+
+
+@pytest.mark.parametrize(
+    ("symbol", "night", "expected"),
+    [
+        (8, False, "rainy"),
+        (10, False, "pouring"),
+        (26, False, "lightning-rainy"),
+        (14, True, "snowy"),
+        (2, True, "clear-night"),
+        (6, False, "fog"),
+        (None, False, None),
+    ],
+)
+def test_current_condition_without_any_observation_is_the_symbol(
+    symbol: int | None, night: bool, expected: str | None
+) -> None:
+    """Nothing observed is not "dry": the symbol is the only evidence left.
+
+    Outside the nowcast grid, or with every observing source down or stale,
+    neither a `pt` code nor a rate reaches the derivation; a precipitation
+    symbol then keeps its own condition instead of being demoted to `cloudy`.
     """
-    assert (
-        derive_current_condition(
-            precipitation_type=1,
-            precipitation_rate_mm_h=0.4,  # below POURING_MM_PER_H
-            temperature=18.0,
-            humidity=85.0,
-            wind_speed=4.0,
-            cloud_coverage=95.0,
-            cape=1800.0,
-            cin=-150.0,  # strongly capped, per the model
-            gust_speed=8.0,
-            night=False,
-        )
-        == "rainy"
-    )
+    assert _current(None, 12.0, None, symbol=symbol, night=night) == expected
 
 
-def test_current_condition_light_rain_thunders_when_uncapped() -> None:
-    """The intensity qualifier gates the *override*, not thunder itself.
-
-    With weak inhibition the ordinary gate passes on CAPE alone, so light rain
-    still reads as a thunderstorm -- the rate only matters when the model
-    claims a lid.
-    """
-    assert (
-        derive_current_condition(
-            precipitation_type=1,
-            precipitation_rate_mm_h=0.4,
-            temperature=18.0,
-            humidity=85.0,
-            wind_speed=4.0,
-            cloud_coverage=95.0,
-            cape=1800.0,
-            cin=-10.0,  # within CAP_CIN_JKG: effectively uncapped
-            gust_speed=8.0,
-            night=False,
-        )
-        == "lightning-rainy"
-    )
+# --- is_precipitating ---
 
 
-def test_current_condition_without_precipitation_still_honours_the_cap() -> None:
-    """With nothing observed, the verdict is forecast-only and the cap applies."""
-    assert (
-        derive_current_condition(
-            precipitation_type=255,
-            precipitation_rate_mm_h=0.0,
-            temperature=25.0,
-            humidity=40.0,
-            wind_speed=3.0,
-            cloud_coverage=95.0,
-            cape=1800.0,
-            cin=-60.0,
-            gust_speed=5.0,
-            night=False,
-        )
-        == "cloudy"
-    )
-
-
-def test_current_condition_no_precip_falls_through() -> None:
-    assert (
-        derive_current_condition(
-            precipitation_type=255,
-            precipitation_rate_mm_h=0.0,
-            temperature=20.0,
-            humidity=50.0,
-            wind_speed=3.0,
-            cloud_coverage=5.0,
-            cape=0.0,
-            cin=0.0,
-            gust_speed=5.0,
-            night=False,
-        )
-        == "sunny"
-    )
-
-
-def test_current_condition_fog() -> None:
-    assert (
-        derive_current_condition(
-            precipitation_type=255,
-            precipitation_rate_mm_h=0.0,
-            temperature=2.0,
-            humidity=99.0,
-            wind_speed=0.5,
-            cloud_coverage=100.0,
-            cape=0.0,
-            cin=0.0,
-            gust_speed=1.0,
-            night=False,
-        )
-        == "fog"
-    )
-
-
-def test_current_condition_rate_triggers_precip_without_pt() -> None:
-    """A precipitation rate >= threshold precipitates even with pt=255."""
-    assert (
-        derive_current_condition(
-            precipitation_type=255,
-            precipitation_rate_mm_h=5.0,
-            temperature=10.0,
-            humidity=90.0,
-            wind_speed=3.0,
-            cloud_coverage=100.0,
-            cape=0.0,
-            cin=0.0,
-            gust_speed=5.0,
-            night=False,
-        )
-        == "pouring"
-    )
+@pytest.mark.parametrize(
+    ("precipitation_type", "rate", "expected"),
+    [
+        # The nowcast `pt` code alone is sufficient: any code but 255 is wet,
+        # even with no measurable rate behind it yet.
+        (1, 0.0, True),
+        (5, 0.0, True),
+        (1, None, True),
+        (255, 0.0, False),
+        # 255 is GeoSphere's "no precipitation", so alone it is an observed dry.
+        (255, None, False),
+        # ...and the instantaneous nowcast rate alone is sufficient.
+        # PRECIP_MIN_MM (0.1) is the floor.
+        (None, 0.5, True),
+        (None, 0.1, True),
+        (None, 0.09, False),
+        (None, 0.0, False),
+        # Neither source spoke: unknown, NOT dry.
+        (None, None, None),
+        # A dry `pt` does not veto an observed rate.
+        (255, 0.5, True),
+    ],
+)
+def test_is_precipitating(
+    precipitation_type: int | None, rate: float | None, expected: bool | None
+) -> None:
+    """Either source is sufficient; neither vetoes the other; silence is `None`."""
+    assert is_precipitating(precipitation_type, rate) is expected
 
 
 # --- wind_from_components ---
@@ -503,44 +420,34 @@ def _declared_vocabulary() -> set[str]:
 
 
 def test_derivation_emits_exactly_the_declared_vocabulary() -> None:
-    """`condition.py` returns these strings as literals; nothing else pins them.
+    """The `sy` table reaches every declared condition, and nothing else.
 
-    `const.py` declares the vocabulary, but the derivation spells each value
-    inline rather than importing the constant — so a rename of, say,
-    `CONDITION_SUNNY` (to follow an upstream Home Assistant rename) would leave
-    the emitted condition untouched, and the declaration would silently stop
-    describing what the server actually returns.
-
-    Asserted in both directions on purpose. Subset alone would miss a rename;
-    superset alone would miss a constant no branch can reach.
+    Asserted in both directions on purpose. Subset alone would miss a code
+    group mapped to an undeclared string; superset alone would miss a declared
+    constant no code can reach.
     """
     emitted = {
-        # derive_condition, one case per branch in precedence order.
-        derive_condition(1.0, 0.5, 50.0, 0.0, 0.0, 0.0, False),  # snowy-rainy
-        derive_condition(0.5, 0.5, 50.0, 0.0, 0.0, 0.0, False),  # snowy
-        derive_condition(1.0, 0.0, 50.0, 2000.0, 0.0, 0.0, False),  # lightning-rainy
-        derive_condition(5.0, 0.0, 50.0, 0.0, 0.0, 0.0, False),  # pouring
-        derive_condition(1.0, 0.0, 50.0, 0.0, 0.0, 0.0, False),  # rainy
-        derive_condition(0.0, 0.0, 90.0, 2000.0, 0.0, 0.0, False),  # lightning
-        derive_condition(0.0, 0.0, 90.0, 0.0, 0.0, 20.0, False),  # windy-variant
-        derive_condition(0.0, 0.0, 10.0, 0.0, 0.0, 20.0, False),  # windy
-        derive_condition(0.0, 0.0, 5.0, 0.0, 0.0, 0.0, True),  # clear-night
-        derive_condition(0.0, 0.0, 5.0, 0.0, 0.0, 0.0, False),  # sunny
-        derive_condition(0.0, 0.0, 40.0, 0.0, 0.0, 0.0, False),  # partlycloudy
-        derive_condition(0.0, 0.0, 90.0, 0.0, 0.0, 0.0, False),  # cloudy
-        # derive_current_condition adds the fog branch.
-        derive_current_condition(
-            precipitation_type=const.PT_NO_PRECIPITATION,
-            precipitation_rate_mm_h=0.0,
-            temperature=8.0,
-            humidity=99.0,
-            wind_speed=0.5,
-            cloud_coverage=95.0,
-            cape=None,
-            cin=None,
-            gust_speed=0.0,
-            night=False,
-        ),  # fog
+        derive_condition_from_symbol(code, night)
+        for code in const.SY_CODES
+        for night in (False, True)
     }
     assert None not in emitted
     assert emitted == _declared_vocabulary()
+
+
+def test_current_condition_adds_nothing_outside_the_vocabulary() -> None:
+    """The observed path returns only conditions the symbol table also has."""
+    emitted = {
+        derive_current_condition(
+            precipitation_type=code,
+            precipitation_rate_mm_h=rate,
+            temperature=temperature,
+            symbol=symbol,
+            night=False,
+        )
+        for code in (None, 1, 3, 5, 7, 255, 2)
+        for rate in (None, 0.0, 1.0, 8.0)
+        for temperature in (None, -2.0, 4.0)
+        for symbol in (None, 1, 5, 8, 26)
+    }
+    assert emitted - {None} <= _declared_vocabulary()

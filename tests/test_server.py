@@ -11,6 +11,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 from geosphere_mcp_server import air_quality, weather
+from geosphere_mcp_server.const import (
+    AROME_MAX_HOURS,
+    ENSEMBLE_MAX_AGE,
+    PRECIP_MIN_MM,
+    THUNDER_CAPE_JKG,
+)
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
@@ -211,15 +217,14 @@ def _now_hours(count: int = 2) -> list[datetime]:
 
 SAMPLE_OUTLOOK_ASSEMBLED = {
     "reference_time": datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+    "ensemble_reference_time": None,
     "sources": ["AROME"],
     "hourly": [
         {
             "time": when,
-            "condition": "lightning-rainy",
+            "weather_symbol": 26,
             "wind_gust_ms": 22.0,
             "cape_jkg": 1700.0,
-            "cin_jkg": -5.0,
-            "precipitation_mm": 3.0,
         }
         for when in _now_hours()
     ],
@@ -232,16 +237,40 @@ async def test_storm_outlook_geosphere_happy_path() -> None:
         out = await get_storm_outlook(LAT, LON)
     assert out.splitlines()[0] == "# Storm Outlook for 48.2208, 16.3738"
     assert "💨 Max gust next 1 h: 22 m/s" in out
-    assert "⛈️ Thunderstorm expected next 1 h: yes" in out
+    assert "⛈️ Thunderstorm expected next 1 h: yes (signal: symbol)" in out
     assert "Source: GeoSphere (AROME)" in out
 
 
-async def test_storm_outlook_skips_the_ensemble_request() -> None:
-    """The outlook reports no probability, so the second dataset is not fetched."""
-    fetch = AsyncMock(return_value=SAMPLE_OUTLOOK_ASSEMBLED)
+async def test_storm_outlook_counts_a_current_ensemble() -> None:
+    """The ensemble's storm signal reaches the tool, aged by the real clock."""
+    hourly = [
+        {
+            "time": when,
+            "weather_symbol": 5,
+            "ensemble_cape_p90_jkg": 1500.0,
+            "ensemble_precipitation_p90_mm": 1.0,
+        }
+        for when in _now_hours()
+    ]
+    assembled = {
+        **SAMPLE_OUTLOOK_ASSEMBLED,
+        "ensemble_reference_time": datetime.now(UTC) - timedelta(hours=6),
+        "sources": ["AROME", "C-LAEF ensemble"],
+        "hourly": hourly,
+    }
+    fetch = AsyncMock(return_value=assembled)
     with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        await get_storm_outlook(LAT, LON)
-    assert fetch.await_args.kwargs["include_ensemble"] is False
+        out = await get_storm_outlook(LAT, LON)
+    assert "⛈️ Thunderstorm expected next 1 h: yes (signal: ensemble)" in out
+    assert fetch.await_args.kwargs["hours"] == AROME_MAX_HOURS
+
+
+def test_storm_outlook_description_states_the_thresholds() -> None:
+    """The tool description an agent reads must match what the code applies."""
+    doc = get_storm_outlook.__doc__ or ""
+    assert f"{THUNDER_CAPE_JKG:.0f} J/kg CAPE" in doc
+    assert f"{PRECIP_MIN_MM} mm precipitation" in doc
+    assert f"{ENSEMBLE_MAX_AGE.total_seconds() / 3600:.0f} h old" in doc
 
 
 async def test_storm_outlook_out_of_domain_reports_no_coverage() -> None:

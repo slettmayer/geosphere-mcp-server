@@ -28,8 +28,8 @@ rather than as a generic failure — see *Coverage Classes* below.
 
 | Dataset | Resource ID | Mode | Horizon / cadence | Coverage |
 |---------|-------------|------|-------------------|----------|
-| AROME forecast | `nwp-v1-1h-2500m` | `forecast` | ~60 h hourly | Austria + Alps |
-| C-LAEF ensemble | `ensemble-v1-1h-2500m` | `forecast` | hourly (rr_p10/p50/p90) | Austria + Alps |
+| AROME forecast | `nwp-v2-1h-1km` | `forecast` | ~60 h hourly, reruns every 3 h | Austria + Alps |
+| C-LAEF ensemble | `ensemble-v2-1h-1km` | `forecast` | ~60 h hourly, reruns every 3 h (`tp_p10/p50/p90`, `cape_p90`) | Austria + Alps |
 | INCA analysis | `inca-v1-1h-1km` | `historical` | hourly | Austria only |
 | INCA nowcast | `nowcast-v1-15min-1km` | `forecast` | 15-min | Austria only |
 | WRF-Chem pollutants | `chem-v2-1h-3km` | `forecast` | ~73 h hourly | Austria + Alps |
@@ -38,12 +38,41 @@ rather than as a generic failure — see *Coverage Classes* below.
 Resource IDs, the per-dataset parameter lists, and the 30 s request timeout live in `const.py`.
 `AROME_MAX_HOURS = 60` bounds the GeoSphere hourly horizon.
 
+### The forecast datasets
+
+"AROME" names the deterministic forecast throughout the code and the output. The dataset itself,
+`nwp-v2-1h-1km`, is the deterministic control run of GeoSphere's C-LAEF AlpeAdria ensemble on a 1 km grid
+(latitude 43.0–51.5°, longitude 5.03–22.57°): 61 hourly stamps from the run's t0. `ensemble-v2-1h-1km`
+is that ensemble on the same grid, publishing only p10/p50/p90 percentiles — no member counts.
+
+Requested parameters (`AROME_PARAMETERS`): `2t` (°C), `2r` (%), `10u`/`10v` (wind components),
+`10fg` (peak 10 m gust, m/s), `tcc` (cloud cover, **%**), `tp`/`sf` (per-hour precipitation/snowfall,
+kg m⁻²), `snowlmt` (m), `cape` (J/kg, declared `m2 s-2`, which is the same unit) and `sy`
+(GeoSphere's weather-symbol code — see [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)). From the
+ensemble (`ENSEMBLE_PARAMETERS`): `tp_p10`, `tp_p50`, `tp_p90` (kg m⁻²) and `cape_p90` (J/kg). There is
+no convective inhibition and no run-accumulated series. The dataset also publishes `msl`, `pt` (a
+precipitation-type code distinct from the nowcast's), `rain`, `ssrd` and `sund`, which are not requested.
+
+Each parameter either holds at its stamp or covers the interval **ending** at it, and which is decided by
+measurement, not by name: requested from the run's own t0, an interval parameter is `null` at index 0.
+`10fg`, `tp`, `sf`, `sy` and the `tp` percentiles are interval-ending, so a row stamped `T` reads them at
+the *next* stamp to describe the hour `T..T+1h`; `2t`, `2r`, `10u`/`10v`, `tcc`, `cape`, `snowlmt` and
+`cape_p90` are instantaneous and read at `T`. `scripts/record_fixtures.py` prints this classification, and
+the recorded fixtures pin it — see [../tech/TESTING.md](../tech/TESTING.md). A new parameter has to be
+classified the same way before it is wired in; getting it wrong shifts that field by an hour, silently.
+
+**Publication lag.** A run's `reference_time` is the hour it is stamped for, not when it becomes
+available. GeoSphere publishes the 3-hourly runs several hours later, the ensemble later than the
+deterministic run, so the newest ensemble run in service is routinely 6–9 h old. Two consequences: the
+remaining horizon from *now* is typically ~52–55 h rather than 60, and the storm outlook allows the
+ensemble up to 12 h of run age (`ENSEMBLE_MAX_AGE`, see [STORM-OUTLOOK.md](STORM-OUTLOOK.md)).
+
 Hourly requests carry both a `start` and an `end`: one hour of history (so the series is guaranteed to
 reach the hour in progress, which the API's round-up of `start` would otherwise skip past) through two
 hours past the window the caller asked for — one because the last hour's interval parameters live on the
 following stamp, one so rounding at the boundary cannot clip that successor. A 6-hour request therefore
-transfers 9 hourly steps rather than the full horizon. `get_storm_outlook` asks for `AROME_MAX_HOURS`, so
-its scan still spans everything AROME publishes.
+transfers 9 hourly steps rather than the full horizon. A `start` before the run's t0 comes back at t0.
+`get_storm_outlook` asks for `AROME_MAX_HOURS`, so its scan still spans everything AROME publishes.
 
 Bounds are serialized as naive stamps, which the API reads as UTC, so an aware `start`/`end` is converted
 to UTC first — formatting it directly would drop the offset and shift the whole window.
@@ -79,10 +108,10 @@ Three distinct signals let a call degrade instead of failing:
 2. **Rate limit (HTTP 429)** — the server retries once when the API asks for a wait of 5 s or less,
    otherwise it returns a rate-limit notice.
 3. **Secondary fetch failure** — the secondary dataset is dropped and the call still renders. A C-LAEF
-   failure omits the precipitation probability (see
-   [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)); a daily-AQI failure keeps the pollutant
-   concentrations (see [AIR-QUALITY.md](AIR-QUALITY.md)). In both cases the primary dataset failing
-   propagates instead.
+   failure omits the precipitation chance (see [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)) and
+   leaves the storm outlook on the weather symbol alone (see [STORM-OUTLOOK.md](STORM-OUTLOOK.md)); a
+   daily-AQI failure keeps the pollutant concentrations (see [AIR-QUALITY.md](AIR-QUALITY.md)). In both
+   cases the primary dataset failing propagates instead.
 
 ### Attribution and Compliance
 The data is licensed **CC-BY 4.0** and must be attributed to **GeoSphere Austria**. The server is
@@ -106,7 +135,9 @@ publicly available weather information.
 
 ## Known Risks
 - GeoSphere resource IDs are versioned — a catalog rotation breaks the primary path until the IDs in
-  `const.py` are bumped. Only the integration tests catch this.
+  `const.py` are bumped. Only the integration tests catch this. A retired dataset does not necessarily
+  fail loudly: `nwp-v1-1h-2500m` kept answering HTTP 200 with all-null data after its last run, which
+  renders as `n/a` rows with no condition — the Vienna integration test asserts against exactly that.
 - Shared GeoSphere rate limits (5 req/s, 240 req/h) apply across all callers, with no server-side quota
   tracking.
 

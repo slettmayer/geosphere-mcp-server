@@ -1,17 +1,20 @@
 # Condition Derivation
 
 ## Purpose
-Documents the shared condition vocabulary, the two physical derivation functions and their thresholds,
-the current-conditions merge chain, and the precipitation-probability mapping.
+Documents the shared condition vocabulary, how a condition is taken from GeoSphere's weather symbol (`sy`)
+for each forecast hour and how observations override it for the current condition, the current-conditions
+merge chain, and the precipitation-chance estimate.
 
 ## Responsibilities
-- Defining the condition vocabulary shared by both data paths
-- Specifying `derive_condition` and `derive_current_condition` and every threshold they use
+- Defining the condition vocabulary and the `sy` code table it is mapped from
+- Specifying `derive_condition_from_symbol` and `derive_current_condition`
 - Documenting the per-field merge chain for current conditions
-- Documenting the precipitation-probability (POP) mapping
+- Documenting the precipitation-chance (POP) estimate
 
 ## Non-Responsibilities
-- Which dataset supplies which parameter (see [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md))
+- Which dataset supplies which parameter, and how each is stamped (see
+  [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md))
+- The thunderstorm outlook (see [STORM-OUTLOOK.md](STORM-OUTLOOK.md))
 - How derived values are rendered, or whether they are rendered at all (see
   [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md))
 - Module boundaries of `condition.py` and `weather.py` (see
@@ -20,90 +23,81 @@ the current-conditions merge chain, and the precipitation-probability mapping.
 ## Overview
 
 ### Condition Vocabulary
-One shared vocabulary across all tools and both data paths — the Home Assistant condition set: `sunny`,
-`clear-night`, `partlycloudy`, `cloudy`, `rainy`, `pouring`, `lightning`, `lightning-rainy`, `snowy`,
-`snowy-rainy`, `windy`, `windy-variant`, `fog`.
+One shared vocabulary across all tools — the Home Assistant condition set, as far as GeoSphere's symbol
+reaches it: `sunny`, `clear-night`, `partlycloudy`, `cloudy`, `fog`, `rainy`, `pouring`, `snowy`,
+`snowy-rainy`, `lightning-rainy`. The strings are declared once as `CONDITION_*` in `const.py` and
+`condition.py` maps onto them, so the package stays free of Home Assistant imports. HA's `windy`,
+`windy-variant`, `lightning` (dry thunder), `hail` and `exceptional` have no `sy` code and never occur.
 
-`condition.py` duplicates these string literals rather than importing them, so the derivation logic stays
-free of Home Assistant imports and portable to and from `ha-geosphere-next`.
+### The `sy` Code Table
+GeoSphere published the weather-symbol table, in German, in
+[dataset-api-docs#30](https://github.com/Geosphere-Austria/dataset-api-docs/issues/30#issuecomment-2042539848).
+It was confirmed there for `nwp-v1`; that `nwp-v2` follows it is measured, not published (see
+[Known Risks](#known-risks)). The code groups live in `const.py` (`SY_CLEAR` … `SY_THUNDER`):
 
-### GeoSphere Paths: Two Derivation Functions
-Conditions are derived physically from parameters, not read from a proprietary symbol code. All thresholds
-live in `const.py`. The two functions deliberately apply different rules.
+| `sy` | GeoSphere | Condition |
+|---|---|---|
+| 1, 2 | Wolkenlos, Heiter | `sunny`, or `clear-night` at night |
+| 3 | Wolkig | `partlycloudy` |
+| 4, 5 | Stark bewölkt, Bedeckt | `cloudy` |
+| 6, 7 | Bodennebel, Hochnebel | `fog` |
+| 8, 9 | Leichter / Mäßiger Regen | `rainy` |
+| 10 | Starker Regen | `pouring` |
+| 11–13 | Schneeregen | `snowy-rainy` |
+| 14–16 | Leichter / Mäßiger / Starker Schneefall | `snowy` |
+| 17, 18 | Regenschauer | `rainy` |
+| 19 | Starker Regenschauer | `pouring` |
+| 20–22 | Schneeregenschauer | `snowy-rainy` |
+| 23–25 | Schneeschauer, Starker Schneeschauer | `snowy` |
+| 26–28 | Gewitter, Starkes Gewitter | `lightning-rainy` |
+| 29–32 | (Starkes) Gewitter mit Schneeregen / Schneefall | `lightning-rainy` |
 
-**`derive_condition`** — used per forecast hour by the hourly tool.
+A missing code, or one outside the table, maps to `None` (unknown) — never a guess — and logs one warning
+per code per process (`weather._warn_unknown_sy_code`). The table has no night variants, so `is_night`
+(`astral` solar elevation below 0) decides between `sunny` and `clear-night`: for a forecast row at the
+middle of its hour (`FORECAST_ROW_MIDPOINT`), for the current condition at `now`. Every thunderstorm code,
+the sleet and snow ones included, maps to `lightning-rainy`: there is no thundersnow condition, and the
+thunderstorm is the hazard people act on. `is_thunder_symbol` is the shared 26–32 test, also used by the
+current condition and the storm outlook.
 
-| Rule | Threshold | Constant |
-|------|-----------|----------|
-| Precipitation counts as wet | >= 0.1 mm | `PRECIP_MIN_MM` |
-| Wet becomes `pouring` | >= 4.0 mm/h | `POURING_MM_PER_H` |
-| Thunder (with or without rain) | CAPE >= 1000 J/kg **and** CIN > -50 J/kg | `THUNDER_CAPE_JKG`, `CAP_CIN_JKG` |
-| Thunder on *observed* rain >= 4.0 mm/h | CAPE >= 1000 J/kg alone (CIN veto overridden) | `THUNDER_CAPE_JKG`, `POURING_MM_PER_H` |
-| Dry `lightning` also needs cloud | >= 60 % | `WINDY_CLOUD_TCC_PCT` |
-| Gust makes it windy | >= 15 m/s | `WINDY_GUST_MS` |
-| `windy` vs `windy-variant` split at cloud | 60 % | `WINDY_CLOUD_TCC_PCT` |
-| `sunny` / `clear-night` at or below cloud | 12.5 % | `CLEAR_TCC_PCT` |
-| `partlycloudy` above 12.5 % and at or below | 62.5 % | `CLOUDY_TCC_PCT` |
-| `cloudy` strictly above cloud | 62.5 % | `CLOUDY_TCC_PCT` |
+### `derive_condition_from_symbol` (per forecast hour)
+Inputs: the hour's `sy` code and `night`; returns the table's condition. A forecast row reads `sy` at the
+**next** stamp, like `tp`: its precipitation classes follow `tp` at their own stamp, so only there does the
+row's condition agree with the row's own precipitation amount. The cost is the cloud classes, which bin
+`tcc` at that later stamp — the sky at the *end* of the row's hour, while the row's cloud cover is `tcc`
+at its start. See [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md#the-forecast-datasets) for
+the stamping rule.
 
-The cloud comparisons are inclusive at the lower bound (`tcc <= CLEAR_TCC_PCT`, `tcc <= CLOUDY_TCC_PCT`),
-so exactly 12.5 % renders `sunny`/`clear-night` and exactly 62.5 % renders `partlycloudy`.
+### `derive_current_condition` (now)
+The symbol comes from a run that is routinely several hours old, so observations decide whether and what
+is falling now. Keyword-only inputs: the nowcast precipitation-type code and rate, temperature, the `sy`
+code of the forecast hour in progress, and `night`. `is_precipitating` reads the code and rate as observed
+wet, observed dry, or nothing observed (`None`):
 
-Rain versus snow is split from AROME's **accumulated** `snow_acc` and `rr_acc` deltas (rain = precipitation
-minus snowfall), not from temperature. There is **no fog branch** — the hourly tool never returns `fog`.
+1. **Observed wet** (`pt` ≠ 255, or rate ≥ `PRECIP_MIN_MM` 0.1 mm/h). The `pt` code decides the kind;
+   temperature (`SNOW_MAX_T2M_C` = 1.0 °C) splits rain from snow only when the code names no kind —
+   absent, 255 beside an observed rate, or a code outside GeoSphere's table. In order: `snowy` if
+   T ≤ 1 °C and the kind is pt 5 or none; else `lightning-rainy` when the hour's symbol is 26–32; else
+   `snowy` (pt 5); else `snowy-rainy` (pt 7 rain and snow, or pt 3 freezing rain, which has no condition
+   of its own); else `pouring` (≥ `POURING_MM_PER_H` 5 mm/h, where GeoSphere's heavy-rain codes 10/19
+   start, so now and the forecast flip at the same intensity) or `rainy`. The symbol's own kind (rain,
+   sleet, snow) is never used here.
+2. **Observed dry**, which only the nowcast can say (`pt` 255, or a dry rate). The symbol's mapping
+   applies, except that a precipitation or thunder code (8–32) reads `cloudy` — the model expects
+   precipitation that is not falling, under what is then an overcast sky. Fog comes only from codes 6–7.
+3. **Nothing observed** (outside the nowcast grid, or the nowcast down with no current wet INCA `RR`):
+   the symbol is the only evidence and its mapping applies unchanged, rain and thunder included. A dry
+   INCA `RR` never counts as "observed dry": it analyses an hour that ended up to ~90 min ago, so it
+   cannot rule out rain that has started since.
 
-**The thunder gate (`is_thunder`).** CAPE measures how much energy convection *could* release; convective
-inhibition (CIN) measures the lid holding it down. High CAPE under a strong lid produces no storm, so the
-forecast paths call `is_thunder(cape, cin)` rather than comparing CAPE alone. AROME publishes `cin` as a
-**negative** value in J/kg — `0.0` is uncapped and more negative is a stronger lid — so the gate reads
-`cin > -CAP_CIN_JKG`.
+**Snow outranks a thunder symbol when cold.** At or below 1 °C observed snow (pt 5, or no kind) reads
+`snowy` even under a thunderstorm symbol: `lightning-rainy` depicts rain, thundersnow is rare and still
+snow, and the run behind the symbol may have expected a warmer airmass than the one now snowing. Above
+1 °C, or with no temperature from any source, the thunder symbol wins over every kind, since a graupel or
+rain-and-snow shower can still be a storm. Cold pt 7 and pt 3 lose to thunder too: they are not snow.
 
-**One place can override the cap**: the precipitating branch of `derive_current_condition`, and only when
-the observed rate reaches `POURING_MM_PER_H`. Its precipitation evidence is *observed* (INCA and the
-nowcast are anchored to measurements) while CAPE and CIN are AROME's forecast for the hour. Inhibition
-answers "can convection get started?", which a downpour has already settled, so a modelled lid must not
-veto a storm that is visibly happening — that would render a thunderstorm in progress as plain `rainy`.
-
-The intensity qualifier is what keeps the override narrow. `is_precipitating` is true of drizzle, so
-overriding on *any* observed rain would promote high CAPE under a strong lid with light stratiform rain —
-a real frontal pattern, not a storm — to `lightning-rainy`, contradicting the hourly path's `rainy` for the
-same hour. Below that rate, and everywhere the verdict is forecast-driven end to end (including this
-function's non-precipitating branch), the full gate applies. The cost is a genuine storm raining more
-weakly than 4 mm/h under a modelled lid, which still reads as `rainy`; the alternative was a second rate
-constant with nothing to validate it against.
-
-A **missing** `cin` counts as uncapped, which keeps the pre-gate behaviour intact for any hour AROME
-leaves blank. `is_thunder` takes the AROME sign convention (negative J/kg) and does not verify it — a
-future source publishing inhibition as a positive magnitude must be negated before calling.
-`CAP_CIN_JKG = 50.0` is a standard boundary for weak inhibition; its discrimination against real capped
-situations is unconfirmed against observations.
-
-**`derive_current_condition`** — used for current weather. It adds a fog heuristic and changes the
-rain/snow rule:
-
-| Rule | Threshold | Constant |
-|------|-----------|----------|
-| Fog requires relative humidity | >= 98 % | `FOG_MIN_RH_PCT` |
-| Fog requires wind below | 2.0 m/s | `FOG_MAX_WIND_MS` |
-| Fog requires cloud | >= 87.5 % | `FOG_MIN_TCC_PCT` |
-| Snow instead of rain at or below | 1.0 degC | `SNOW_MAX_T2M_C` |
-
-Snow versus rain is decided by the nowcast `pt` code, through GeoSphere's table (`PRECIPITATION_TYPES`:
-1 rain, 3 freezing rain, 5 snow, 7 rain and snow, 255 no precipitation —
-[confirmed by GeoSphere](https://github.com/Geosphere-Austria/dataset-api-docs/issues/71#issuecomment-6125846140), not in the API's `/metadata`). When precipitating:
-`snowy` if T ≤ 1 °C and the kind is pt 5 or none; else `lightning-rainy` for thunder; else `snowy` for
-pt 5; else `snowy-rainy` for pt 7 or pt 3 (no condition exists for freezing rain); else `pouring` or
-`rainy`. pt 1 is rain at any temperature, and no kind is rain above 1 °C or with no temperature. So snow outranks thunder only
-at or below 1 °C (thundersnow is rare and still snow); above it, or when no source has a temperature, a
-storm wins over every kind, since a graupel or rain-and-snow shower can still be a thunderstorm and that
-is the hazard people act on. Cold pt 7 and pt 3 lose to thunder too: they are not snow.
-Temperature only decides the kind when the code names none: absent, 255 beside an observed rate, or a
-code outside the table. The fog heuristic can be
-switched off wholesale via the `FOG_HEURISTIC_ENABLED` flag in `const.py`. When it is not precipitating,
-the function falls back to `derive_condition` on cloud, CAPE/CIN, and gust alone — and there the CIN cap
-does apply, since nothing observed contradicts it (see the thunder gate above).
-
-Day versus night (`sunny` vs `clear-night`) is resolved with `astral` in both derivation functions.
+Thunder is the one thing observations here cannot see, so it comes from the symbol, and only while
+precipitation is observed. CAPE plays no part in any condition.
 
 ### Current-Conditions Merge Chain
 Each field is filled from a per-field fallback chain (ported from `ha-geosphere-next`):
@@ -114,9 +108,9 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | Dew point | INCA -> nowcast |
 | Gust | nowcast -> AROME |
 | Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
-| Cloud cover, CAPE, CIN | AROME |
+| Cloud cover, CAPE, snow limit, weather symbol | the AROME row for the hour in progress (`weather._arome_current`, the same assembled row the hourly forecast emits — so the symbol is read from the next stamp, like the gust) |
 | 1-hour precipitation | INCA `RR` only -- absent when INCA is |
-| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR`, else INCA `RR` if its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR` whenever the nowcast reports `pt` or `rr` — a `pt` of 255 is an observed "dry" that INCA never overrules; otherwise INCA `RR`, but only when it is wet (>= 0.1 mm), its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; otherwise `None` (nothing observed). Once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
 | Precipitation flag (`is_precipitating`) | `condition.is_precipitating` on the nowcast `pt` code (255 means none) and the nowcast rate -- never INCA `RR`. Tri-state: absent when neither spoke |
 | Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition. It can still disagree with the flag: with no nowcast `rr` and a current INCA `RR`, the kind is absent while the flag says not precipitating, since the flag reads the nowcast rate only |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
@@ -138,12 +132,14 @@ for, so substituting it reports rain that has already stopped — 2.4 mm falling
 reads "wet" at 16:50. With no nowcast at all (a point inside the AROME domain but outside the Austrian
 grid, or a transient fetch failure) nothing observed precipitation, and a confident "dry" would be
 invented, so the flag is absent rather than false — consistent with `precipitation_1h_mm` in the same
-case. The condition derivation *does* still fall back to `RR`, because it has to name something, but only
-while that value is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h) **and not future-dated** — a bare
+case. The condition derivation *does* still fall back to `RR` when the nowcast reports nothing, but only
+to a **wet** `RR` that is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h) **and not future-dated** — a bare
 age comparison is also satisfied by a negative age, which would let an hour that has not happened yet
-read as the freshest reading there is. The bound catches a slice that has
-stopped updating, not ordinary lag: INCA routinely trails ~90 min, and a tighter bound would flap the
-condition between `rainy` and cloud-derived once per publish cycle through steady rain.
+read as the freshest reading there is. The bound catches a slice that has stopped updating, not ordinary
+lag: INCA routinely trails ~90 min, and a tighter bound would flap the condition between `rainy` and the
+symbol's condition once per publish cycle through steady rain. A dry `RR` is never passed on as an
+observation: it would demote a rain or thunder symbol to `cloudy` on the strength of an hour that is
+already over.
 
 `observed_at` reports the stamp of whichever source supplied the **temperature** — the field the reading
 is judged by — at every rung, so no other field's freshness can vouch for it. The INCA analysis behind the
@@ -160,15 +156,19 @@ the previous slice until the next appears, so `observed_at` can trail real time 
 
 Two values are **derived rather than fetched**: apparent temperature ("feels like", Australian Bureau of
 Meteorology formula from temperature, humidity, and wind) and — on the hourly path only — dew point
-(Magnus formula from temperature and humidity, since AROME has no native dew-point parameter).
+(Magnus formula from temperature and humidity, since the forecast has no dew-point parameter).
 
-Not every merged field reaches the output. Dew point, global radiation, snow limit, CAPE, precipitation
-type, and the precipitation flag are computed and then dropped during normalization; on the hourly path
-wind bearing and dew point are likewise computed but never rendered. See
+Not every merged field reaches the output. Dew point, global radiation, snow limit, CAPE, the weather
+symbol, precipitation type, and the precipitation flag are computed and then dropped during normalization;
+on the hourly path wind bearing and dew point are likewise computed but never rendered. See
 [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) for what each tool actually emits.
 
-### Precipitation Probability (POP)
-Derived from the C-LAEF ensemble as a stepped value matched by **exact timestamp**:
+### Precipitation Chance (POP)
+GeoSphere publishes no precipitation probability. The chance on each hourly row is an **estimate this
+server derives** from the C-LAEF ensemble, which publishes only `tp_p10` / `tp_p50` / `tp_p90` per hour —
+no member counts, so no true wet fraction. A percentile at or above `PRECIP_MIN_MM` (0.1 mm) bounds the
+share of wet members, and the midpoint of that range is reported, matched to forecast rows by **exact
+timestamp**. The hourly output says so in a trailing note whenever it shows a chance:
 
 | Wettest percentile that is wet | Probability | Constant |
 |--------------------------------|-------------|----------|
@@ -177,11 +177,12 @@ Derived from the C-LAEF ensemble as a stepped value matched by **exact timestamp
 | p90 | 30 % | `POP_P90_WET_PCT` |
 | none | 0 % | `POP_DRY_PCT` |
 
-The percentiles are **interval** values, like AROME's accumulations and gusts: GeoSphere documents them as
-"the last forecast period", so a percentile stamped `T` covers the period *ending* at `T`.
-`_pop_by_timestamp` therefore keys the dict by the **preceding stamp**, putting each probability on the
+The percentiles are **interval** values, like `tp` and the gust: GeoSphere documents them as "in the last
+forecast interval", so a percentile stamped `T` covers the period *ending* at `T`.
+`_ensemble_by_timestamp` therefore keys them by the **preceding stamp**, putting each chance on the
 forecast row that reports the matching amount. Reading them at their own stamp pairs every row's amount
-with the *previous* hour's probability.
+with the *previous* hour's chance. The same mapping carries `tp_p90` (keyed the same way) and the
+instantaneous `cape_p90` (kept on its own stamp) onto the rows for the storm outlook.
 
 The period start is read from the series rather than by subtracting a fixed step. Ensembles commonly
 coarsen along their horizon, and if C-LAEF ever does, a hardcoded 1 h step would miss every AROME row past
@@ -196,15 +197,17 @@ entirely and the forecast still renders.
 ## Dependencies
 - `condition.py` depends only on `astral` and `const.py`
 - `weather.py` owns the merge chain and POP mapping and calls `condition.py`
-- Every threshold is a named constant in `const.py`
+- Every threshold and the `sy` code groups are named constants in `const.py`
 
 ## Design Decisions
-- **Physically derived conditions**: the condition comes from physical parameters rather than GeoSphere's
-  proprietary `sy` symbol code, whose table is undocumented and could change under us without notice.
-- **Two derivation functions instead of one**: the current path has nowcast humidity and the nowcast
-  `pt` code, so it can afford a fog heuristic and take the precipitation kind from the code (temperature
-  only as a fallback); the hourly path has accumulation deltas instead and must not guess at fog.
-- **Duplicated Home Assistant condition literals**: keeps `condition.py` import-free and portable.
+- **GeoSphere's own classification over local thresholds**: the condition matches what GeoSphere's products
+  show, and no cloud, gust, fog or CAPE threshold needs tuning here. The raw values (cloud cover,
+  precipitation, gusts, CAPE) are unchanged on the rows. Ported from `ha-geosphere-next` 0.16.0.
+- **Observations outrank the symbol for what is falling now**, because the symbol's run is hours old.
+  Thunder is the one thing observations cannot see, so it comes from the symbol, and only while
+  precipitation is observed.
+- **Only the nowcast can say "dry"**: a dry INCA `RR` describes an hour already over, so treating it as an
+  observation would flip a rain symbol to `cloudy` and back as each analysis lands.
 - **Stepped POP over interpolation**: three ensemble percentiles cannot support a continuous curve
   honestly, so the mapping stays coarse and explicit.
 - **The nowcast bucket is matched nearest-in-either-direction**, so current values can come from up to
@@ -227,16 +230,24 @@ entirely and the forecast still renders.
   `nearest_index` docstring states the behaviour and the clamping obligation, but not the verdict.
 
 ## Known Risks
-- `condition.py` duplicates Home Assistant condition strings — these could drift if a condition is renamed
-  upstream.
-- The nowcast `pt` code table is hard-coded from GeoSphere's issue reply, as `/metadata` carries no code
-  list yet. GeoSphere plans to add `code_lists` there; until then a new code shows up only as a one-time
-  warning in the log.
-- The CIN threshold is a textbook boundary, not one validated against Austrian storm reports; too strict a
-  value would suppress real storms and too loose a one would not filter anything.
-- Exact-timestamp POP matching yields no probability on any clock skew between the AROME and C-LAEF series.
+- The `nwp-v2` `sy` table is assumed equal to the `nwp-v1` one GeoSphere confirmed. `ha-geosphere-next`
+  measured it across the whole grid (cloud classes bin `tcc` exactly; rain intensities bin `tp`; rain,
+  sleet and snow classes track temperature and snowfall; every thunder point is wet), but codes 6–7
+  (fog), 25, 30 and 32 never occurred. If `nwp-v2` does not emit fog codes, **no hour and no current
+  condition will ever read `fog`** — accepted, since a local fog heuristic is what the symbol replaced.
+- GeoSphere's thunder codes fire at modest CAPE (median ~160 J/kg in that sample), so `lightning-rainy` is
+  GeoSphere's own diagnosis, not a CAPE threshold.
+- A row's condition (from `sy` at the end of its hour) and its cloud cover (from `tcc` at the start) can
+  disagree by a cloud class.
+- `condition.py` relies on Home Assistant's condition strings, declared in `const.py` — these could drift if
+  a condition is renamed upstream.
+- The nowcast `pt` and the `sy` code tables are hard-coded from GeoSphere's issue replies; `/metadata`
+  carries neither. A new code shows up only as a one-time warning in the log, and reads unknown.
+- Exact-timestamp POP matching yields no chance on any clock skew between the AROME and C-LAEF series.
 
 ## Extension Guidelines
+- To change a mapping, move the code between the `SY_*` groups in `const.py`; `tests/test_condition.py`
+  pins the table code by code.
 - New threshold: add a named constant to `const.py`; never inline a literal in `condition.py`.
 - New condition string: add it to the vocabulary list above and to the `CONDITION_*` block in `const.py`.
 - Keep `condition.py` free of MCP and Home Assistant imports.

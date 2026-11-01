@@ -1,0 +1,99 @@
+{
+ "media_type": "application/json",
+ "type": "FeatureCollection",
+ "version": "v1",
+ "timestamps": [
+  "2026-11-01T19:00+00:00",
+  "2026-11-01T20:00+00:00",
+  "2026-11-01T21:00+00:00"
+ ],
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     14.15556526184082,
+     46.63272476196289
+    ]
+   },
+   "properties": {
+    "parameters": {
+     "T2M": {
+      "name": "air temperature",
+      "unit": "degree_Celsius",
+      "data": [
+       7.29,
+       6.55,
+       6.15
+      ]
+     },
+     "TD2M": {
+      "name": "dew point temperature",
+      "unit": "degree_Celsius",
+      "data": [
+       1.73,
+       2.51,
+       3.37
+      ]
+     },
+     "RH2M": {
+      "name": "relative humidity",
+      "unit": "percent",
+      "data": [
+       67.74,
+       75.31,
+       82.31
+      ]
+     },
+     "RR": {
+      "name": "1-hour precipitation sum",
+      "unit": "kg m-2",
+      "data": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "P0": {
+      "name": "mean sea level pressure",
+      "unit": "Pa",
+      "data": [
+       102629.3,
+       102657.41,
+       102723.45
+      ]
+     },
+     "GL": {
+      "name": "global radiation",
+      "unit": "W m-2",
+      "data": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "UU": {
+      "name": "wind speed in eastward direction",
+      "unit": "m s-1",
+      "data": [
+       -2.58,
+       -1.65,
+       -1.81
+      ]
+     },
+     "VV": {
+      "name": "wind speed in northward direction",
+      "unit": "m s-1",
+      "data": [
+       -0.9,
+       -0.23,
+       -0.19
+      ]
+     }
+    }
+   }
+  }
+ ],
+ "datapoints": 24
+}

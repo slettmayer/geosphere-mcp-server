@@ -45,11 +45,10 @@ registered in `server.py` is itself part of the surface: it is how a model decid
 | Coverage | Dynamic coverage detection and the three coverage classes | [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md) |
 | Graceful degradation | Out-of-domain, rate limit, and secondary-fetch-failure paths | [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md) |
 | Condition vocabulary | The Home Assistant condition set the server emits | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
-| Condition derivation | Derivation from the physical parameters, not a symbol code | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
+| Condition derivation | GeoSphere's weather symbol (`sy`) per hour; observations override it for what is falling now | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
 | Merge chain | Per-field source preference for current conditions | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
-| Precipitation probability | Stepped value from the C-LAEF ensemble percentiles | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
-| Thunder gate | CAPE gated by convective inhibition, and what a missing CIN means | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
-| Storm outlook | Peak gusts, next thunderstorm, and the round-up window semantics | [STORM-OUTLOOK.md](STORM-OUTLOOK.md) |
+| Precipitation chance | Stepped estimate derived from the C-LAEF ensemble percentiles | [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md) |
+| Storm outlook | Peak gusts, next thunderstorm (symbol or ensemble signal), and the round-up window semantics | [STORM-OUTLOOK.md](STORM-OUTLOOK.md) |
 | Air quality | Pollutant concentrations and the European AQI band scale | [AIR-QUALITY.md](AIR-QUALITY.md) |
 | Tool contract | Signatures, defaults, clamping, and validation errors | [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) |
 | Output contract | Rendered fields, attribution lines, day dividers, error lines | [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) |
@@ -60,20 +59,20 @@ registered in `server.py` is itself part of the surface: it is how a model decid
 |------|-----------|
 | **MCP** | Model Context Protocol — how models invoke this server's tools (stdio transport) |
 | **GeoSphere** | GeoSphere Austria — the national geophysical and meteorological service, and its Dataset API |
-| **AROME** | High-resolution (2.5 km) numerical weather prediction model, ~60 h forecast |
+| **AROME** | The code's name for the deterministic forecast: `nwp-v2-1h-1km`, the control run of the C-LAEF AlpeAdria ensemble on a 1 km grid, ~60 h |
 | **INCA** | Integrated Nowcasting through Comprehensive Analysis — 1 km gridded analysis and nowcast, Austria only |
-| **C-LAEF** | Convection-permitting Limited Area Ensemble Forecasting — supplies precipitation percentiles (rr_p10/p50/p90) |
+| **C-LAEF** | Convection-permitting Limited Area Ensemble Forecasting — supplies precipitation and CAPE percentiles (`tp_p10/p50/p90`, `cape_p90`) |
 | **WRF-Chem** | Weather Research and Forecasting model coupled with Chemistry — GeoSphere's 3 km air-quality forecast |
-| **CAPE** | Convective Available Potential Energy (J/kg) — how much energy convection could release |
-| **CIN** | Convective Inhibition (J/kg, published negative) — the lid holding convection down; gates CAPE in the thunder test |
+| **CAPE** | Convective Available Potential Energy (J/kg) — how much energy convection could release; its ensemble 90th percentile feeds the storm outlook |
+| **`sy`** | GeoSphere's weather-symbol code (1–32), mapped onto the condition vocabulary |
 | **EEA band** | The European Air Quality Index's six-step scale (1 good to 6 extremely poor) |
 | **nowcast** | Very short-range (15-min cadence) forecast from INCA |
-| **POP** | Probability of precipitation — a stepped value derived from ensemble percentiles |
+| **POP** | Precipitation chance — a stepped estimate derived here from ensemble percentiles, not published by GeoSphere |
 | **out-of-domain** | A GeoSphere 400 carrying "outside of dataset bounds" — the coverage signal, rendered as a distinct out-of-coverage line |
 | **rate limit** | A GeoSphere 429 — retried once when the wait is 5 s or less, else returned as a notice; unlike out-of-domain it is worth retrying |
 | **apparent temperature** | "Feels like" temperature derived from temperature, humidity, and wind (Australian BoM formula), not fetched |
 | **condition** | A Home Assistant-style condition string such as `partlycloudy` — the shared output vocabulary |
-| **accumulation delta** | The hour-over-hour difference of AROME's cumulative `rr_acc`/`snow_acc`, used to split rain from snow |
+| **interval-ending parameter** | A forecast parameter covering the hour *ending* at its stamp (`10fg`, `tp`, `sf`, `sy`), read one stamp on for the row it describes |
 | **day divider** | The `%a %Y-%m-%d` header the hourly renderer inserts whenever the local calendar date changes |
 
 ## Dependencies
@@ -96,8 +95,8 @@ These span more than one concept; per-concept decisions live in the sub-file tha
   `const.py` are bumped.
 - No GeoSphere forecast reaches beyond ~60 h, and with no fallback source there is no multi-day answer
   this server can give at all.
-- AROME publishes convective inhibition as a negative magnitude and the thunder gate assumes that sign
-  without checking; a source that publishes it positive would silently invert the gate.
+- The `sy` table is published for `nwp-v1` and assumed for `nwp-v2`; fog codes have not been observed
+  there, so `fog` may never appear.
 - Shared GeoSphere rate limits (5 req/s, 240 req/h) with no server-side quota tracking.
 - `condition.py` duplicates Home Assistant condition strings to stay import-free, so they could drift.
 

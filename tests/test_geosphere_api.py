@@ -58,15 +58,15 @@ SAMPLE_AROME_GEOJSON = {
             "geometry": {"type": "Point", "coordinates": [16.362, 48.219]},
             "properties": {
                 "parameters": {
-                    "t2m": {
+                    "2t": {
                         "name": "2m temperature",
                         "unit": "degree Celsius",
                         "data": [31.1, 28.6, 28.1],
                     },
                     "tcc": {
                         "name": "total cloud cover",
-                        "unit": "1",
-                        "data": [0.2, 0.5, None],
+                        "unit": "%",
+                        "data": [20.0, 50.0, None],
                     },
                 }
             },
@@ -92,8 +92,8 @@ async def test_async_get_timeseries_builds_url_and_params() -> None:
     await async_get_timeseries(
         session,
         "forecast",
-        "nwp-v1-1h-2500m",
-        ("t2m", "tcc"),
+        "nwp-v2-1h-1km",
+        ("2t", "tcc"),
         48.2208,
         16.3738,
     )
@@ -102,9 +102,9 @@ async def test_async_get_timeseries_builds_url_and_params() -> None:
     url = call.args[0]
     params = call.kwargs["params"]
     assert url == (
-        "https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nwp-v1-1h-2500m"
+        "https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nwp-v2-1h-1km"
     )
-    assert params["parameters"] == "t2m,tcc"
+    assert params["parameters"] == "2t,tcc"
     assert params["lat_lon"] == "48.2208,16.3738"
     assert params["output_format"] == "geojson"
     assert "start" not in params
@@ -141,7 +141,7 @@ async def test_async_get_timeseries_parses_geojson() -> None:
     session = _make_session(json_data=SAMPLE_AROME_GEOJSON)
 
     response = await async_get_timeseries(
-        session, "forecast", "nwp-v1-1h-2500m", ("t2m", "tcc"), 48.22, 16.37
+        session, "forecast", "nwp-v2-1h-1km", ("2t", "tcc"), 48.22, 16.37
     )
 
     assert response.reference_time is not None
@@ -149,8 +149,8 @@ async def test_async_get_timeseries_parses_geojson() -> None:
     assert len(response.timestamps) == 3
     assert response.grid_latitude == pytest.approx(48.219)
     assert response.grid_longitude == pytest.approx(16.362)
-    assert response.value_at("t2m", 0) == 31.1
-    assert response.parameters["tcc"].unit == "1"
+    assert response.value_at("2t", 0) == 31.1
+    assert response.parameters["tcc"].unit == "%"
     # Missing value in a series is preserved as None.
     assert response.value_at("tcc", 2) is None
     # Unknown parameter degrades to an all-None series, not a KeyError.
@@ -161,7 +161,7 @@ async def test_async_get_timeseries_parses_geojson() -> None:
 def test_parse_geojson_unexpected_shape_raises() -> None:
     """An empty feature list raises GeoSphereApiError."""
     with pytest.raises(GeoSphereApiError):
-        _parse_geojson("nwp-v1-1h-2500m", {"features": []})
+        _parse_geojson("nwp-v2-1h-1km", {"features": []})
 
 
 @pytest.mark.asyncio
@@ -170,7 +170,7 @@ async def test_async_get_timeseries_unexpected_shape_raises() -> None:
     session = _make_session(json_data={"features": []})
     with pytest.raises(GeoSphereApiError):
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 48.0, 16.0
         )
 
 
@@ -184,7 +184,7 @@ async def test_async_get_timeseries_rate_limit_with_retry_after() -> None:
 
     with pytest.raises(GeoSphereRateLimitError) as err:
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 48.0, 16.0
         )
 
     assert err.value.retry_after == 120.0
@@ -197,7 +197,7 @@ async def test_async_get_timeseries_rate_limit_without_header() -> None:
 
     with pytest.raises(GeoSphereRateLimitError) as err:
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 48.0, 16.0
         )
 
     assert err.value.retry_after is None
@@ -210,7 +210,7 @@ async def test_async_get_timeseries_out_of_domain() -> None:
 
     with pytest.raises(GeoSphereOutOfDomainError):
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 52.52, 13.405
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 52.52, 13.405
         )
 
 
@@ -221,7 +221,7 @@ async def test_async_get_timeseries_generic_400() -> None:
 
     with pytest.raises(GeoSphereApiError) as err:
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("foo",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("foo",), 48.0, 16.0
         )
 
     assert not isinstance(err.value, GeoSphereOutOfDomainError)
@@ -234,7 +234,7 @@ async def test_async_get_timeseries_server_error() -> None:
 
     with pytest.raises(GeoSphereApiError):
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 48.0, 16.0
         )
 
 
@@ -245,7 +245,7 @@ async def test_async_get_timeseries_timeout() -> None:
 
     with pytest.raises(GeoSphereTimeoutError):
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 48.0, 16.0
         )
 
 
@@ -256,5 +256,5 @@ async def test_async_get_timeseries_connection_error() -> None:
 
     with pytest.raises(GeoSphereConnectionError):
         await async_get_timeseries(
-            session, "forecast", "nwp-v1-1h-2500m", ("t2m",), 48.0, 16.0
+            session, "forecast", "nwp-v2-1h-1km", ("2t",), 48.0, 16.0
         )

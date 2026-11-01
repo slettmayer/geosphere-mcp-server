@@ -7,41 +7,78 @@ figure, and how a thunderstorm hour is decided.
 ## Responsibilities
 - Specifying the derivations in `outlook.py` and the horizons they use
 - Documenting the round-up window and the "storm in progress" timestamp
-- Explaining the two-branch thunderstorm test and its false-positive guard
-- Recording how the outlook degrades when AROME leaves a field blank
+- Explaining the two thunderstorm signals, the ensemble's 12 h age rule, and the `signal` attribution
 
 ## Non-Responsibilities
-- The thunder gate itself (`is_thunder`) — see [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)
-- Which dataset supplies CAPE, CIN, or gusts — see
-  [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md)
+- The `sy` code table and `is_thunder_symbol` — see [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)
+- Which dataset supplies the symbol, gusts, CAPE and the ensemble percentiles, and how each is stamped —
+  see [DATA-SOURCES-AND-COVERAGE.md](DATA-SOURCES-AND-COVERAGE.md)
 - The rendered line format — see [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md)
 
 ## Overview
 
 The outlook answers the two questions an hourly table makes a caller work for: *how hard will it blow* and
-*when is the next thunderstorm*. It is deliberately **threshold-free** — it reports figures and never a
-severity verdict, because what counts as dangerous depends on whether the caller is closing a skylight or
-cancelling a flight.
+*when is the next thunderstorm*. It is deliberately **threshold-free** for gusts — it reports figures and
+never a severity verdict, because what counts as dangerous depends on whether the caller is closing a
+skylight or cancelling a flight.
+
+### What Counts As a Thunderstorm Hour
+
+Simple by design, and the same rule as `ha-geosphere-next` 0.16.0. An hour is a thunderstorm hour when
+**either** signal fires (`outlook._storm_signals`):
+
+- **Symbol**: the row's `sy` is a thunderstorm code (26–32) — GeoSphere's own verdict for the
+  deterministic run. The row reads `sy` from the next stamp, so the code describes the row's own hour.
+- **Ensemble**: the ensemble is current, and the row's `ensemble_cape_p90_jkg` ≥ `THUNDER_CAPE_JKG`
+  (1000 J/kg) **and** its `ensemble_precipitation_p90_mm` ≥ `PRECIP_MIN_MM` (0.1 mm). So at least a tenth
+  of the C-LAEF members reach 1000 J/kg of CAPE, and at least a tenth reach 0.1 mm of precipitation — not
+  necessarily the same members. `cape_p90` is instantaneous and read at the row's own stamp; `tp_p90` covers the row's
+  hour. Requiring precipitation keeps a dry high-CAPE afternoon from raising a signal.
+
+**Ensemble current** is one rule in one helper, `outlook.ensemble_is_current`: the ensemble run's
+`reference_time` is less than `ENSEMBLE_MAX_AGE` (12 h) before now. No ensemble run, or one without a
+stamp, is not current — it fails closed, and the outlook then rests on the symbol alone. Twelve hours
+covers GeoSphere's publication lag (the newest ensemble run in service is routinely 6–9 h old) plus a
+missed rerun. There is no other staleness machinery: the server is stateless and always fetches the newest
+run.
+
+The deterministic `cape` decides nothing. It is reported as `Max CAPE next 12 h`, a plain diagnostic.
+GeoSphere's thunder codes fire at far lower CAPE than 1000 J/kg (median ~160 J/kg in `ha-geosphere-next`'s
+grid-wide sample), so in practice the symbol is the season-round signal and the ensemble adds high-CAPE
+summer situations the deterministic run does not convect on.
+
+Every answer names its **signal** — `symbol`, `ensemble` or `both` — rather than a CAPE figure, so a caller
+can tell GeoSphere's own thunderstorm forecast from a member-spread possibility.
 
 ### The Derivations
 
-`window(rows, hours, now)` slices the series once; the three window readers below take the slice rather
-than re-deriving it, so `format._outlook` walks a series three times (two windows plus the full scan)
-instead of six.
+`window(rows, hours, now)` slices the series once; the window readers below take the slice rather than
+re-deriving it. `format._outlook` decides `ensemble_is_current` once and hands the same flag to both
+thunderstorm readers, so they cannot disagree about it.
 
 | Function | Reports | Input |
 |----------|---------|-------|
 | `max_gust` | Peak gust (m/s) and the hour it falls in | A window |
-| `max_cape` | Peak CAPE (J/kg) | A window |
-| `thunderstorm_outlook` | Tri-state `True` / `False` / `None` | A window |
-| `scan_thunderstorm` | First storm hour, its CAPE, and whether the scan counts | The **whole** series |
+| `max_cape` | Peak deterministic CAPE (J/kg), diagnostic only | A window |
+| `thunderstorm_outlook` | Tri-state `True` / `False` / `None`, plus the signal across the window | A window |
+| `next_thunderstorm` | First storm hour and the signal in that hour | The **whole** series |
 | `horizon_hours` | How far ahead the series still reaches | The **whole** series |
 
 Windows are cut at two fixed horizons — `OUTLOOK_SHORT_HORIZON_HOURS` (1 h) and
 `OUTLOOK_LONG_HORIZON_HOURS` (12 h).
 
-`scan_thunderstorm` deliberately ignores the horizon: "no storm for two days" and "storm in 40 hours" are
-both useful answers, and truncating the scan would turn the second into the first.
+`next_thunderstorm` deliberately ignores the horizon: "no storm for two days" and "storm in 40 hours" are
+both useful answers, and truncating the scan would turn the second into the first. It applies the same
+per-row test as `thunderstorm_outlook`, so whenever the 1 h answer is `yes`, the next thunderstorm names a
+row inside that window.
+
+### Tri-State, but Only for a Missing Window
+
+`thunderstorm_outlook` returns `None` (unknown) **only when its window holds no forecast hour at all**. An
+hour whose symbol is missing or outside GeoSphere's table counts as no storm unless the ensemble says
+otherwise: a symbol gap is rare, and blanking the answer on it would make "unknown" the norm rather than
+the exception. `next_thunderstorm` has no unknown: with rows ahead and no storm it is an all-clear over
+the scanned horizon, and with no rows at all the tool renders `No forecast hours available` instead.
 
 ### Window Semantics
 
@@ -55,37 +92,20 @@ stamps. A "1 hour" window covers the in-progress hour plus the next one, and can
 ~2 h out. A caller that needs a strict "within the next 60 minutes" answer must compare the returned
 timestamps itself.
 
-The bound is `row > now - 1 h` (`outlook._from`), **not** `now` floored to the top of the hour. AROME does
-stamp on whole UTC hours, so flooring would work today — but it fails in the one direction that matters. A
-stamp off the hour grid would put the floor *above* the in-progress row and drop it, rendering a storm
-already under way as a clean all-clear. The relative form costs nothing and keeps the grid assumption out
-of the contract.
+The bound is `row > now - 1 h` (`outlook._from`), **not** `now` floored to the top of the hour. The forecast
+does stamp on whole UTC hours, so flooring would work today — but it fails in the one direction that
+matters. A stamp off the hour grid would put the floor *above* the in-progress row and drop it, rendering a
+storm already under way as a clean all-clear. The relative form costs nothing and keeps the grid
+assumption out of the contract.
 
-**`scan_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
+**`next_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
 one already under way. That is the encoding of "a storm is in progress". Lead-time arithmetic downstream
 must clamp a non-positive lead time to zero rather than assume the timestamp is in the future.
-
-### What Counts As a Thunderstorm Hour
-
-`_is_lightning` accepts an hour on either of two branches:
-
-1. **The derived condition starts with `lightning`** — the model's own judgement that convection is
-   occurring, and the primary signal.
-2. **The raw CAPE/CIN predicate holds *and* the hour is forecast to produce precipitation** (>=
-   `PRECIP_MIN_MM`).
-
-The second branch exists because the condition string alone misses real storms: `derive_condition` returns
-`snowy` / `snowy-rainy` before it ever looks at thunder, so thundersnow reads as plain snow, and it returns
-`None` when cloud cover is missing, so a data gap reads as calm.
-
-That branch requires precipitation as a **false-positive guard**. CAPE >= 1000 J/kg with weak inhibition
-and no forecast rain is a routine summer afternoon in Vienna; without precipitation the model is not saying
-convection is happening.
 
 ### The In-Progress Hour Is Not Free
 
 Every window semantic above rests on the series' first entry being the hour already under way, and that
-does **not** come for free. An unbounded request begins well after the current hour, so
+does **not** come for free. Where an unbounded request begins is the API's choice, so
 `async_fetch_hourly_forecast` names an explicit `start`, anchored to the top of the hour and backed off by
 `HOURLY_LOOKBACK_HOURS` (1). The anchor is the load-bearing half: the API honours a `start` that lands
 exactly on a stamp but rounds a *mid-hour* one up to the next, so anchoring to `now` at 15:30 comes back
@@ -93,43 +113,24 @@ starting 16:00 and the in-progress hour is gone — the 1 h window collapses to 
 happening right now is invisible. The lookback is margin on top of that. Assembly drops whatever precedes
 the cutoff.
 
-The row's precipitation is a *forward* delta (`rr_acc[i+1] - rr_acc[i]`), so the in-progress hour reports
-the rain still to fall in it rather than the rain that already fell — which matters here, because
-`_is_lightning`'s branch (b) corroborates CAPE with precipitation. Reading it backwards would let the
-outlook call a storm that had just ended.
-
-### Tri-State Answers
-
-`thunderstorm_outlook` returns `None` — not `False` — when its window holds no hour that can be judged. An
-hour is *decidable* when it carries either a derived condition or a CAPE value; an hour with neither says
-nothing about thunder, and answering "no storm" there would be a guess rather than an answer. This makes a
-data gap distinguishable from genuine calm.
-
-`scan_thunderstorm` needs the same distinction and returns it as a third element, because the first two
-are `(None, None)` both for "no storm in the horizon" and for "nothing here can be read". The renderer
-consults it before printing an all-clear — otherwise a response could declare the window `unknown` on one
-line and assert a confident 60-hour all-clear on the next. It comes out of the *same* pass as the storm
-hour rather than a second one, so the two answers cannot drift apart: an hour the scan just judged as a
-storm is by construction an hour it counts as readable.
+The row's symbol and precipitation are read *forward* (the next stamp), so the in-progress hour reports
+the weather still to come in it rather than the hour that already ended — reading them backwards would let
+the outlook call a storm that had just ended.
 
 ### An All-Clear Names Its Horizon
 
-`get_storm_outlook` asks for `AROME_MAX_HOURS`, so the scan spans everything AROME publishes — nominally
-~60 h. A run that is stale or truncated hands over fewer, so `horizon_hours` measures what actually came
-back and the renderer prints `none in the next {N} h` rather than an unqualified "forecast horizon". "No
-storm for 4 h" and "no storm for 60 h" are different claims, and only one of them is usually true.
+`get_storm_outlook` asks for `AROME_MAX_HOURS`, so the scan spans everything the run publishes — nominally
+~60 h, but publication lag alone leaves ~52–55 h ahead of now, and a stale or truncated run less. So
+`horizon_hours` measures what actually came back and the renderer prints `none in the next {N} h` rather
+than an unqualified "forecast horizon". "No storm for 4 h" and "no storm for 60 h" are different claims.
 
 ### Degradation and Timestamps
 
 `outlook.py` reads the hourly **row dicts** that `weather.assemble_hourly_forecast` produces, through
-`.get` rather than by indexing — so an hour AROME left a field blank is judged on what it does carry
-rather than raising. A missing inhibition value reads as uncapped, degrading those hours to CAPE-only
-gating.
-
-AROME publishes inhibition **negative** (`0.0` uncapped, more negative a stronger lid), which is the
-convention `is_thunder` expects and does not verify. A future source publishing it as a positive magnitude
-must be negated before it reaches the gate; getting that backwards turns the gate inside out, suppressing
-exactly the storms it should pass.
+`.get` rather than by indexing — so a row missing a field is judged on what it does carry rather than
+raising. A failed ensemble fetch leaves the ensemble fields `None` and `ensemble_reference_time` unset, so
+the ensemble is not current and the outlook rests on the symbol; the renderer says so in an
+`ℹ️ Ensemble signal: unavailable` line.
 
 Rows are aware **UTC** and the derivation runs on them directly; only the *reported* timestamps are
 localized to Vienna for display. That ordering is load-bearing: `aware + timedelta` is wall-clock
@@ -139,32 +140,37 @@ no transitions, so a timedelta there is a true duration. `outlook.window` docume
 on its callers.
 
 ## Dependencies
-- `outlook.py` depends only on `condition.is_thunder` and `PRECIP_MIN_MM` from `const.py`
-- Needs AROME `cape` and `cin` plus one hour of lookback
-- The tool fetches AROME **without** the C-LAEF ensemble — the outlook reports no precipitation
-  probability, so that request would be wasted
+- `outlook.py` depends only on `condition.is_thunder_symbol` and the thresholds in `const.py`
+- Needs the AROME `sy`, `10fg` and `cape`, the C-LAEF `cape_p90` and `tp_p90`, and one hour of lookback
+- The tool fetches the ensemble alongside AROME (two requests), for its storm signal
 
 ## Design Decisions
-- **Threshold-free reporting**: figures, not verdicts. Severity policy belongs to the caller.
+- **Threshold-free gust reporting**: figures, not verdicts. Severity policy belongs to the caller.
+- **GeoSphere's symbol plus one ensemble rule, nothing else**: no CAPE/CIN gate, no cloud corroboration,
+  no staleness bookkeeping beyond the 12 h ensemble age. Either signal suffices, because a false alarm
+  costs less than a miss.
+- **Report the signal, not the reasoning**: `signal: symbol|ensemble|both` instead of a CAPE figure, which
+  described the old trigger and no longer decides anything.
 - **Fixed 1 h / 12 h horizons** matching the `ha-geosphere-next` entities, so the two projects answer the
   same question the same way.
 - **A separate tool rather than a section on the hourly forecast**: an agent asking "should I close the
   skylight" should not have to pull 60 rows, and the hourly output contract stays unchanged.
-- **Tri-state instead of boolean**: "unknown" is a real answer and must not masquerade as "no" — which is
-  why the storm-scan result is paired with a decidability check rather than reported on its own.
 
 ## Known Risks
 - The round-up window means a "1 hour" answer can describe an event nearly two hours out. Documented in the
   rendered output as well as here, because it will otherwise surprise a caller.
 - The whole window contract silently depends on the one-hour lookback in `async_fetch_hourly_forecast`.
   Removing it, or re-anchoring it to `now`, breaks every horizon here without failing a type check.
-- The inhibition sign convention is invisible in the output; a source or refactor that reversed it would
-  silently invert the thunder gate rather than raise anything.
-- The precipitation guard on branch 2 will miss a genuinely dry thunderstorm — rare, and the alternative is
-  a storm signal on most summer afternoons.
+- The ensemble signal pairs two independent 90th percentiles, so it can fire when no single member has both
+  the CAPE and the precipitation — a deliberate lean towards false alarms.
+- GeoSphere flags thunderstorms at far lower CAPE than the previous 1000 J/kg rule, so the outlook turns on
+  more often in convective weather than it used to.
+- A missing or unknown symbol counts as no storm; only the one-time log warning shows it.
 
 ## Extension Guidelines
 - New derivation: add a pure function to `outlook.py` reading the row dict, then surface it through
   `format._outlook`.
 - Changing a horizon: edit the constant in `const.py`; the rendered labels are built from it.
+- Changing a threshold: edit `const.py`; the rendered note and `test_storm_outlook_description_states_the_thresholds`
+  keep the tool description honest.
 - Keep `outlook.py` free of I/O and of any source-specific branching.
