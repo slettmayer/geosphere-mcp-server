@@ -7,6 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-01
+
 - Fixed: the forecast works again. GeoSphere stopped publishing `nwp-v1-1h-2500m` (its last run is
   2026-10-30T21:00Z; the endpoint now answers HTTP 200 with all-null data, and GeoSphere's older dataset
   versions are due to shut down on 2026-11-04), so `get_hourly_forecast` rendered `n/a` rows, `get_storm_outlook` had no
@@ -65,6 +67,17 @@ version being cut, so you never rename that heading by hand. See
 - Added: `scripts/record_fixtures.py` records live v2 responses into `tests/fixtures/` and prints each
   forecast parameter's stamping; the tests now check the stamping and the symbol/precipitation agreement on
   a real recording.
+- Build: bump opentelemetry-api from 1.44.0 to 1.45.1.
+- Build: bump multidict from 6.7.1 to 6.9.1.
+- Build: bump mcp from 2.0.0 to 2.2.0.
+- Build: bump astral-sh/setup-uv.
+- Build: bump pyjwt from 2.13.0 to 2.15.0.
+- Build: bump httpx2 from 2.10.0 to 2.12.0.
+- Build: bump httpcore2 from 2.9.1 to 2.10.0.
+- Build: bump cryptography from 49.0.0 to 50.0.0.
+- Build: bump ruff.
+- Build: bump the python-dependencies group with 2 updates.
+- Build: bump astral-sh/setup-uv.
 
 ## 0.6.0 - 2026-10-13
 
