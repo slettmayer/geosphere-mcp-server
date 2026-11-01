@@ -104,20 +104,20 @@ def test_ensemble_is_current_within_its_age_bound() -> None:
     assert not ensemble_is_current(None, NOW)
 
 
-def test_symbol_only() -> None:
+def test_storm_signals_symbol_only() -> None:
     rows = [_hour(0, symbol=5), _hour(1, symbol=26)]
     assert _outlook(rows, 1, CURRENT_RUN) == (True, "symbol")
     assert _next(rows, CURRENT_RUN) == (_at(1), "symbol")
 
 
-def test_ensemble_only() -> None:
+def test_storm_signals_ensemble_only() -> None:
     """Some members develop a storm the deterministic run does not."""
     rows = [_hour(0, symbol=5), _hour(1, symbol=8, **STORM_PAIR)]
     assert _outlook(rows, 1, CURRENT_RUN) == (True, "ensemble")
     assert _next(rows, CURRENT_RUN) == (_at(1), "ensemble")
 
 
-def test_both() -> None:
+def test_storm_signals_both() -> None:
     """In the same hour, or in different hours of the window."""
     same_hour = [_hour(0, symbol=26, **STORM_PAIR)]
     assert _outlook(same_hour, 1, CURRENT_RUN) == (True, "both")
@@ -128,13 +128,13 @@ def test_both() -> None:
     assert _next(different_hours, CURRENT_RUN) == (_at(0), "symbol")
 
 
-def test_none() -> None:
+def test_storm_signals_none() -> None:
     rows = [_hour(0, symbol=1, cape_p90=20.0, precipitation_p90=0.0)]
     assert _outlook(rows, 1, CURRENT_RUN) == (False, None)
     assert _next(rows, CURRENT_RUN) == (None, None)
 
 
-def test_an_ensemble_13_hours_old_is_ignored() -> None:
+def test_storm_signals_ignore_an_ensemble_13_hours_old() -> None:
     rows = [_hour(0, symbol=26), _hour(1, symbol=5, **STORM_PAIR)]
     assert _outlook(rows, 1, STALE_RUN) == (True, "symbol")
     ensemble_only = [_hour(0, symbol=5, **STORM_PAIR)]
@@ -142,39 +142,39 @@ def test_an_ensemble_13_hours_old_is_ignored() -> None:
     assert _next(ensemble_only, STALE_RUN) == (None, None)
 
 
-def test_no_ensemble_leaves_the_symbol() -> None:
+def test_storm_signals_without_an_ensemble_leave_the_symbol() -> None:
     rows = [_hour(0, symbol=5, **STORM_PAIR), _hour(3, symbol=28)]
     assert _outlook(rows, 1, None) == (False, None)
     assert _next(rows, None) == (_at(3), "symbol")
 
 
-def test_no_data_is_unknown() -> None:
+def test_thunderstorm_outlook_is_unknown_without_hours() -> None:
     """Unknown only when no forecast hour falls in the window."""
     assert _outlook([], 1, CURRENT_RUN) == (None, None)
     assert _outlook([_hour(6, symbol=26)], 1, CURRENT_RUN) == (None, None)
     assert _next([], CURRENT_RUN) == (None, None)
 
 
-def test_a_missing_or_unknown_symbol_is_no_storm() -> None:
+def test_thunderstorm_outlook_missing_or_unknown_symbol_is_no_storm() -> None:
     """A symbol gap reads as no storm, never as unknown."""
     rows = [_hour(0), _hour(1, symbol=99)]
     assert _outlook(rows, 1, CURRENT_RUN) == (False, None)
 
 
-def test_every_thunder_code_counts_including_thundersnow() -> None:
+def test_thunderstorm_outlook_counts_every_thunder_code() -> None:
     """26-32 all count, the sleet and snow thunderstorms (29-32) included."""
     for symbol in range(26, 33):
         assert _outlook([_hour(0, symbol=symbol)], 1, None) == (True, "symbol"), symbol
 
 
-def test_heavy_rain_and_snow_symbols_are_not_storms() -> None:
+def test_storm_signals_heavy_rain_and_snow_are_not_storms() -> None:
     """The heaviest non-thunder codes stay "no storm", whatever the CAPE."""
     rows = [_hour(0, symbol=10, cape=2500.0), _hour(1, symbol=25, cape=2500.0)]
     assert _outlook(rows, 1, None) == (False, None)
     assert _next(rows, None) == (None, None)
 
 
-def test_the_ensemble_needs_both_cape_and_precipitation() -> None:
+def test_thunderstorm_outlook_ensemble_needs_cape_and_precipitation() -> None:
     """CAPE alone is a routine dry summer afternoon, not a storm."""
     rows = [
         _hour(0, symbol=1, cape_p90=3000.0, precipitation_p90=0.0),
@@ -184,19 +184,19 @@ def test_the_ensemble_needs_both_cape_and_precipitation() -> None:
     assert _outlook(rows, 2, CURRENT_RUN) == (False, None)
 
 
-def test_the_ensemble_thresholds_are_inclusive() -> None:
+def test_thunderstorm_outlook_ensemble_thresholds_are_inclusive() -> None:
     rows = [_hour(0, symbol=5, cape_p90=1000.0, precipitation_p90=0.1)]
     assert _outlook(rows, 1, CURRENT_RUN) == (True, "ensemble")
 
 
-def test_deterministic_cape_decides_nothing() -> None:
+def test_storm_signals_ignore_deterministic_cape() -> None:
     """The deterministic CAPE is a diagnostic; it raises no storm by itself."""
     rows = [_hour(0, symbol=8, cape=3000.0)]
     assert _outlook(rows, 1, CURRENT_RUN) == (False, None)
     assert _next(rows, CURRENT_RUN) == (None, None)
 
 
-def test_a_storm_beyond_the_window_does_not_count() -> None:
+def test_thunderstorm_outlook_ignores_a_storm_beyond_the_window() -> None:
     rows = [_hour(0, symbol=5), _hour(5, symbol=26)]
     assert _outlook(rows, 1, None) == (False, None)
     assert _outlook(rows, 12, None) == (True, "symbol")
@@ -247,7 +247,7 @@ def test_window_rounds_up_to_whole_hourly_steps() -> None:
     )
 
 
-def test_rows_without_a_timestamp_are_skipped() -> None:
+def test_window_skips_rows_without_a_timestamp() -> None:
     """A malformed row must not crash the comparison."""
     rows = [{"time": None, "wind_gust_ms": 99.0}, _hour(0, gust=4.0)]
     assert max_gust(window(rows, 1, NOW)) == (

@@ -148,7 +148,7 @@ Horizons round up to whole hours: the "1 h" window covers the hour already under
 A thunderstorm hour is one whose GeoSphere weather symbol is a thunderstorm, or where the C-LAEF ensemble's 90th percentiles reach 1000 J/kg CAPE and 0.1 mm precipitation; `signal` names which fired (symbol, ensemble or both). Max CAPE is a diagnostic and decides nothing.
 ```
 
-Two behaviours are worth knowing before you build on this:
+Three behaviours are worth knowing before you build on this:
 
 - **Horizons round up to whole hours.** The window starts at the top of the current hour, so the "next 1 h" figure covers the hour already under way *plus* the next one, and can report an event up to ~2 h out. Compare the returned timestamps yourself if you need a strict 60-minute answer.
 - **`Next thunderstorm` can be in the past**, by up to 59 minutes, when the storm hour is the one already under way. That means a storm is in progress — clamp a negative lead time to zero rather than assuming the stamp is in the future.

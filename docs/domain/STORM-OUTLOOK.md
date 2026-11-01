@@ -31,8 +31,8 @@ Simple by design, and the same rule as `ha-geosphere-next` 0.16.0. An hour is a 
   deterministic run. The row reads `sy` from the next stamp, so the code describes the row's own hour.
 - **Ensemble**: the ensemble is current, and the row's `ensemble_cape_p90_jkg` ≥ `THUNDER_CAPE_JKG`
   (1000 J/kg) **and** its `ensemble_precipitation_p90_mm` ≥ `PRECIP_MIN_MM` (0.1 mm). So at least a tenth
-  of the C-LAEF members reach that CAPE, and at least a tenth that much precipitation — not necessarily the
-  same members. `cape_p90` is instantaneous and read at the row's own stamp; `tp_p90` covers the row's
+  of the C-LAEF members reach 1000 J/kg of CAPE, and at least a tenth reach 0.1 mm of precipitation — not
+  necessarily the same members. `cape_p90` is instantaneous and read at the row's own stamp; `tp_p90` covers the row's
   hour. Requiring precipitation keeps a dry high-CAPE afternoon from raising a signal.
 
 **Ensemble current** is one rule in one helper, `outlook.ensemble_is_current`: the ensemble run's
