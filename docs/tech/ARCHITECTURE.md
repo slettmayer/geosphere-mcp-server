@@ -89,8 +89,8 @@ One module per responsibility. No sub-packages.
 - Owns: the round-up `window`, `ensemble_is_current` (the 12 h age rule), the window readers
   `max_gust` / `max_cape` / `thunderstorm_outlook`, the full-series `next_thunderstorm` (storm hour and
   its signal), and `horizon_hours`
-- Reads the hourly **row dicts** `weather.assemble_hourly_forecast` produces, through `.get`, so an hour
-  missing a field degrades rather than raising
+- Reads the hourly **row dicts** `weather.assemble_hourly_forecast` produces; every row has a `time`, and
+  its values are read through `.get`, so a missing value degrades rather than raising
 - Depends only on `condition.is_thunder_symbol` and `const.py`; no I/O, no MCP/HA imports
 
 **`format.py` (Normalization + Rendering)**
