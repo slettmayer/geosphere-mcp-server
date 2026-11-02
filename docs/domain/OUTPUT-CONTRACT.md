@@ -37,7 +37,8 @@ second source, so the longest answer available is `get_hourly_forecast` at its c
 
 **`hours`** is clamped silently into `1-60` (`AROME_MAX_HOURS`).
 
-**`start`** accepts an ISO 8601 datetime. A naive value is assumed to be UTC. An unparseable value returns
+**`start`** accepts an ISO 8601 datetime. A value without an offset is Vienna local time (`Europe/Vienna`), the
+zone every output time is shown in; an explicit offset is honoured. An unparseable value returns
 `⚠️ Invalid start time '{start}'; use ISO 8601 (e.g. 2026-07-22T15:00)` **before** any HTTP session is
 opened.
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from geosphere_mcp_server import air_quality, weather
 from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
@@ -195,12 +197,27 @@ async def test_hourly_invalid_start_returns_error_line() -> None:
     fetch.assert_not_awaited()
 
 
-async def test_hourly_valid_start_is_parsed_and_passed() -> None:
+@pytest.mark.parametrize(
+    ("start", "expected"),
+    [
+        # No offset: Vienna local, the zone the output is shown in (CEST).
+        ("2026-07-15T14:00", datetime(2026, 7, 15, 12, 0, tzinfo=UTC)),
+        # CET in winter.
+        ("2026-01-15T14:00", datetime(2026, 1, 15, 13, 0, tzinfo=UTC)),
+        # An explicit offset is taken as given.
+        ("2026-07-15T14:00+00:00", datetime(2026, 7, 15, 14, 0, tzinfo=UTC)),
+        ("2026-07-15T14:00+02:00", datetime(2026, 7, 15, 12, 0, tzinfo=UTC)),
+    ],
+)
+async def test_hourly_start_is_parsed_and_passed(
+    start: str, expected: datetime
+) -> None:
     fetch = AsyncMock(return_value=SAMPLE_ASSEMBLED)
     with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        await get_hourly_forecast(LAT, LON, start="2026-07-15T14:00")
+        await get_hourly_forecast(LAT, LON, start=start)
     passed = fetch.await_args.kwargs["start"]
-    assert passed == datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
+    assert passed == expected
+    assert passed.utcoffset() == timedelta(0)
 
 
 # --- get_storm_outlook ---

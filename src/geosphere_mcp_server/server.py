@@ -15,13 +15,14 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from mcp.server import MCPServer
 
 from geosphere_mcp_server import __version__, air_quality, weather
 from geosphere_mcp_server import format as fmt
-from geosphere_mcp_server.const import AROME_MAX_HOURS
+from geosphere_mcp_server.const import AROME_MAX_HOURS, GEOSPHERE_TZ
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
@@ -115,7 +116,11 @@ async def _guarded(work: Callable[[], Awaitable[str]]) -> str:
 
 
 def _parse_start(start: str | None) -> tuple[datetime | None, str | None]:
-    """Parse an ISO start string; return (datetime, error-line-or-None)."""
+    """Parse an ISO start string; return (UTC datetime, error-line-or-None).
+
+    A value without an offset is Vienna local time, the zone every tool
+    reports its times in, so a time read off the output can be passed back.
+    """
     if start is None:
         return None, None
     try:
@@ -125,8 +130,8 @@ def _parse_start(start: str | None) -> tuple[datetime | None, str | None]:
             f"⚠️ Invalid start time '{start}'; use ISO 8601 (e.g. 2026-07-22T15:00)"
         )
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed, None
+        parsed = parsed.replace(tzinfo=ZoneInfo(GEOSPHERE_TZ))
+    return parsed.astimezone(UTC), None
 
 
 @mcp.tool()
@@ -178,7 +183,8 @@ async def get_hourly_forecast(
         longitude: Decimal longitude (e.g. 16.3738 for Vienna).
         hours: Number of forecast hours (default 24, clamped to 1–60).
         start: Optional ISO 8601 start time (e.g. "2026-07-22T15:00"); the
-            forecast begins at/after this instant instead of now.
+            forecast begins at/after this instant instead of now. Without
+            an offset it is Vienna local time, like the times in the output.
     """
     start_dt, error = _parse_start(start)
     if error is not None:

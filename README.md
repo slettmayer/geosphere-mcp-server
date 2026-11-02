@@ -106,7 +106,7 @@ Hour-by-hour forecast from AROME, up to ~60 h. Each hour's condition is GeoSpher
 | `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
 | `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
 | `hours` | int | 24 | Forecast hours (clamped to 1–60) |
-| `start` | string | now | Optional ISO 8601 start (e.g. `2026-07-22T15:00`); forecast begins at/after this instant |
+| `start` | string | now | Optional ISO 8601 start (e.g. `2026-07-22T15:00`); forecast begins at/after this instant. Without an offset it is Vienna local time, like the output |
 
 ```
 # 3-Hour Forecast for 48.2208, 16.3738
