@@ -89,18 +89,6 @@ def apparent_temperature(
     return round(temperature + 0.33 * vapor_pressure - 0.70 * wind_speed - 4.0, 1)
 
 
-def dew_point_from_t_rh(
-    temperature: float | None, humidity: float | None
-) -> float | None:
-    """Magnus dew point (°C) from T (°C) and RH (%); the forecast has none."""
-    if temperature is None or humidity is None or humidity <= 0.0:
-        return None
-    humidity = min(humidity, 100.0)
-    a, b = 17.62, 243.12
-    gamma = math.log(humidity / 100.0) + a * temperature / (b + temperature)
-    return round(b * gamma / (a - gamma), 1)
-
-
 def derive_condition_from_symbol(symbol: int | None, night: bool) -> str | None:
     """The HA condition for a GeoSphere `sy` code (per forecast hour).
 
@@ -124,25 +112,13 @@ def is_precipitating(
     precipitation_type: int | None,
     precipitation_rate_mm_h: float | None,
 ) -> bool | None:
-    """Whether precipitation is falling right now, or `None` if nothing says.
+    """Whether precipitation is falling, or `None` if nothing observed it.
 
-    Two independent signals, either of which is sufficient: the nowcast `pt`
-    code, and an instantaneous rate. Both come from the 15-min nowcast, the
-    only source that observes precipitation *now* — the caller must not
-    substitute INCA's hourly `RR`, an accumulation that answers a different
-    question (see :func:`weather.merge_current_conditions`).
-
-    `None` when *neither* spoke, which is not the same as "dry" and must not
-    render as one. Two ways to get there: a point inside the AROME domain but
-    outside the Austrian nowcast grid, and a transient nowcast fetch failure.
-    Both leave nothing observing precipitation, so a confident "dry" would be
-    invented. `precipitation_1h_mm` already reports nothing in the first case;
-    this keeps the pair consistent.
-
-    Sole definition of "precipitating" for this server: both
-    :func:`derive_current_condition` and :func:`weather.merge_current_conditions`
-    call this rather than restating the comparison. The condition derivation
-    reads `None` as "nothing observed" and leaves the verdict to the symbol.
+    Either signal suffices: a nowcast `pt` code naming precipitation, or a
+    rate at or above PRECIP_MIN_MM. `None` when neither is present -- no
+    observation, which is not the same as "dry" (outside the nowcast grid, or
+    the nowcast down); :func:`derive_current_condition` then leaves the
+    verdict to the symbol.
     """
     if precipitation_type is not None and precipitation_type != PT_NO_PRECIPITATION:
         return True

@@ -24,7 +24,6 @@ SAMPLE_CURRENT_GEOSPHERE = {
     "observed_at": datetime(2026, 7, 15, 12, 30, tzinfo=UTC),  # 14:30 CEST
     "temperature_c": 21.3,
     "apparent_temperature_c": 20.1,
-    "dew_point_c": 12.0,
     "humidity_pct": 55.0,
     "pressure_hpa": 1013.0,
     "wind_speed_ms": 2.7,
@@ -34,19 +33,14 @@ SAMPLE_CURRENT_GEOSPHERE = {
     "precipitation_1h_at": datetime(2026, 7, 15, 12, 0, tzinfo=UTC),  # 14:00 CEST
     "precipitation_type": 255,
     "precipitation_kind": "no_precipitation",
-    "is_precipitating": False,
     "cloud_cover_pct": 40.0,
     "condition": "partlycloudy",
     "sources": ["INCA", "nowcast", "AROME"],
-    "grid_latitude": 48.219,
-    "grid_longitude": 16.362,
 }
 
 # GeoSphere-path assembled hourly (as produced by weather.assemble_hourly_forecast).
 SAMPLE_HOURLY_GEOSPHERE = {
     "reference_time": datetime(2026, 7, 15, 10, 0, tzinfo=UTC),  # 12:00 CEST
-    "grid_latitude": 48.219,
-    "grid_longitude": 16.362,
     "sources": ["AROME", "C-LAEF ensemble"],
     "hourly": [
         {

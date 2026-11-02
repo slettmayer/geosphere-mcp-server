@@ -47,14 +47,10 @@ SAMPLE_CURRENT = {
     "cloud_cover_pct": 40.0,
     "condition": "partlycloudy",
     "sources": ["INCA", "AROME"],
-    "grid_latitude": 48.219,
-    "grid_longitude": 16.362,
 }
 
 SAMPLE_ASSEMBLED = {
     "reference_time": datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
-    "grid_latitude": 48.219,
-    "grid_longitude": 16.362,
     "sources": ["AROME", "C-LAEF ensemble"],
     "hourly": [
         {

@@ -31,8 +31,8 @@ DATASET_CHEM_AQI = ("forecast", "chem_aqi-v1-1d-3km")
 # covers the interval *ending* at its stamp; `scripts/record_fixtures.py`
 # prints the classification):
 #   * instantaneous at the stamp: 2t, 2r, 10u/10v, tcc (%), cape, snowlmt;
-#   * the interval ending at the stamp: 10fg (peak gust), tp and sf (per-hour
-#     amounts, kg m-2, not run-accumulated).
+#   * the interval ending at the stamp: 10fg (peak gust) and tp (per-hour
+#     amount, kg m-2, not run-accumulated).
 # `sy` is null at t0 too. Its precipitation classes follow `tp` at the same
 # stamp, so it describes the interval ending there and is read one stamp on,
 # like `tp`; its cloud classes bin `tcc` at that later stamp -- see
@@ -45,7 +45,6 @@ AROME_PARAMETERS = (
     "10fg",
     "tcc",
     "tp",
-    "sf",
     "snowlmt",
     "cape",
     "sy",
@@ -60,8 +59,8 @@ AROME_PARAMETERS = (
 #   * cape_p90 (J/kg): instantaneous, like the deterministic `cape` -- it has
 #     a value at the run's t0 -- so it is read at its own stamp.
 ENSEMBLE_PARAMETERS = ("tp_p10", "tp_p50", "tp_p90", "cape_p90")
-NOWCAST_PARAMETERS = ("t2m", "td", "rh2m", "rr", "pt", "dd", "ff", "fx")
-INCA_PARAMETERS = ("T2M", "TD2M", "RH2M", "RR", "P0", "GL", "UU", "VV")
+NOWCAST_PARAMETERS = ("t2m", "rh2m", "rr", "pt", "dd", "ff", "fx")
+INCA_PARAMETERS = ("T2M", "RH2M", "RR", "P0", "UU", "VV")
 # The four pollutants WRF-Chem publishes, in display order: (uniform key,
 # display label, WRF-Chem parameter name). This one table drives both the
 # request parameters and the renderer's labels — the lists below are derived
@@ -81,8 +80,7 @@ CHEM_AQI_PARAMETERS = ("aqi",)
 # INCA analyses trail real time by <1 h; query a window of the last 3 hours.
 INCA_LOOKBACK_HOURS = 3
 # How old INCA's hourly `RR` may get before the condition derivation stops
-# treating it as evidence about *now* (seconds). Only that derivation consults
-# it; `is_precipitating` never does.
+# treating it as evidence about *now* (seconds).
 #
 # This bound catches a slice that has stopped updating, NOT ordinary lag. INCA
 # publishes ~30 min after the hour it analyses and the previous slice is served

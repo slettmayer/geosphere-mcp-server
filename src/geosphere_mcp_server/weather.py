@@ -23,9 +23,7 @@ from geosphere_mcp_server.condition import (
     derive_condition_from_symbol,
     derive_current_condition,
     derive_precipitation_type,
-    dew_point_from_t_rh,
     is_night,
-    is_precipitating,
     wind_from_components,
 )
 from geosphere_mcp_server.const import (
@@ -183,8 +181,8 @@ def assemble_hourly_forecast(
 
     * instantaneous AT the stamp — ``2t``, ``2r``, ``10u``/``10v``, ``tcc``,
       ``cape``, ``snowlmt``;
-    * the interval ENDING at the stamp — ``10fg``, ``tp`` and ``sf`` ("... in
-      the last forecast interval"), each already a per-hour value.
+    * the interval ENDING at the stamp — ``10fg`` and ``tp`` ("... in the
+      last forecast interval"), each already a per-hour value.
 
     The interval fields covering the hour that *starts* at ``ts`` therefore
     live one step later, at ``nxt``. Reading them at ``i`` would report the
@@ -229,13 +227,11 @@ def assemble_hourly_forecast(
                 ),
                 "temperature_c": temperature,
                 "humidity_pct": humidity,
-                "dew_point_c": dew_point_from_t_rh(temperature, humidity),
                 "wind_speed_ms": wind_speed,
                 "wind_bearing_deg": wind_bearing,
                 "wind_gust_ms": arome.value_at("10fg", nxt),
                 "cloud_cover_pct": arome.value_at("tcc", i),
                 "precipitation_mm": arome.value_at("tp", nxt),
-                "snow_mm": arome.value_at("sf", nxt),
                 "snow_limit_m": arome.value_at("snowlmt", i),
                 "precipitation_probability_pct": members.get("pop"),
                 "cape_jkg": arome.value_at("cape", i),
@@ -256,8 +252,6 @@ def assemble_hourly_forecast(
         "ensemble_reference_time": (
             ensemble.reference_time if ensemble is not None else None
         ),
-        "grid_latitude": arome.grid_latitude,
-        "grid_longitude": arome.grid_longitude,
         "hourly": hourly,
     }
 
@@ -305,10 +299,10 @@ def merge_current_conditions(
     """Merge INCA + nowcast + AROME into a current-conditions dict.
 
     Per-field preference (ported from GeoSphereCurrentCoordinator._merge):
-    temp/humidity/wind speed+bearing = INCA -> nowcast -> AROME; dew point =
-    INCA -> nowcast; gust = nowcast -> AROME; pressure (P0 Pa->hPa) and global
-    radiation = INCA only; cloud/CAPE/snow limit/weather symbol = AROME; 1-h
-    precip = INCA RR only; precip type from nowcast pt (255 = none).
+    temp/humidity/wind speed+bearing = INCA -> nowcast -> AROME; gust =
+    nowcast -> AROME; pressure (P0 Pa->hPa) = INCA only; cloud/weather symbol
+    = AROME; 1-h precip = INCA RR only; precip type from nowcast pt (255 =
+    none).
     """
     arome_current = _arome_current(arome, latitude, longitude, now)
 
@@ -368,21 +362,14 @@ def merge_current_conditions(
     pt_raw = now_value("pt")
     precipitation_type = int(pt_raw) if pt_raw is not None else None
     nowcast_rr = now_value("rr")
-    # `None`, not 0.0, when the nowcast observed nothing: `is_precipitating`
-    # has to tell "no precipitation" apart from "no observation", which it
+    # `None`, not 0.0, when the nowcast observed nothing: the condition
+    # derivation tells "no precipitation" apart from "no observation", which it
     # cannot do once the absence has been defaulted away.
-    #
-    # INCA's hourly `RR` is deliberately NOT a fallback here, though it is one
-    # for `rate_mm_h` below. "Is it precipitating right now" is an
-    # instantaneous question and `RR` is an accumulation over the hour it is
-    # stamped for, so it answers a different one: 2.4 mm falling in the hour to
-    # 15:00 would still read "wet" at 16:50. With no instantaneous source the
-    # honest answer is `None`.
     nowcast_rate_mm_h = (
         nowcast_rr * NOWCAST_BUCKETS_PER_HOUR if nowcast_rr is not None else None
     )
-    # The condition has to name *something*, so unlike `is_precipitating` it
-    # does fall back to `RR` -- but not to a slice that has stopped updating.
+    # Without a nowcast reading the condition falls back to INCA's `RR` -- but
+    # not to a slice that has stopped updating.
     # `inca_latest` returns the newest non-None value at any age, and GeoSphere
     # keeps serving the last analysis it managed to produce, so an ungated read
     # derives `rainy` under a clear sky from rain that stopped hours ago. Past
@@ -490,7 +477,6 @@ def merge_current_conditions(
         "apparent_temperature_c": apparent_temperature(
             temperature, humidity, wind_speed
         ),
-        "dew_point_c": chain(inca_latest("TD2M")[0], now_value("td")),
         "humidity_pct": humidity,
         "pressure_hpa": round(p0 / 100.0, 1) if p0 is not None else None,
         "wind_speed_ms": wind_speed,
@@ -506,11 +492,7 @@ def merge_current_conditions(
         # Decoded against the condition's own rate, so "no precipitation"
         # never sits beside a rainy condition (see derive_precipitation_type).
         "precipitation_kind": derive_precipitation_type(precipitation_type, rate_mm_h),
-        "is_precipitating": is_precipitating(precipitation_type, nowcast_rate_mm_h),
         "cloud_cover_pct": arome_field("cloud_cover_pct"),
-        "global_radiation_wm2": inca_latest("GL")[0],
-        "snow_limit_m": arome_field("snow_limit_m"),
-        "cape_jkg": arome_field("cape_jkg"),
         "weather_symbol": symbol,
         "condition": derive_current_condition(
             precipitation_type=precipitation_type,
@@ -609,8 +591,6 @@ async def async_fetch_current_conditions(
     _warn_unknown_pt_code(merged["precipitation_type"])
     _warn_unknown_sy_code(merged["weather_symbol"])
     merged["sources"] = sources
-    merged["grid_latitude"] = arome.grid_latitude
-    merged["grid_longitude"] = arome.grid_longitude
     return merged
 
 

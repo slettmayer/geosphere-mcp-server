@@ -70,9 +70,6 @@ def merge_air_quality(
 
     return {
         "observed_at": observed_at,
-        "reference_time": chem.reference_time,
-        "grid_latitude": chem.grid_latitude,
-        "grid_longitude": chem.grid_longitude,
         "pollutants": pollutants,
         # EEA band index (1-6). GeoSphere publishes no underlying numeric
         # index, so the band is the whole figure the renderer has to work with.

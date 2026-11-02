@@ -28,15 +28,6 @@
        6.15
       ]
      },
-     "TD2M": {
-      "name": "dew point temperature",
-      "unit": "degree_Celsius",
-      "data": [
-       1.73,
-       2.51,
-       3.37
-      ]
-     },
      "RH2M": {
       "name": "relative humidity",
       "unit": "percent",
@@ -62,15 +53,6 @@
        102629.3,
        102657.41,
        102723.45
-      ]
-     },
-     "GL": {
-      "name": "global radiation",
-      "unit": "W m-2",
-      "data": [
-       0.0,
-       0.0,
-       0.0
       ]
      },
      "UU": {

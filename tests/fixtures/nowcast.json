@@ -49,25 +49,6 @@
        4.48
       ]
      },
-     "td": {
-      "name": "dew point temperature 2m above ground",
-      "unit": "degree_Celsius",
-      "data": [
-       3.27,
-       3.21,
-       3.16,
-       3.11,
-       3.02,
-       2.88,
-       2.74,
-       2.62,
-       2.52,
-       2.61,
-       2.72,
-       2.83,
-       2.94
-      ]
-     },
      "rh2m": {
       "name": "relative humidity 2m above ground",
       "unit": "%",

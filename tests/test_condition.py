@@ -15,7 +15,6 @@ from geosphere_mcp_server.condition import (
     derive_condition_from_symbol,
     derive_current_condition,
     derive_precipitation_type,
-    dew_point_from_t_rh,
     is_night,
     is_precipitating,
     is_thunder_symbol,
@@ -390,21 +389,6 @@ def test_is_night_vienna() -> None:
 def test_apparent_temperature() -> None:
     assert apparent_temperature(30.0, 50.0, 2.0) == pytest.approx(31.6, abs=0.3)
     assert apparent_temperature(None, 50.0, 2.0) is None
-
-
-# --- dew_point_from_t_rh ---
-
-
-def test_dew_point_from_t_rh() -> None:
-    assert dew_point_from_t_rh(20.0, 50.0) == pytest.approx(9.3)
-    # Saturated air: dew point equals the temperature.
-    assert dew_point_from_t_rh(20.0, 100.0) == pytest.approx(20.0)
-    # RH above 100 (model artifact) clamps instead of exceeding T.
-    assert dew_point_from_t_rh(20.0, 104.0) == pytest.approx(20.0)
-    assert dew_point_from_t_rh(-5.0, 80.0) == pytest.approx(-7.9, abs=0.1)
-    assert dew_point_from_t_rh(None, 50.0) is None
-    assert dew_point_from_t_rh(20.0, None) is None
-    assert dew_point_from_t_rh(20.0, 0.0) is None
 
 
 # --- Condition vocabulary ---

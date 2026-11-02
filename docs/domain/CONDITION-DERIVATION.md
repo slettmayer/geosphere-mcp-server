@@ -105,14 +105,12 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | Field | Chain |
 |-------|-------|
 | Temperature, humidity, wind speed, wind bearing | INCA -> nowcast -> AROME |
-| Dew point | INCA -> nowcast |
 | Gust | nowcast -> AROME |
-| Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
-| Cloud cover, CAPE, snow limit, weather symbol | the AROME row for the hour in progress (`weather._arome_current`, the same assembled row the hourly forecast emits — so the symbol is read from the next stamp, like the gust) |
+| Pressure (`P0`, Pa converted to hPa) | INCA only |
+| Cloud cover, weather symbol | the AROME row for the hour in progress (`weather._arome_current`, the same assembled row the hourly forecast emits — so the symbol is read from the next stamp, like the gust) |
 | 1-hour precipitation | INCA `RR` only -- absent when INCA is |
 | Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR` whenever the nowcast reports `pt` or `rr` — a `pt` of 255 is an observed "dry" that INCA never overrules; otherwise INCA `RR`, but only when it is wet (>= 0.1 mm), its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; otherwise `None` (nothing observed). Once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
-| Precipitation flag (`is_precipitating`) | `condition.is_precipitating` on the nowcast `pt` code (255 means none) and the nowcast rate -- never INCA `RR`. Tri-state: absent when neither spoke |
-| Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition. It can still disagree with the flag: with no nowcast `rr` and a current INCA `RR`, the kind is absent while the flag says not precipitating, since the flag reads the nowcast rate only |
+| Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
 **Why the hourly total has no nowcast fallback.** Summing the last four 15-min `rr` buckets was tried and
@@ -154,13 +152,11 @@ staleness this timestamp exists to expose, so the row's own stamp is reported, c
 observation time can never be in the future. INCA publishes ~30 min after the hour it analyses and serves
 the previous slice until the next appears, so `observed_at` can trail real time by ~90 min.
 
-Two values are **derived rather than fetched**: apparent temperature ("feels like", Australian Bureau of
-Meteorology formula from temperature, humidity, and wind) and — on the hourly path only — dew point
-(Magnus formula from temperature and humidity, since the forecast has no dew-point parameter).
+Apparent temperature ("feels like") is **derived rather than fetched**, with the Australian Bureau of
+Meteorology formula from temperature, humidity, and wind.
 
-Not every merged field reaches the output. Dew point, global radiation, snow limit, CAPE, the weather
-symbol, precipitation type, and the precipitation flag are computed and then dropped during normalization;
-on the hourly path wind bearing and dew point are likewise computed but never rendered. See
+The weather symbol and the raw precipitation-type code are merged but not rendered: they feed the
+condition, the `Falling now` line and the once-per-code warnings. See
 [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) for what each tool actually emits.
 
 ### Precipitation Chance (POP)
@@ -215,13 +211,13 @@ entirely and the forecast still renders.
   7.5 minutes past a bucket the *next* one is closer and wins. At exactly 7.5 minutes the two tie, and
   `min` keeps the first of equal keys — the earlier bucket — so the switch happens strictly *after* the
   boundary, not at it. Every nowcast-sourced current field
-  rides that single index — `t2m`, `rh2m`, `td`, `dd`, `ff`, `fx`, `pt` and `rr` — so `is_precipitating`
-  can read `true` at 15:40 from rain the nowcast places at 15:45, and the same is true of the
+  rides that single index — `t2m`, `rh2m`, `dd`, `ff`, `fx`, `pt` and `rr` — so the condition
+  can read rain at 15:40 that the nowcast places at 15:45, and the same is true of the
   temperature and the gust beside it. Only the reported *time* is clamped: `observed_at` takes
   `min(stamp, now)` because an observation time in the future is simply wrong, while a *value* from the
   nearest bucket is not.
 
-  Raised in review (2026-09-11) against `is_precipitating`, whose contract says "falling right now", and
+  Raised in review (2026-09-11) against the "falling right now" reading, and
   **deliberately declined**. The nowcast is a short-range forecast at every bucket, including the one
   behind `now`; there is no bucket that observes the present. Snapping backwards would therefore not buy
   an observation, it would substitute a staler estimate for a nearer one, and at the 7.5-minute boundary

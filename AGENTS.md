@@ -94,8 +94,9 @@ indexes the per-concept files on data sources, condition derivation, and the too
 - Clients never let a bare `TimeoutError` escape (each wraps it in a typed `*TimeoutError`), so the server
   layer must catch those explicitly -- a new client that skips this regresses timeouts to the generic
   "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
-- Several merged fields (dew point, CAPE, global radiation, weather-symbol code, hourly wind bearing) are
-  computed and then dropped in normalization -- surfacing them is a `format.py` change only
+- Hourly rows carry fields the hourly renderer does not print (wind bearing and gust, humidity, cloud cover,
+  CAPE, ensemble percentiles): they feed the current-conditions fallback and the storm outlook, so dropping
+  one from the assembly breaks those tools, not the hourly one
 - Forecast parameters are either instantaneous or cover the interval ENDING at their stamp, decided by
   measurement (null at the run's t0), not by name; a misclassified parameter shifts a field by an hour
   silently -- classify with `scripts/record_fixtures.py` (see [DATA-SOURCES-AND-COVERAGE.md](docs/domain/DATA-SOURCES-AND-COVERAGE.md))

@@ -141,13 +141,12 @@ distinguishes an in-coverage run that came back empty (worth retrying) from a po
 there, having no figures left to explain. See [AIR-QUALITY.md](AIR-QUALITY.md).
 
 ### Values Computed but Never Rendered
-Several merged and assembled fields are dropped during normalization and never appear in any output.
-Current weather drops dew point, global radiation, snow limit, CAPE, the weather-symbol code, the raw
-precipitation-type code (only its decoded kind is rendered, as `Falling now`), and the precipitation flag.
-The hourly path additionally computes wind bearing, wind gust, dew point, humidity, cloud cover, snowfall,
-snow limit, CAPE, the weather-symbol code and the ensemble's `cape_p90`/`tp_p90`, of which the renderer
-reads only time, temperature, condition, precipitation, chance, and wind speed. Surfacing any of them is a renderer
-change only — the data is already assembled.
+Current weather merges the weather-symbol code and the raw precipitation-type code without printing them:
+they feed the condition, the `Falling now` line (the decoded kind) and the once-per-code warnings.
+An hourly row also carries wind bearing, wind gust, humidity, cloud cover, snow limit, CAPE and the
+ensemble's `cape_p90`/`tp_p90`, of which the hourly renderer reads only time, temperature, condition,
+precipitation, chance and wind speed. The rest feed the current-conditions fallback (the AROME row for the
+hour in progress) and the storm outlook.
 
 ### Error Lines
 Every tool resolves failures to one of these lines rather than raising. See

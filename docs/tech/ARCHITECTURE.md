@@ -82,7 +82,7 @@ One module per responsibility. No sub-packages.
 - Raises typed exceptions on failure (see Error Signaling)
 
 **`condition.py` (Pure Derivation)**
-- Owns: `derive_condition_from_symbol` (the `sy` mapping), `derive_current_condition`, `is_thunder_symbol`, `is_precipitating`, `derive_precipitation_type`, `is_night` (astral), Magnus dew point, apparent temperature, wind-from-components
+- Owns: `derive_condition_from_symbol` (the `sy` mapping), `derive_current_condition`, `is_thunder_symbol`, `is_precipitating`, `derive_precipitation_type`, `is_night` (astral), apparent temperature, wind-from-components
 - No I/O, no HTTP, no MCP/HA imports
 
 **`outlook.py` (Pure Derivation)**
