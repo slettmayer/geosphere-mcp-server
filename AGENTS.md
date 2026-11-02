@@ -63,7 +63,7 @@ See [Tech Stack](docs/tech/TECH-STACK.md) for full detail.
 
 ## Core Conventions
 - Module-level async functions -- no client classes
-- Constants centralized in `const.py` -- no inline magic values (one documented exception: see Structural Risks)
+- Constants centralized in `const.py` -- no inline magic values
 - Logger: `_LOGGER = logging.getLogger(__name__)` with `%s` formatting (not f-strings)
 - Import order: `__future__` -> stdlib -> third-party -> local
 - API modules raise typed exceptions; the server layer catches them and returns a short markdown error line -- tools never raise
@@ -90,7 +90,6 @@ indexes the per-concept files on data sources, condition derivation, and the too
 - Per-call `aiohttp.ClientSession` creation -- no connection pooling
 - `condition.py` duplicates HA `ATTR_CONDITION_*` string literals (to stay import-free) -- could drift if HA renames a condition
 - Rate limits (GeoSphere 5 req/s, 240 req/h) shared across all callers -- no server-side quota tracking
-- `RATE_LIMIT_RETRY_MAX_S` lives in `server.py`, not `const.py` -- the one magic value outside the central module (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))
 - Clients never let a bare `TimeoutError` escape (each wraps it in a typed `*TimeoutError`), so the server
   layer must catch those explicitly -- a new client that skips this regresses timeouts to the generic
   "no data" line (see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md))

@@ -22,7 +22,11 @@ from mcp.server import MCPServer
 
 from geosphere_mcp_server import __version__, air_quality, weather
 from geosphere_mcp_server import format as fmt
-from geosphere_mcp_server.const import AROME_MAX_HOURS, GEOSPHERE_TZ
+from geosphere_mcp_server.const import (
+    AROME_MAX_HOURS,
+    GEOSPHERE_TZ,
+    RATE_LIMIT_RETRY_MAX_S,
+)
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
@@ -30,10 +34,6 @@ from geosphere_mcp_server.geosphere_api import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Retry a rate-limited GeoSphere request once when the server asks us to wait
-# no longer than this; otherwise surface the limit to the caller immediately.
-RATE_LIMIT_RETRY_MAX_S = 5.0
 
 # Returned verbatim for a point outside the grid of whichever dataset the tool
 # asked for. Phrased so a caller learns the location is unservable rather than

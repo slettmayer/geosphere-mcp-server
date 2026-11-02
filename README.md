@@ -178,17 +178,6 @@ The AQI is reported as its 1–6 EEA band (1 good … 6 extremely poor), which i
 
 A point inside the 3 km grid can still come back empty when a WRF-Chem run is stale or incomplete; the response then says `No air-quality data available for this location` and still names the source, which is a different answer from being out of coverage.
 
-### Output changes after 0.6.0
-
-GeoSphere retired the forecast datasets this server used (`nwp-v1-1h-2500m`, `ensemble-v1-1h-2500m`); the server now reads `nwp-v2-1h-1km` and `ensemble-v2-1h-1km`. What an agent reading the tools will notice:
-
-- **Conditions** come from GeoSphere's weather symbol. `windy`, `windy-variant` and dry `lightning` no longer occur; `fog` comes only from GeoSphere's fog symbols and may not occur at all. An hour with a missing or unknown symbol has no condition.
-- **Current condition:** observed rain reads `pouring` from 5 mm/h (was 4 mm/h); nothing falling under a rain or thunder symbol reads `cloudy`; outside Austria (no observations) the symbol stands, so rain and thunderstorms can now appear there.
-- **`get_storm_outlook`:** the source line includes `C-LAEF ensemble`; `Thunderstorm expected next 1 h: yes` gains `(signal: …)`; `Next thunderstorm` shows `(signal: …)` instead of `(CAPE N J/kg)`; `unknown` now reads `unknown (no forecast hours in the window)` and `Next thunderstorm` no longer reports `unknown`; a new `ℹ️ Ensemble signal: unavailable …` line appears without a current ensemble run; a second trailing note defines a thunderstorm hour. Expect more thunderstorm answers in convective weather.
-- **`get_hourly_forecast`:** a trailing note labels the precipitation chance as an estimate; amounts that round to 0 mm are no longer printed.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full list.
-
 ## Data sources & attribution
 
 - **GeoSphere Austria Dataset API** — the 1 km forecast (`nwp-v2-1h-1km`) and C-LAEF ensemble (`ensemble-v2-1h-1km`), INCA analysis/nowcast, WRF-Chem air quality. Data licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). © GeoSphere Austria.

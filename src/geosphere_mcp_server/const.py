@@ -12,6 +12,9 @@ from datetime import timedelta
 
 GEOSPHERE_API_BASE_URL = "https://dataset.api.hub.geosphere.at/v1"
 GEOSPHERE_TIMEOUT = 30
+# Retry a rate-limited request once when the API asks to wait no longer than
+# this (seconds); otherwise surface the limit to the caller immediately.
+RATE_LIMIT_RETRY_MAX_S = 5.0
 # GeoSphere covers Austria + the Alpine region, all within CET/CEST. Used to
 # render its UTC stamps and to match its daily values to a calendar day.
 GEOSPHERE_TZ = "Europe/Vienna"

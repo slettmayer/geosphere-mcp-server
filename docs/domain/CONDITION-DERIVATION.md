@@ -100,7 +100,7 @@ Thunder is the one thing observations here cannot see, so it comes from the symb
 precipitation is observed. CAPE plays no part in any condition.
 
 ### Current-Conditions Merge Chain
-Each field is filled from a per-field fallback chain (ported from `ha-geosphere-next`):
+Each field is filled from a per-field fallback chain:
 
 | Field | Chain |
 |-------|-------|
@@ -113,16 +113,13 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
-**Why the hourly total has no nowcast fallback.** Summing the last four 15-min `rr` buckets was tried and
-removed. The nowcast endpoint serves a single model run, clamped to that run's own t0 and published
-~25-35 min after the analysis it is stamped for, so there were never four buckets to sum: measured
-2026-09-11 against the live API, an unbounded request returns exactly one bucket at or before `now` and an
-anchored one reaches only the serving run's start. Every such sum was a 15-45 minute total labelled as a
-full hour, under-reporting by up to 4x on exactly the degraded path it existed for. Reconstructing a true
+**Why the hourly total has no nowcast fallback.** The nowcast endpoint serves a single model run, clamped
+to that run's own t0 and published ~25-35 min after the analysis it is stamped for, so the buckets on hand
+never cover a full hour: a sum would be a 15-45 minute total labelled as an hour. Reconstructing a true
 hour would need the t0 bucket of four consecutive runs (`forecast_offset=0..3`) — four extra requests per
-call against a shared rate limit. Reporting nothing is the honest answer, and it is why the request now
+call against a shared rate limit. Reporting nothing is the honest answer. The nowcast request still
 carries a `start` anchored to the 15-min grid (`NOWCAST_LOOKBACK`): without one the series holds a single
-bucket, which silently reduced the `RATE_LOOKBACK` peak to the matched bucket it exists to widen.
+bucket at or before `now`, and the `RATE_LOOKBACK` peak needs more than the matched bucket.
 
 **Why INCA `RR` stands in only when wet and current.** Only the 15-min nowcast observes precipitation
 *now*. INCA's hourly `RR` is an accumulation over the hour it is stamped for, so it can report rain that has
@@ -192,7 +189,7 @@ entirely and the forecast still renders.
 ## Design Decisions
 - **GeoSphere's own classification over local thresholds**: the condition matches what GeoSphere's products
   show, and no cloud, gust, fog or CAPE threshold needs tuning here. The raw values (cloud cover,
-  precipitation, gusts, CAPE) are unchanged on the rows. Ported from `ha-geosphere-next` 0.16.0.
+  precipitation, gusts, CAPE) are unchanged on the rows.
 - **Observations outrank the symbol for what is falling now**, because the symbol's run is hours old.
   Thunder is the one thing observations cannot see, so it comes from the symbol, and only while
   precipitation is observed.
@@ -211,7 +208,7 @@ entirely and the forecast still renders.
   `min(stamp, now)` because an observation time in the future is simply wrong, while a *value* from the
   nearest bucket is not.
 
-  Raised in review (2026-09-11) against the "falling right now" reading, and
+  Raised in review against the "falling right now" reading, and
   **deliberately declined**. The nowcast is a short-range forecast at every bucket, including the one
   behind `now`; there is no bucket that observes the present. Snapping backwards would therefore not buy
   an observation, it would substitute a staler estimate for a nearer one, and at the 7.5-minute boundary

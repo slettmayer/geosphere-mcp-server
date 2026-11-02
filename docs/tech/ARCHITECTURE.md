@@ -59,7 +59,6 @@ One module per responsibility. No sub-packages.
 - Does not own: HTTP communication, the merge/derivation logic
 - Calls: `weather.py` (fetch + merge), `air_quality.py`, and `format.py` (normalize + render) -- passing
   in the session
-- `RATE_LIMIT_RETRY_MAX_S = 5.0` is defined here (not in `const.py`) -- the only literal threshold outside the central constants module
 
 **`weather.py` (Orchestration Layer)**
 - Owns: the current-conditions merge chain (INCA -> nowcast -> AROME per field), hourly assembly (interval-ending parameters and the weather symbol read one stamp on, wind-from-components, the ensemble's POP estimate and storm inputs per row), the once-per-code warnings for unknown `pt` and `sy` codes
@@ -105,8 +104,7 @@ One module per responsibility. No sub-packages.
   (see [../domain/OUTPUT-CONTRACT.md](../domain/OUTPUT-CONTRACT.md))
 
 **`const.py` (Configuration)**
-- Owns: nearly all literal values -- the API base URL, dataset resource IDs, parameter lists, thresholds, the condition vocabulary, timeouts
-- The sole documented exception is `RATE_LIMIT_RETRY_MAX_S` in `server.py` (see Known Risks)
+- Owns: all literal values -- the API base URL, dataset resource IDs, parameter lists, thresholds, the condition vocabulary, timeouts
 
 ### Data Flow
 ```
@@ -192,7 +190,6 @@ every tool answers an uncovered point identically. Tools never raise across the 
 - GeoSphere dataset resource IDs are versioned -- a catalog rotation breaks the server until IDs in `const.py` are bumped.
 - Per-call session creation prevents HTTP connection reuse.
 - `condition.py` duplicates HA condition string literals to stay import-free -- could drift if HA renames a condition.
-- `RATE_LIMIT_RETRY_MAX_S` lives in `server.py`, not `const.py` -- a documented deviation from the "constants in `const.py` only" convention; move it if a second server-layer threshold appears.
 - The timeout branch depends on the client raising a dedicated timeout type. A new client that wrapped
   timeouts into a plain connection error would silently regress to the generic "no data" line, since a
   bare `TimeoutError` never reaches the server layer.
