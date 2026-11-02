@@ -507,6 +507,21 @@ def merge_current_conditions(
 # --- High-level fetch + assemble helpers (orchestration) ---
 
 
+def _forecast_bounds(first_hour: datetime, hours: int) -> tuple[datetime, datetime]:
+    """Request bounds for ``hours`` forecast rows beginning at ``first_hour``.
+
+    The start is the top of that hour less HOURLY_LOOKBACK_HOURS (see there
+    for why the anchor matters). The end leaves two hours past the last row:
+    one for its successor, which holds the row's interval fields (gust,
+    precipitation, weather symbol), and one so rounding at the boundary
+    cannot clip that successor.
+    """
+    start = first_hour.replace(minute=0, second=0, microsecond=0) - timedelta(
+        hours=HOURLY_LOOKBACK_HOURS
+    )
+    return start, first_hour + timedelta(hours=hours + 2)
+
+
 async def async_fetch_current_conditions(
     session: aiohttp.ClientSession,
     latitude: float,
@@ -524,15 +539,11 @@ async def async_fetch_current_conditions(
     """
     now = now or datetime.now(UTC)
     inca_start = now - timedelta(hours=INCA_LOOKBACK_HOURS)
-    # Anchored exactly as the hourly fetch is, and for the same reason: where
-    # an unbounded request begins is the API's choice, and if it is past the
-    # current hour `_arome_current` would take cloud, CAPE and the weather
-    # symbol from a later row and present them as current. See
-    # HOURLY_LOOKBACK_HOURS for why the anchor is the top of the hour rather
-    # than `now`.
-    arome_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(
-        hours=HOURLY_LOOKBACK_HOURS
-    )
+    # Bounded like the hourly fetch, for the one row `_arome_current` reads.
+    # Without a `start` the series may begin past the current hour, and
+    # `_arome_current` would present a later row's cloud and weather symbol
+    # as current.
+    arome_start, arome_end = _forecast_bounds(now, 1)
     # Anchored to the 15-min grid for the same reason: the API rounds a
     # mid-interval `start` up to the next stamp, which would drop the bucket
     # covering `now` along with everything before it. Unbounded, the endpoint
@@ -552,6 +563,7 @@ async def async_fetch_current_conditions(
             latitude,
             longitude,
             start=arome_start,
+            end=arome_end,
         ),
         async_get_timeseries(
             session,
@@ -618,23 +630,10 @@ async def async_fetch_hourly_forecast(
     if start is not None and start > window_start:
         window_start = start
 
-    # Anchored to the top of the hour, plus an hour of margin — see
-    # HOURLY_LOOKBACK_HOURS. The anchor is the part that matters: the API
-    # rounds a mid-hour `start` up to the next whole stamp, so anchoring to
-    # `now` at 19:33 would come back at 20:00 and drop the hour under way.
-    series_start = window_start.replace(minute=0, second=0, microsecond=0) - timedelta(
-        hours=HOURLY_LOOKBACK_HOURS
-    )
-    # And no further than the caller asked for: `hours=6` has no use for the
-    # other ~54 h of the AROME horizon. Two hours of slack past the last
-    # requested hour: one because its interval fields (gust, precipitation,
-    # weather symbol) live on the *following* stamp, and one so rounding at the boundary
-    # cannot clip that successor. The storm outlook asks for AROME_MAX_HOURS,
-    # so its scan still spans the full horizon — where the slack buys nothing,
-    # since the run itself ends there and the assembly drops its successorless
-    # final stamp. `horizon_hours` reports what was actually scanned, so an
-    # all-clear stays honest about covering an hour less than the run.
-    series_end = window_start + timedelta(hours=max(hours, 1) + 2)
+    # No further than the caller asked for: `hours=6` has no use for the
+    # other ~54 h of the AROME horizon. The storm outlook asks for
+    # AROME_MAX_HOURS, so its scan still spans the full run.
+    series_start, series_end = _forecast_bounds(window_start, max(hours, 1))
 
     arome_res, ensemble_res = await asyncio.gather(
         async_get_timeseries(

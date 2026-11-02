@@ -74,6 +74,9 @@ hours past the window the caller asked for — one because the last hour's inter
 following stamp, one so rounding at the boundary cannot clip that successor. A 6-hour request therefore
 transfers 9 hourly steps rather than the full horizon. A `start` before the run's t0 comes back at t0.
 `get_storm_outlook` asks for `AROME_MAX_HOURS`, so its scan still spans everything AROME publishes.
+`get_current_weather` bounds its AROME request the same way for the single hour in progress
+(`weather._forecast_bounds`), and `get_air_quality` asks WRF-Chem only for the two hours around now, the
+stamp nearest now being the only one it reads.
 
 Bounds are serialized as naive stamps, which the API reads as UTC, so an aware `start`/`end` is converted
 to UTC first — formatting it directly would drop the offset and shift the whole window.

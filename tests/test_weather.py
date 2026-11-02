@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -805,6 +806,8 @@ async def test_async_fetch_current_anchors_the_arome_request() -> None:
     arome_call = mock.await_args_list[0]
     expected = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     assert arome_call.kwargs["start"] == expected
+    # Bounded, too: past the hour under way only its successor is read.
+    assert arome_call.kwargs["end"] == NOW + timedelta(hours=3)
 
 
 @pytest.mark.asyncio
@@ -1101,3 +1104,41 @@ async def test_recorded_current_conditions_end_to_end() -> None:
     assert result["precipitation_type"] == 255
     assert result["condition"] == "cloudy"
     assert result["cloud_cover_pct"] == 100.0
+
+
+def _bounded(response: GeoSphereResponse, start: datetime, end: datetime):
+    """``response`` cut to ``[start, end]``, as the API serves a bounded request."""
+    keep = [i for i, ts in enumerate(response.timestamps) if start <= ts <= end]
+    return dataclasses.replace(
+        response,
+        timestamps=[response.timestamps[i] for i in keep],
+        parameters={
+            name: dataclasses.replace(series, data=[series.data[i] for i in keep])
+            for name, series in response.parameters.items()
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_recorded_current_conditions_survive_the_request_bounds() -> None:
+    """The bounded AROME request still holds every row the merge reads.
+
+    The merge reads the hour under way and, for its interval fields and
+    weather symbol, the stamp after it. Cutting the recording to the bounds
+    the fetch asks for must not change a single field.
+    """
+    nwp = _recorded("nwp")
+    mock = AsyncMock(side_effect=[nwp, _recorded("nowcast"), _recorded("inca")])
+    with patch.object(weather, "async_get_timeseries", mock):
+        full = await async_fetch_current_conditions(
+            None, RECORDED_LAT, RECORDED_LON, now=RECORDED_AT
+        )
+    bounds = mock.await_args_list[0].kwargs
+    bounded = _bounded(nwp, bounds["start"], bounds["end"])
+    assert len(bounded.timestamps) < len(nwp.timestamps)
+    mock = AsyncMock(side_effect=[bounded, _recorded("nowcast"), _recorded("inca")])
+    with patch.object(weather, "async_get_timeseries", mock):
+        cut = await async_fetch_current_conditions(
+            None, RECORDED_LAT, RECORDED_LON, now=RECORDED_AT
+        )
+    assert cut == full

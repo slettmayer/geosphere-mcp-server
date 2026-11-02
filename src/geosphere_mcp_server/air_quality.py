@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -94,10 +94,18 @@ async def async_fetch_air_quality(
     notice. The result carries a ``sources`` list of the contributing datasets.
     """
     now = now or datetime.now(UTC)
+    # Only the stamp nearest `now` is read: one of the two hours around it.
+    hour = now.replace(minute=0, second=0, microsecond=0)
 
     chem_res, aqi_res = await asyncio.gather(
         async_get_timeseries(
-            session, *DATASET_CHEM, CHEM_PARAMETERS, latitude, longitude
+            session,
+            *DATASET_CHEM,
+            CHEM_PARAMETERS,
+            latitude,
+            longitude,
+            start=hour,
+            end=hour + timedelta(hours=1),
         ),
         async_get_timeseries(
             session, *DATASET_CHEM_AQI, CHEM_AQI_PARAMETERS, latitude, longitude
