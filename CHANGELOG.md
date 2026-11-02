@@ -7,6 +7,26 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Fixed: `get_hourly_forecast` reads a `start` without an offset as Vienna local time, the zone every
+  time in its output is shown in. It used to read one as UTC, so passing back `15:00` from the output
+  started the forecast at 16:00 or 17:00 local. An explicit offset is honoured as before, and the tool
+  description says so.
+- Added: **output.** Each `get_hourly_forecast` line ends with the forecast snow limit, e.g.
+  `wind 3 m/s, snow limit 1850 m`. It is omitted when the run has no value.
+- Changed: internal cleanup with no other change to the output, except that a rate-limited call whose
+  single retry fails for another reason now answers with that failure's line.
+  - The forecast, nowcast and INCA requests no longer ask for parameters no tool renders (`sf`, `td`,
+    `TD2M`, `GL`), and the merged results drop the fields only those fed.
+  - `get_current_weather` and `get_air_quality` bound their forecast requests to the hours they read,
+    so the current-conditions forecast response shrinks from the whole remaining run (~57 hourly stamps)
+    to five. With the dropped parameters, a `get_current_weather` call transfers about half the bytes.
+  - The package depends on `mcp` instead of `mcp[cli]`, so installs no longer pull in typer, rich,
+    python-dotenv and their dependencies.
+  - Simplified the renderers, the outlook window, the server's error handling and the current-conditions
+    merge; removed guards for states that cannot occur, duplicated tests and stale documentation. The
+    unknown-code warning reads `GeoSphere reported <table> code <n>, which is not in its published
+    table; …`.
+
 ## 0.7.0 - 2026-11-01
 
 - Fixed: the forecast works again. GeoSphere stopped publishing `nwp-v1-1h-2500m` (its last run is
