@@ -84,7 +84,6 @@ SAMPLE_BAD_REQUEST = {"detail": "unknown parameter 'foo'"}
 # --- URL / parameter building ---
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_builds_url_and_params() -> None:
     """The URL, comma-joined parameters, and lat_lon are built correctly."""
     session = _make_session(json_data=SAMPLE_AROME_GEOJSON)
@@ -111,7 +110,6 @@ async def test_async_get_timeseries_builds_url_and_params() -> None:
     assert "end" not in params
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_formats_start_end() -> None:
     """Optional start/end are formatted as %Y-%m-%dT%H:%M."""
     session = _make_session(json_data=SAMPLE_AROME_GEOJSON)
@@ -135,7 +133,6 @@ async def test_async_get_timeseries_formats_start_end() -> None:
 # --- GeoJSON parsing ---
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_parses_geojson() -> None:
     """A valid GeoJSON body parses into a typed response."""
     session = _make_session(json_data=SAMPLE_AROME_GEOJSON)
@@ -164,7 +161,6 @@ def test_parse_geojson_unexpected_shape_raises() -> None:
         _parse_geojson("nwp-v2-1h-1km", {"features": []})
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_unexpected_shape_raises() -> None:
     """A malformed body surfaces as GeoSphereApiError."""
     session = _make_session(json_data={"features": []})
@@ -177,7 +173,6 @@ async def test_async_get_timeseries_unexpected_shape_raises() -> None:
 # --- Error taxonomy ---
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_rate_limit_with_retry_after() -> None:
     """HTTP 429 raises GeoSphereRateLimitError carrying retry_after."""
     session = _make_session(status=429, headers={"Retry-After": "120"})
@@ -190,7 +185,6 @@ async def test_async_get_timeseries_rate_limit_with_retry_after() -> None:
     assert err.value.retry_after == 120.0
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_rate_limit_without_header() -> None:
     """HTTP 429 without a Retry-After header leaves retry_after None."""
     session = _make_session(status=429)
@@ -203,7 +197,6 @@ async def test_async_get_timeseries_rate_limit_without_header() -> None:
     assert err.value.retry_after is None
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_out_of_domain() -> None:
     """HTTP 400 with the bounds detail raises GeoSphereOutOfDomainError."""
     session = _make_session(status=400, json_data=SAMPLE_OUT_OF_DOMAIN)
@@ -214,7 +207,6 @@ async def test_async_get_timeseries_out_of_domain() -> None:
         )
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_generic_400() -> None:
     """A non-bounds HTTP 400 raises the generic GeoSphereApiError."""
     session = _make_session(status=400, json_data=SAMPLE_BAD_REQUEST)
@@ -227,7 +219,6 @@ async def test_async_get_timeseries_generic_400() -> None:
     assert not isinstance(err.value, GeoSphereOutOfDomainError)
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_server_error() -> None:
     """A 5xx status raises GeoSphereApiError."""
     session = _make_session(status=503)
@@ -238,7 +229,6 @@ async def test_async_get_timeseries_server_error() -> None:
         )
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_timeout() -> None:
     """A timeout surfaces as GeoSphereTimeoutError (a GeoSphereConnectionError)."""
     session = _make_session(raise_error=TimeoutError())
@@ -249,7 +239,6 @@ async def test_async_get_timeseries_timeout() -> None:
         )
 
 
-@pytest.mark.asyncio
 async def test_async_get_timeseries_connection_error() -> None:
     """An aiohttp ClientError surfaces as GeoSphereConnectionError."""
     session = _make_session(raise_error=aiohttp.ClientError("boom"))

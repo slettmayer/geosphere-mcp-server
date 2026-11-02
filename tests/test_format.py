@@ -63,8 +63,6 @@ SAMPLE_HOURLY_GEOSPHERE = {
     ],
 }
 
-NOW = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)  # 13:00 Lisbon local
-
 
 # --- render_current (GeoSphere path) ---
 

@@ -673,33 +673,6 @@ def test_merge_a_dry_pt_without_a_rate_still_decides() -> None:
     assert merged["condition"] == "cloudy"
 
 
-def test_merge_precip_type_255_not_precipitating() -> None:
-    merged = merge_current_conditions(
-        _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_type"] == 255
-    assert merged["condition"] == "cloudy"
-
-
-def test_merge_precip_type_signals_precipitation() -> None:
-    nowcast = _nowcast(
-        data={
-            "t2m": [15.0, 15.0, 15.0, 15.0],
-            "rh2m": [90.0, 90.0, 90.0, 90.0],
-            "rr": [0.5, 0.5, 0.5, 0.5],
-            "pt": [1, 1, 1, 1],
-            "dd": [180.0, 180.0, 180.0, 180.0],
-            "ff": [2.0, 2.0, 2.0, 2.0],
-            "fx": [5.0, 5.0, 5.0, 5.0],
-        }
-    )
-    merged = merge_current_conditions(
-        nowcast, None, _arome_forecast(), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_type"] == 1
-    assert merged["condition"] == "rainy"
-
-
 def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
     """The default nowcast with one `pt` code and `rr` in every bucket."""
     return _nowcast(
@@ -715,11 +688,21 @@ def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
     )
 
 
-def test_merge_precipitation_kind_reads_the_dry_code() -> None:
+def test_merge_precip_type_255_is_dry() -> None:
     merged = merge_current_conditions(
         _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
     )
+    assert merged["precipitation_type"] == 255
     assert merged["precipitation_kind"] == "no_precipitation"
+    assert merged["condition"] == "cloudy"
+
+
+def test_merge_precip_type_signals_precipitation() -> None:
+    merged = merge_current_conditions(
+        _nowcast_with(1), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_type"] == 1
+    assert merged["condition"] == "rainy"
 
 
 def test_merge_precipitation_kind_decodes_snow_at_any_temperature() -> None:
@@ -764,7 +747,6 @@ def test_unknown_pt_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> Non
 # --- async_fetch_current_conditions ---
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_all_sources() -> None:
     mock = AsyncMock(side_effect=[_arome_forecast(), _nowcast(), _inca()])
     with patch.object(weather, "async_get_timeseries", mock):
@@ -773,7 +755,6 @@ async def test_async_fetch_current_all_sources() -> None:
     assert result["temperature_c"] == 9.5
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_anchors_the_arome_request() -> None:
     """The AROME call names a `start`, or the hour in progress may not be in it.
 
@@ -795,7 +776,6 @@ async def test_async_fetch_current_anchors_the_arome_request() -> None:
     assert arome_call.kwargs["end"] == NOW + timedelta(hours=3)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_anchors_the_nowcast_request() -> None:
     """The nowcast call names a `start` floored to the 15-min grid.
 
@@ -814,7 +794,6 @@ async def test_async_fetch_current_anchors_the_nowcast_request() -> None:
     assert nowcast_call.kwargs["start"] == bucket - NOWCAST_LOOKBACK
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_degrades_to_arome_only() -> None:
     """INCA/nowcast out-of-domain degrade to an AROME-only snapshot."""
     mock = AsyncMock(
@@ -830,7 +809,6 @@ async def test_async_fetch_current_degrades_to_arome_only() -> None:
     assert result["temperature_c"] == 11.0
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_arome_out_of_domain_raises() -> None:
     """AROME out of domain propagates so the caller can fall back."""
     mock = AsyncMock(
@@ -850,7 +828,6 @@ async def test_async_fetch_current_arome_out_of_domain_raises() -> None:
 # --- async_fetch_hourly_forecast ---
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_with_ensemble() -> None:
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
     with patch.object(weather, "async_get_timeseries", mock):
@@ -862,7 +839,6 @@ async def test_async_fetch_hourly_with_ensemble() -> None:
     assert pop[datetime(2026, 7, 15, 16, 0, tzinfo=UTC)] == 70
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_ensemble_failure_omits_pop() -> None:
     mock = AsyncMock(
         side_effect=[_arome_forecast(), GeoSphereOutOfDomainError("ens oob")]
@@ -873,7 +849,6 @@ async def test_async_fetch_hourly_ensemble_failure_omits_pop() -> None:
     assert all(h["precipitation_probability_pct"] is None for h in result["hourly"])
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
     mock = AsyncMock(
         side_effect=[
@@ -888,7 +863,6 @@ async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
         await async_fetch_hourly_forecast(None, 38.7, -9.1, now=NOW)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
     """Both requests ask for one hour before the current top of the hour.
 
@@ -911,7 +885,6 @@ async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
         assert call.kwargs["start"] == expected
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_keeps_the_in_progress_hour() -> None:
     """With the predecessor present, the series starts at the current hour."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -960,7 +933,6 @@ def test_arome_current_needs_a_successor() -> None:
     assert weather._arome_current(None, 48.219, 16.362, NOW) is None
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
     """`hours=N` must not pull the whole ~60 h horizon and discard most of it."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -977,7 +949,6 @@ async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
         assert call.kwargs["end"] == top_of_hour + timedelta(hours=8)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
     """A `start` in the future moves the whole fetched window with it."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -992,7 +963,6 @@ async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
         assert call.kwargs["end"] == later + timedelta(hours=6)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> None:
     """A `start` before now must not drag the window backwards."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -1074,7 +1044,6 @@ def test_recorded_symbol_agrees_with_the_rows_precipitation() -> None:
         assert (row["weather_symbol"] in SY_PRECIPITATION) == wet, row["time"]
 
 
-@pytest.mark.asyncio
 async def test_recorded_current_conditions_end_to_end() -> None:
     """A dry nowcast under the hour's rain symbol reads `cloudy`."""
     mock = AsyncMock(
@@ -1104,7 +1073,6 @@ def _bounded(response: GeoSphereResponse, start: datetime, end: datetime):
     )
 
 
-@pytest.mark.asyncio
 async def test_recorded_current_conditions_survive_the_request_bounds() -> None:
     """The bounded AROME request still holds every row the merge reads.
 
