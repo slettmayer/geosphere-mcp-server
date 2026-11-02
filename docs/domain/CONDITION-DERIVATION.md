@@ -53,7 +53,7 @@ It was confirmed there for `nwp-v1`; that `nwp-v2` follows it is measured, not p
 | 29–32 | (Starkes) Gewitter mit Schneeregen / Schneefall | `lightning-rainy` |
 
 A missing code, or one outside the table, maps to `None` (unknown) — never a guess — and logs one warning
-per code per process (`weather._warn_unknown_sy_code`). The table has no night variants, so `is_night`
+per code per process (`weather._warn_unknown_code`). The table has no night variants, so `is_night`
 (`astral` solar elevation below 0) decides between `sunny` and `clear-night`: for a forecast row at the
 middle of its hour (`FORECAST_ROW_MIDPOINT`), for the current condition at `now`. Every thunderstorm code,
 the sleet and snow ones included, maps to `lightning-rainy`: there is no thundersnow condition, and the

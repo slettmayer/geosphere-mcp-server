@@ -54,7 +54,7 @@ One module per responsibility. No sub-packages.
   call via `async with`), catching API exceptions and turning them into short markdown error lines
   (including `OUT_OF_DOMAIN_MESSAGE` for an uncovered point), all argument parsing/validation/clamping,
   and the `main()` entry point
-- Argument parsing helpers: `_parse_start` (ISO datetime for `get_hourly_forecast`) and `_clamp` (horizon
+- Argument parsing: `_parse_start` (ISO datetime for `get_hourly_forecast`) and clamping `hours` (horizon
   bounds). Both run **before** any session is opened, so a validation failure never issues an HTTP request.
 - Does not own: HTTP communication, the merge/derivation logic
 - Calls: `weather.py` (fetch + merge), `air_quality.py`, and `format.py` (normalize + render) -- passing

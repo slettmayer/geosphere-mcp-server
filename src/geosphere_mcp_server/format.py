@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from geosphere_mcp_server.const import (
     AIR_QUALITY_POLLUTANTS,
+    AQI_BAND_LABELS,
     AROME_MAX_HOURS,
     ENSEMBLE_MAX_AGE,
     FALLING_NOW_LABELS,
@@ -30,7 +31,6 @@ from geosphere_mcp_server.const import (
     POP_P90_WET_PCT,
     PRECIP_MIN_MM,
     THUNDER_CAPE_JKG,
-    aqi_label,
 )
 from geosphere_mcp_server.outlook import (
     ensemble_is_current,
@@ -502,7 +502,7 @@ def _aqi_day_text(day: dict[str, Any]) -> str | None:
     index, so the band is the whole figure.
     """
     band = day.get("band")
-    label = aqi_label(band)
+    label = AQI_BAND_LABELS.get(band)
     if label is None:
         return None
     return f"{band} ({label}) {day['label']}"

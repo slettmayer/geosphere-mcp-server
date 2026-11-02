@@ -328,24 +328,22 @@ def test_assemble_hourly_start_and_hours_filters() -> None:
 @pytest.fixture
 def _fresh_unknown_codes():
     """Each test starts with no unknown `pt` or `sy` code already reported."""
-    weather._UNKNOWN_PT_CODES.clear()
-    weather._UNKNOWN_SY_CODES.clear()
+    weather._REPORTED_CODES.clear()
     yield
-    weather._UNKNOWN_PT_CODES.clear()
-    weather._UNKNOWN_SY_CODES.clear()
+    weather._REPORTED_CODES.clear()
 
 
 @pytest.mark.usefixtures("_fresh_unknown_codes")
 def test_unknown_sy_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
     """Reported once per process, not on every call while it is served."""
     for code in (99, 99, 8, None, 0):
-        weather._warn_unknown_sy_code(code)
+        weather._warn_unknown_code("weather-symbol", code)
     messages = [record.getMessage() for record in caplog.records]
     assert [m for m in messages if "weather-symbol code" in m] == [
-        "Forecast reported weather-symbol code 99, which is not in "
-        "GeoSphere's published table; its hours' condition reads unknown",
-        "Forecast reported weather-symbol code 0, which is not in "
-        "GeoSphere's published table; its hours' condition reads unknown",
+        "GeoSphere reported weather-symbol code 99, which is not in its "
+        "published table; its hours' condition reads unknown",
+        "GeoSphere reported weather-symbol code 0, which is not in its "
+        "published table; its hours' condition reads unknown",
     ]
 
 
@@ -734,11 +732,16 @@ def test_merge_unknown_pt_code_has_no_kind() -> None:
 def test_unknown_pt_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
     """Reported once per process, not on every call while it is falling."""
     for code in (2, 2, 1, 255, None):
-        weather._warn_unknown_pt_code(code)
+        weather._warn_unknown_code("precipitation-type", code)
+    # The same number is tracked per table: 99 is no `pt` code either.
+    weather._warn_unknown_code("weather-symbol", 99)
+    weather._warn_unknown_code("precipitation-type", 99)
     messages = [record.getMessage() for record in caplog.records]
     assert [m for m in messages if "precipitation-type code" in m] == [
-        "Nowcast reported precipitation-type code 2, which is not in "
-        "GeoSphere's published table; reporting no kind for it"
+        "GeoSphere reported precipitation-type code 2, which is not in its "
+        "published table; reporting no kind for it",
+        "GeoSphere reported precipitation-type code 99, which is not in its "
+        "published table; reporting no kind for it",
     ]
 
 

@@ -245,13 +245,6 @@ AQI_BAND_LABELS = {
 }
 
 
-def aqi_label(band: int | None) -> str | None:
-    """Label for an EEA band index (1-6); None for unknown or out-of-range."""
-    if band is None:
-        return None
-    return AQI_BAND_LABELS.get(int(band))
-
-
 # --- Shared condition vocabulary ---
 # The complete set of Home Assistant condition strings this server can emit,
 # spelled as plain literals to keep the package free of homeassistant imports.

@@ -69,11 +69,6 @@ mcp = MCPServer(
 )
 
 
-def _clamp(value: int, low: int, high: int) -> int:
-    """Clamp ``value`` into the inclusive ``[low, high]`` range."""
-    return max(low, min(value, high))
-
-
 def _error_line(err: Exception) -> str:
     """The markdown line a tool answers with when ``err`` ends its fetch."""
     if isinstance(err, GeoSphereOutOfDomainError):
@@ -187,7 +182,7 @@ async def get_hourly_forecast(
     if error is not None:
         return error
 
-    forecast_hours = _clamp(hours, 1, AROME_MAX_HOURS)
+    forecast_hours = max(1, min(hours, AROME_MAX_HOURS))
 
     async def work() -> str:
         async with aiohttp.ClientSession() as session:

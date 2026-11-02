@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Container
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -57,45 +58,31 @@ from geosphere_mcp_server.geosphere_api import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Codes outside GeoSphere's tables already reported by this process, so a new
-# one warns once rather than on every call for as long as it is served.
-_UNKNOWN_PT_CODES: set[int] = set()
-_UNKNOWN_SY_CODES: set[int] = set()
+# GeoSphere's code tables, and what a code outside one means for the output.
+_CODE_TABLES: dict[str, tuple[Container[int], str]] = {
+    "precipitation-type": (PRECIPITATION_TYPES, "reporting no kind for it"),
+    "weather-symbol": (SY_CODES, "its hours' condition reads unknown"),
+}
+# Unknown codes already reported by this process, so a new one warns once
+# rather than on every call for as long as it is served.
+_REPORTED_CODES: set[tuple[str, int]] = set()
 
 
-def _warn_unknown_pt_code(precipitation_type: int | None) -> None:
-    """Log a `pt` code outside GeoSphere's table, once per code per process.
+def _warn_unknown_code(table: str, code: int | None) -> None:
+    """Log a code outside one of GeoSphere's tables, once per code per process.
 
-    Kept out of :func:`merge_current_conditions` so the merge stays pure; the
-    async fetch calls this on what the merge decoded.
+    Kept out of the merge and the assembly so they stay pure; the async
+    fetches call this on what those decoded.
     """
-    if (
-        precipitation_type is None
-        or precipitation_type in PRECIPITATION_TYPES
-        or precipitation_type in _UNKNOWN_PT_CODES
-    ):
+    known, consequence = _CODE_TABLES[table]
+    if code is None or code in known or (table, code) in _REPORTED_CODES:
         return
-    _UNKNOWN_PT_CODES.add(precipitation_type)
+    _REPORTED_CODES.add((table, code))
     _LOGGER.warning(
-        "Nowcast reported precipitation-type code %s, which is not in "
-        "GeoSphere's published table; reporting no kind for it",
-        precipitation_type,
-    )
-
-
-def _warn_unknown_sy_code(symbol: int | None) -> None:
-    """Log a `sy` code outside GeoSphere's table, once per code per process.
-
-    Kept out of :func:`assemble_hourly_forecast` so the assembly stays pure;
-    the async fetches call this on the symbols it read.
-    """
-    if symbol is None or symbol in SY_CODES or symbol in _UNKNOWN_SY_CODES:
-        return
-    _UNKNOWN_SY_CODES.add(symbol)
-    _LOGGER.warning(
-        "Forecast reported weather-symbol code %s, which is not in "
-        "GeoSphere's published table; its hours' condition reads unknown",
-        symbol,
+        "GeoSphere reported %s code %s, which is not in its published table; %s",
+        table,
+        code,
+        consequence,
     )
 
 
@@ -230,7 +217,7 @@ def assemble_hourly_forecast(
     if start is not None:
         hourly = [h for h in hourly if h["time"] >= start]
     if hours is not None:
-        hourly = hourly[: max(hours, 0)]
+        hourly = hourly[:hours]
 
     return {
         "reference_time": arome.reference_time,
@@ -517,8 +504,8 @@ async def async_fetch_current_conditions(
     sources.append("AROME")
 
     merged = merge_current_conditions(nowcast, inca, arome, latitude, longitude, now)
-    _warn_unknown_pt_code(merged["precipitation_type"])
-    _warn_unknown_sy_code(merged["weather_symbol"])
+    _warn_unknown_code("precipitation-type", merged["precipitation_type"])
+    _warn_unknown_code("weather-symbol", merged["weather_symbol"])
     merged["sources"] = sources
     return merged
 
@@ -550,7 +537,7 @@ async def async_fetch_hourly_forecast(
     # No further than the caller asked for: `hours=6` has no use for the
     # other ~54 h of the AROME horizon. The storm outlook asks for
     # AROME_MAX_HOURS, so its scan still spans the full run.
-    series_start, series_end = _forecast_bounds(window_start, max(hours, 1))
+    series_start, series_end = _forecast_bounds(window_start, hours)
 
     arome_res, ensemble_res = await asyncio.gather(
         async_get_timeseries(
@@ -584,7 +571,7 @@ async def async_fetch_hourly_forecast(
         arome, ensemble, latitude, longitude, now, hours=hours, start=start
     )
     for row in assembled["hourly"]:
-        _warn_unknown_sy_code(row["weather_symbol"])
+        _warn_unknown_code("weather-symbol", row["weather_symbol"])
     sources = ["AROME"]
     if ensemble is not None:
         sources.append("C-LAEF ensemble")
