@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from geosphere_mcp_server.format import (
-    normalize_air_quality_geosphere,
-    normalize_current_geosphere,
-    normalize_hourly_geosphere,
-    normalize_outlook_geosphere,
+    normalize_air_quality,
+    normalize_current,
+    normalize_hourly,
+    normalize_outlook,
     render_air_quality,
     render_current,
     render_hourly,
@@ -76,7 +76,7 @@ def test_render_current_dates_precipitation_by_its_own_stamp() -> None:
     fresh `T2M` and an hours-old `RR` pairs the two. Naming the hour the total
     covers keeps the source line's time from speaking for it.
     """
-    data = normalize_current_geosphere(
+    data = normalize_current(
         SAMPLE_CURRENT_GEOSPHERE
         | {
             "precipitation_1h_mm": 5.0,
@@ -92,14 +92,14 @@ def test_render_current_dates_precipitation_by_its_own_stamp() -> None:
 
 def test_render_current_precipitation_without_a_stamp() -> None:
     """No stamp falls back to the undated wording rather than dropping the value."""
-    data = normalize_current_geosphere(
+    data = normalize_current(
         SAMPLE_CURRENT_GEOSPHERE | {"precipitation_1h_at": None}, LAT, LON
     )
     assert "🌧️ Precipitation (last hour): 0 mm" in render_current(data)
 
 
 def test_render_current_geosphere() -> None:
-    data = normalize_current_geosphere(SAMPLE_CURRENT_GEOSPHERE, LAT, LON)
+    data = normalize_current(SAMPLE_CURRENT_GEOSPHERE, LAT, LON)
     out = render_current(data)
     assert out.splitlines()[0] == "# Current Weather at 48.2208, 16.3738"
     assert "🌡️ Temperature: 21.3°C (feels like 20.1°C)" in out
@@ -129,7 +129,7 @@ def test_render_current_geosphere() -> None:
 )
 def test_render_current_names_what_is_falling(kind: str, line: str) -> None:
     current = {**SAMPLE_CURRENT_GEOSPHERE, "precipitation_kind": kind}
-    assert line in render_current(normalize_current_geosphere(current, LAT, LON))
+    assert line in render_current(normalize_current(current, LAT, LON))
 
 
 @pytest.mark.parametrize("kind", ["no_precipitation", None])
@@ -138,7 +138,7 @@ def test_render_current_omits_the_falling_line_without_a_kind(
 ) -> None:
     """Dry, or a kind nothing could name: no line, like a zero precipitation."""
     current = {**SAMPLE_CURRENT_GEOSPHERE, "precipitation_kind": kind}
-    out = render_current(normalize_current_geosphere(current, LAT, LON))
+    out = render_current(normalize_current(current, LAT, LON))
     assert "Falling now" not in out
 
 
@@ -157,7 +157,7 @@ def test_render_current_geosphere_omits_none_fields() -> None:
         "condition": None,
         "sources": ["AROME"],
     }
-    out = render_current(normalize_current_geosphere(sparse, LAT, LON))
+    out = render_current(normalize_current(sparse, LAT, LON))
     assert "🌡️ Temperature: 10.0°C" in out
     assert "feels like" not in out
     assert "Humidity" not in out
@@ -172,7 +172,7 @@ def test_render_current_geosphere_omits_none_fields() -> None:
 
 
 def test_render_hourly_geosphere() -> None:
-    data = normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 24)
+    data = normalize_hourly(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 24)
     out = render_hourly(data)
     assert out.splitlines()[0] == "# 24-Hour Forecast for 48.2208, 16.3738"
     assert "AROME model, reference 2026-07-15 12:00 CEST" in out
@@ -208,7 +208,7 @@ def test_render_hourly_day_divider_on_rollover() -> None:
             },
         ],
     }
-    data = normalize_hourly_geosphere(sample, LAT, LON, 24)
+    data = normalize_hourly(sample, LAT, LON, 24)
     lines = render_hourly(data).splitlines()
     # Both local days appear as headers, each followed by its indented hour.
     assert "Wed 2026-07-15" in lines
@@ -220,7 +220,7 @@ def test_render_hourly_day_divider_on_rollover() -> None:
 
 def test_render_hourly_geosphere_horizon_note() -> None:
     """Requesting more hours than AROME returns appends the horizon note."""
-    data = normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 48)
+    data = normalize_hourly(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 48)
     out = render_hourly(data)
     assert "This server publishes nothing beyond it" in out
     assert "AROME forecast horizon ends 2026-07-15 15:00" in out
@@ -233,9 +233,7 @@ def test_render_hourly_geosphere_empty_window() -> None:
     hourly tool clamps `hours` but not `start`, and a series filtered down to
     nothing must say so rather than render an empty forecast body.
     """
-    data = normalize_hourly_geosphere(
-        {**SAMPLE_HOURLY_GEOSPHERE, "hourly": []}, LAT, LON, 24
-    )
+    data = normalize_hourly({**SAMPLE_HOURLY_GEOSPHERE, "hourly": []}, LAT, LON, 24)
     out = render_hourly(data)
     assert "No forecast hours available for the requested window." in out
     # No horizon note either: nothing came back to name an end for.
@@ -243,16 +241,14 @@ def test_render_hourly_geosphere_empty_window() -> None:
 
 
 def test_render_hourly_geosphere_no_note_when_satisfied() -> None:
-    data = normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 2)
+    data = normalize_hourly(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 2)
     out = render_hourly(data)
     assert "horizon" not in out
 
 
 def test_render_hourly_labels_the_chance_as_an_estimate() -> None:
     """GeoSphere publishes no probability; the chance shown is derived here."""
-    out = render_hourly(
-        normalize_hourly_geosphere(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 2)
-    )
+    out = render_hourly(normalize_hourly(SAMPLE_HOURLY_GEOSPHERE, LAT, LON, 2))
     assert out.splitlines()[-1] == (
         "Precipitation chance is an estimate derived from the C-LAEF ensemble "
         "percentiles (0/30/70/95 %), not a probability GeoSphere publishes."
@@ -264,7 +260,7 @@ def test_render_hourly_omits_the_estimate_note_without_a_chance() -> None:
         **SAMPLE_HOURLY_GEOSPHERE,
         "hourly": SAMPLE_HOURLY_GEOSPHERE["hourly"][1:],
     }
-    out = render_hourly(normalize_hourly_geosphere(dry, LAT, LON, 1))
+    out = render_hourly(normalize_hourly(dry, LAT, LON, 1))
     assert "estimate" not in out
 
 
@@ -283,7 +279,7 @@ def test_render_hourly_treats_a_trace_as_dry() -> None:
             }
         ],
     }
-    out = render_hourly(normalize_hourly_geosphere(trace, LAT, LON, 1))
+    out = render_hourly(normalize_hourly(trace, LAT, LON, 1))
     assert "  14:00: 12.0°C — cloudy, wind 1 m/s" in out
     assert "estimate" not in out
 
@@ -319,11 +315,9 @@ SAMPLE_OUTLOOK_ASSEMBLED = {
 }
 
 
-def test_normalize_outlook_geosphere_localizes_only_the_output() -> None:
+def test_normalize_outlook_localizes_only_the_output() -> None:
     """Derivation runs on UTC rows; reported stamps come back in Vienna time."""
-    data = normalize_outlook_geosphere(
-        SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK
-    )
+    data = normalize_outlook(SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK)
     assert data["max_gust_short_ms"] == 12.0
     assert data["max_gust_short_at"].hour == 17  # 15:00Z -> 17:00 CEST
     assert data["max_gust_long_ms"] == 24.0
@@ -337,7 +331,7 @@ def test_normalize_outlook_geosphere_localizes_only_the_output() -> None:
 
 def test_render_outlook_geosphere() -> None:
     out = render_outlook(
-        normalize_outlook_geosphere(SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK)
+        normalize_outlook(SAMPLE_OUTLOOK_ASSEMBLED, LAT, LON, now=NOW_OUTLOOK)
     )
     assert out.splitlines()[0] == "# Storm Outlook for 48.2208, 16.3738"
     assert "Source: GeoSphere (AROME + C-LAEF ensemble)" in out
@@ -363,9 +357,7 @@ def test_render_outlook_names_the_signal_of_an_expected_storm() -> None:
             _geosphere_hour(1, symbol=27, cape_p90=1500.0, precipitation_p90=2.0),
         ],
     }
-    out = render_outlook(
-        normalize_outlook_geosphere(assembled, LAT, LON, now=NOW_OUTLOOK)
-    )
+    out = render_outlook(normalize_outlook(assembled, LAT, LON, now=NOW_OUTLOOK))
     assert "⛈️ Thunderstorm expected next 1 h: yes (signal: both)" in out
     assert "⚡ Next thunderstorm: Wed 2026-07-15 17:00 (signal: both)" in out
 
@@ -380,9 +372,7 @@ def test_render_outlook_says_when_the_ensemble_could_not_vote() -> None:
                 _geosphere_hour(0, symbol=5, cape_p90=1500.0, precipitation_p90=2.0)
             ],
         }
-        out = render_outlook(
-            normalize_outlook_geosphere(assembled, LAT, LON, now=NOW_OUTLOOK)
-        )
+        out = render_outlook(normalize_outlook(assembled, LAT, LON, now=NOW_OUTLOOK))
         assert "⛈️ Thunderstorm expected next 1 h: no" in out
         assert (
             "ℹ️ Ensemble signal: unavailable (the C-LAEF request failed or its "
@@ -392,7 +382,7 @@ def test_render_outlook_says_when_the_ensemble_could_not_vote() -> None:
 
 def test_render_outlook_reports_unknowns_distinctly() -> None:
     """No gust data reads unknown; an hour with no symbol is no storm."""
-    data = normalize_outlook_geosphere(
+    data = normalize_outlook(
         {"sources": ["AROME"], "hourly": [_geosphere_hour(0)]},
         LAT,
         LON,
@@ -405,7 +395,7 @@ def test_render_outlook_reports_unknowns_distinctly() -> None:
 
 
 def test_render_outlook_is_unknown_only_without_an_hour_in_the_window() -> None:
-    data = normalize_outlook_geosphere(
+    data = normalize_outlook(
         {"sources": ["AROME"], "hourly": [_geosphere_hour(6, symbol=5)]},
         LAT,
         LON,
@@ -424,7 +414,7 @@ def test_render_outlook_names_the_horizon_an_all_clear_covers() -> None:
     truncated run hand over fewer hours, so the span has to be stated rather
     than implied.
     """
-    data = normalize_outlook_geosphere(
+    data = normalize_outlook(
         {
             "sources": ["AROME"],
             "hourly": [
@@ -443,7 +433,9 @@ def test_render_outlook_names_the_horizon_an_all_clear_covers() -> None:
 
 def test_render_outlook_without_any_hours() -> None:
     out = render_outlook(
-        normalize_outlook_geosphere({"hourly": []}, LAT, LON, now=NOW_OUTLOOK)
+        normalize_outlook(
+            {"sources": ["AROME"], "hourly": []}, LAT, LON, now=NOW_OUTLOOK
+        )
     )
     assert "No forecast hours available for the outlook window." in out
 
@@ -466,7 +458,7 @@ SAMPLE_AIR_QUALITY_GEOSPHERE = {
 
 
 def test_render_air_quality_geosphere() -> None:
-    data = normalize_air_quality_geosphere(SAMPLE_AIR_QUALITY_GEOSPHERE, LAT, LON)
+    data = normalize_air_quality(SAMPLE_AIR_QUALITY_GEOSPHERE, LAT, LON)
     out = render_air_quality(data)
     assert out.splitlines()[0] == "# Air Quality at 48.2208, 16.3738"
     # GeoSphere publishes the band, so no numeric index is appended, and the
@@ -479,9 +471,7 @@ def test_render_air_quality_geosphere() -> None:
 
 def test_render_air_quality_without_any_data_still_names_the_source() -> None:
     """Which source drew the blank decides whether asking elsewhere is worth it."""
-    data = normalize_air_quality_geosphere(
-        {"pollutants": {}, "sources": ["WRF-Chem"]}, LAT, LON
-    )
+    data = normalize_air_quality({"pollutants": {}, "sources": ["WRF-Chem"]}, LAT, LON)
     out = render_air_quality(data)
     assert "No air-quality data available" in out
     assert "📡 Source: GeoSphere (WRF-Chem, 3 km)" in out

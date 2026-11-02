@@ -156,7 +156,7 @@ async def get_current_weather(latitude: float, longitude: float) -> str:
             current = await weather.async_fetch_current_conditions(
                 session, latitude, longitude
             )
-            data = fmt.normalize_current_geosphere(current, latitude, longitude)
+            data = fmt.normalize_current(current, latitude, longitude)
             return fmt.render_current(data)
 
     return await _guarded(work)
@@ -201,9 +201,7 @@ async def get_hourly_forecast(
                 hours=forecast_hours,
                 start=start_dt,
             )
-            data = fmt.normalize_hourly_geosphere(
-                assembled, latitude, longitude, forecast_hours
-            )
+            data = fmt.normalize_hourly(assembled, latitude, longitude, forecast_hours)
             return fmt.render_hourly(data)
 
     return await _guarded(work)
@@ -250,7 +248,7 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
             assembled = await weather.async_fetch_hourly_forecast(
                 session, latitude, longitude, hours=AROME_MAX_HOURS
             )
-            data = fmt.normalize_outlook_geosphere(assembled, latitude, longitude)
+            data = fmt.normalize_outlook(assembled, latitude, longitude)
             return fmt.render_outlook(data)
 
     return await _guarded(work)
@@ -283,7 +281,7 @@ async def get_air_quality(latitude: float, longitude: float) -> str:
             merged = await air_quality.async_fetch_air_quality(
                 session, latitude, longitude
             )
-            data = fmt.normalize_air_quality_geosphere(merged, latitude, longitude)
+            data = fmt.normalize_air_quality(merged, latitude, longitude)
             return fmt.render_air_quality(data)
 
     return await _guarded(work)
