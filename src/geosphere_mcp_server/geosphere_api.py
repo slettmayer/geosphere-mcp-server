@@ -201,3 +201,23 @@ def _parse_geojson(resource_id: str, body: dict[str, Any]) -> GeoSphereResponse:
         raise GeoSphereApiError(
             f"Unexpected GeoSphere API response shape for {resource_id}: {err}"
         ) from err
+
+
+def optional_response(
+    result: GeoSphereResponse | BaseException,
+    label: str,
+) -> GeoSphereResponse | None:
+    """Return a secondary-dataset response, or None if it failed.
+
+    Out-of-domain and other GeoSphere API errors degrade gracefully (the
+    dataset is simply dropped); unexpected exceptions propagate.
+    """
+    if isinstance(result, GeoSphereOutOfDomainError):
+        _LOGGER.debug("%s outside coverage, degrading", label)
+        return None
+    if isinstance(result, GeoSphereApiError):
+        _LOGGER.warning("%s update failed, degrading: %s", label, result)
+        return None
+    if isinstance(result, BaseException):
+        raise result
+    return result

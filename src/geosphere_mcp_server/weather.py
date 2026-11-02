@@ -52,10 +52,9 @@ from geosphere_mcp_server.const import (
     SY_CODES,
 )
 from geosphere_mcp_server.geosphere_api import (
-    GeoSphereApiError,
-    GeoSphereOutOfDomainError,
     GeoSphereResponse,
     async_get_timeseries,
+    optional_response,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -589,8 +588,8 @@ async def async_fetch_current_conditions(
         raise arome_res
     arome: GeoSphereResponse = arome_res
 
-    nowcast = _optional_response(nowcast_res, "nowcast")
-    inca = _optional_response(inca_res, "INCA")
+    nowcast = optional_response(nowcast_res, "nowcast")
+    inca = optional_response(inca_res, "INCA")
 
     sources: list[str] = []
     if inca is not None:
@@ -661,7 +660,7 @@ async def async_fetch_hourly_forecast(
         raise arome_res
     arome: GeoSphereResponse = arome_res
 
-    ensemble = _optional_response(ensemble_res, "C-LAEF ensemble")
+    ensemble = optional_response(ensemble_res, "C-LAEF ensemble")
 
     assembled = assemble_hourly_forecast(
         arome, ensemble, latitude, longitude, now, hours=hours, start=start
@@ -673,23 +672,3 @@ async def async_fetch_hourly_forecast(
         sources.append("C-LAEF ensemble")
     assembled["sources"] = sources
     return assembled
-
-
-def _optional_response(
-    result: GeoSphereResponse | BaseException,
-    label: str,
-) -> GeoSphereResponse | None:
-    """Return a secondary-dataset response, or None if it failed.
-
-    Out-of-domain and other GeoSphere API errors degrade gracefully (the
-    dataset is simply dropped); unexpected exceptions propagate.
-    """
-    if isinstance(result, GeoSphereOutOfDomainError):
-        _LOGGER.debug("%s outside coverage, degrading", label)
-        return None
-    if isinstance(result, GeoSphereApiError):
-        _LOGGER.warning("%s update failed, degrading: %s", label, result)
-        return None
-    if isinstance(result, BaseException):
-        raise result
-    return result

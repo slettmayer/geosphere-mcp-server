@@ -77,7 +77,8 @@ One module per responsibility. No sub-packages.
 
 **`geosphere_api.py` (Data Access Layer)**
 - Owns: all HTTP communication, URL/query construction, GeoJSON parsing, error taxonomy
-  (connection/timeout, 429, out-of-domain 400)
+  (connection/timeout, 429, out-of-domain 400), and `optional_response`, which drops a failed secondary
+  dataset (nowcast, INCA, C-LAEF, daily AQI) with a log line
 - Does not own: session creation/teardown, merge logic, MCP concerns
 - Raises typed exceptions on failure (see Error Signaling)
 
