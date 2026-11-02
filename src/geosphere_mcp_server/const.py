@@ -12,6 +12,9 @@ from datetime import timedelta
 
 GEOSPHERE_API_BASE_URL = "https://dataset.api.hub.geosphere.at/v1"
 GEOSPHERE_TIMEOUT = 30
+# Retry a rate-limited request once when the API asks to wait no longer than
+# this (seconds); otherwise surface the limit to the caller immediately.
+RATE_LIMIT_RETRY_MAX_S = 5.0
 # GeoSphere covers Austria + the Alpine region, all within CET/CEST. Used to
 # render its UTC stamps and to match its daily values to a calendar day.
 GEOSPHERE_TZ = "Europe/Vienna"
@@ -31,8 +34,8 @@ DATASET_CHEM_AQI = ("forecast", "chem_aqi-v1-1d-3km")
 # covers the interval *ending* at its stamp; `scripts/record_fixtures.py`
 # prints the classification):
 #   * instantaneous at the stamp: 2t, 2r, 10u/10v, tcc (%), cape, snowlmt;
-#   * the interval ending at the stamp: 10fg (peak gust), tp and sf (per-hour
-#     amounts, kg m-2, not run-accumulated).
+#   * the interval ending at the stamp: 10fg (peak gust) and tp (per-hour
+#     amount, kg m-2, not run-accumulated).
 # `sy` is null at t0 too. Its precipitation classes follow `tp` at the same
 # stamp, so it describes the interval ending there and is read one stamp on,
 # like `tp`; its cloud classes bin `tcc` at that later stamp -- see
@@ -45,7 +48,6 @@ AROME_PARAMETERS = (
     "10fg",
     "tcc",
     "tp",
-    "sf",
     "snowlmt",
     "cape",
     "sy",
@@ -60,8 +62,8 @@ AROME_PARAMETERS = (
 #   * cape_p90 (J/kg): instantaneous, like the deterministic `cape` -- it has
 #     a value at the run's t0 -- so it is read at its own stamp.
 ENSEMBLE_PARAMETERS = ("tp_p10", "tp_p50", "tp_p90", "cape_p90")
-NOWCAST_PARAMETERS = ("t2m", "td", "rh2m", "rr", "pt", "dd", "ff", "fx")
-INCA_PARAMETERS = ("T2M", "TD2M", "RH2M", "RR", "P0", "GL", "UU", "VV")
+NOWCAST_PARAMETERS = ("t2m", "rh2m", "rr", "pt", "dd", "ff", "fx")
+INCA_PARAMETERS = ("T2M", "RH2M", "RR", "P0", "UU", "VV")
 # The four pollutants WRF-Chem publishes, in display order: (uniform key,
 # display label, WRF-Chem parameter name). This one table drives both the
 # request parameters and the renderer's labels — the lists below are derived
@@ -81,20 +83,15 @@ CHEM_AQI_PARAMETERS = ("aqi",)
 # INCA analyses trail real time by <1 h; query a window of the last 3 hours.
 INCA_LOOKBACK_HOURS = 3
 # How old INCA's hourly `RR` may get before the condition derivation stops
-# treating it as evidence about *now* (seconds). Only that derivation consults
-# it; `is_precipitating` never does.
+# treating it as evidence about *now* (seconds).
 #
 # This bound catches a slice that has stopped updating, NOT ordinary lag. INCA
-# publishes ~30 min after the hour it analyses and the previous slice is served
-# until the next appears, so the freshest `RR` in existence is routinely up to
-# ~90 min old (see `merge_current_conditions`, which says the same of
-# `observed_at`). A bound at or below that would reject the best data the
-# source has for part of every publish cycle, flapping the condition between
-# `rainy` and symbol-derived once an hour through steady rain -- worse than the
-# staleness it set out to fix. Two hours is comfortably past the normal worst
-# case: by then INCA should have published two newer analyses, so a slice this
-# old means GeoSphere's own pipeline has stalled and is serving the same
-# analysis to every caller. That is the unbounded case this exists for.
+# publishes ~30 min after the hour it analyses and serves the previous slice
+# until the next appears, so the freshest `RR` is routinely up to ~90 min old;
+# a bound at or below that would flap the condition between `rainy` and the
+# symbol once an hour through steady rain. By two hours INCA should have
+# published two newer analyses, so a slice this old means its pipeline has
+# stalled.
 INCA_RR_MAX_AGE_SECONDS = 2 * 60 * 60
 
 # Stepped precipitation probability, an estimate derived here from the
@@ -196,15 +193,13 @@ FALLING_NOW_LABELS: dict[str, tuple[str, str]] = {
 RATE_LOOKBACK = timedelta(minutes=30)
 
 # How far back the nowcast request reaches, anchored to a bucket boundary.
-# Without a `start` the endpoint begins at the bucket covering `now`, so the
-# series carries exactly one stamp at or before it -- measured 2026-09-11
-# against the live API, 11 buckets per response, ten of them in the future.
-# That silently disabled the `RATE_LOOKBACK` peak, which needs more than the
-# matched bucket to mean anything. Like `HOURLY_LOOKBACK_HOURS` the anchor is
-# what matters: the API rounds a mid-interval `start` *up* to the next stamp,
-# so it is floored to the 15-min grid before this is subtracted. One bucket of
-# slack past `RATE_LOOKBACK`; the API clamps to the newest run's own t0
-# regardless, which sits ~25-35 min back, so asking for more buys nothing.
+# Without a `start` the endpoint begins at the bucket covering `now`, leaving
+# one stamp at or before it, and the `RATE_LOOKBACK` peak needs more than the
+# matched bucket. Like `HOURLY_LOOKBACK_HOURS` the anchor is what matters: the
+# API rounds a mid-interval `start` *up* to the next stamp, so it is floored to
+# the 15-min grid before this is subtracted. One bucket of slack past
+# `RATE_LOOKBACK`; the API clamps to the newest run's own t0 regardless, which
+# sits ~25-35 min back, so asking for more buys nothing.
 NOWCAST_LOOKBACK = RATE_LOOKBACK + timedelta(minutes=15)
 
 # Nowcast `rr` buckets carry the millimetres that fell within one 15-min step,
@@ -248,13 +243,6 @@ AQI_BAND_LABELS = {
     5: "very poor",
     6: "extremely poor",
 }
-
-
-def aqi_label(band: int | None) -> str | None:
-    """Label for an EEA band index (1-6); None for unknown or out-of-range."""
-    if band is None:
-        return None
-    return AQI_BAND_LABELS.get(int(band))
 
 
 # --- Shared condition vocabulary ---

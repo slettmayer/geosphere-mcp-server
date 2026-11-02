@@ -1,8 +1,8 @@
 """Markdown renderers for the four weather tools.
 
 Pure functions, no I/O. Each tool has exactly one renderer, fed by a
-normalization step that folds the dicts :mod:`weather` and :mod:`air_quality`
-produce into the uniform shape the renderer reads.
+normalization step that localizes the dicts :mod:`weather` and
+:mod:`air_quality` produce and adds what the renderer prints alongside them.
 
 Units are metric. Timestamps arrive UTC and are rendered in the Alpine local
 time (``Europe/Vienna`` — GeoSphere only covers Austria and the Alps, which
@@ -12,13 +12,13 @@ and are emitted verbatim (e.g. ``partlycloudy``).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from geosphere_mcp_server.const import (
     AIR_QUALITY_POLLUTANTS,
+    AQI_BAND_LABELS,
     AROME_MAX_HOURS,
     ENSEMBLE_MAX_AGE,
     FALLING_NOW_LABELS,
@@ -31,7 +31,6 @@ from geosphere_mcp_server.const import (
     POP_P90_WET_PCT,
     PRECIP_MIN_MM,
     THUNDER_CAPE_JKG,
-    aqi_label,
 )
 from geosphere_mcp_server.outlook import (
     ensemble_is_current,
@@ -76,29 +75,40 @@ def _hm(when: datetime | None) -> str | None:
     return None if when is None else when.strftime("%H:%M")
 
 
-def _tz_line(tz_id: str | None, tz_abbr: str | None) -> str | None:
-    """Render the ``🕐 Timezone`` line, or None when unknown."""
-    if not tz_id and not tz_abbr:
-        return None
-    if tz_id and tz_abbr:
-        return f"🕐 Timezone: {tz_id} ({tz_abbr})"
-    return f"🕐 Timezone: {tz_id or tz_abbr}"
+def _tz_line(tz_abbr: str | None) -> str:
+    """Render the ``🕐 Timezone`` line, with the abbreviation when known."""
+    suffix = f" ({tz_abbr})" if tz_abbr else ""
+    return f"🕐 Timezone: {GEOSPHERE_TZ}{suffix}"
+
+
+def _source(sources: list[str], suffix: str = "") -> str:
+    """Render the datasets behind an answer, e.g. ``GeoSphere (AROME)``."""
+    return f"GeoSphere ({' + '.join(sources)}{suffix})"
+
+
+def _model_header(data: dict[str, Any]) -> str:
+    """The ``AROME model, reference … · Source: …`` line of the forecast tools."""
+    header = "AROME model"
+    reference = data.get("reference_time")
+    if reference is not None:
+        header += f", reference {reference:%Y-%m-%d %H:%M}"
+        if data.get("tz_abbr"):
+            header += f" {data['tz_abbr']}"
+    return f"{header} · Source: {data['source']}"
 
 
 # --- Current conditions ---
 
 
-def normalize_current_geosphere(
+def normalize_current(
     current: dict[str, Any], latitude: float, longitude: float
 ) -> dict[str, Any]:
-    """Fold a :func:`weather.async_fetch_current_conditions` dict into the
-    uniform current shape, localizing the UTC observation time to Vienna."""
+    """Shape a :func:`weather.async_fetch_current_conditions` dict for
+    rendering, localizing the UTC observation time to Vienna."""
     tz = ZoneInfo(GEOSPHERE_TZ)
     observed = current.get("observed_at")
     observed_local = observed.astimezone(tz) if observed is not None else None
     precip_at = current.get("precipitation_1h_at")
-    sources = current.get("sources") or []
-    source = f"GeoSphere ({' + '.join(sources)})" if sources else "GeoSphere"
     return {
         "latitude": latitude,
         "longitude": longitude,
@@ -117,14 +127,13 @@ def normalize_current_geosphere(
         "pressure_hpa": current.get("pressure_hpa"),
         "cloud_cover_pct": current.get("cloud_cover_pct"),
         "observed_at": observed_local,
-        "tz_id": GEOSPHERE_TZ,
         "tz_abbr": observed_local.tzname() if observed_local is not None else None,
-        "source": source,
+        "source": _source(current["sources"]),
     }
 
 
 def render_current(data: dict[str, Any]) -> str:
-    """Render the uniform current-conditions dict as compact emoji markdown."""
+    """Render the normalized current-conditions dict as compact emoji markdown."""
     lines = [f"# Current Weather at {_coords(data['latitude'], data['longitude'])}", ""]
 
     temp = _temp(data.get("temperature_c"))
@@ -160,10 +169,8 @@ def render_current(data: dict[str, Any]) -> str:
 
     precip = _mm(data.get("precipitation_1h_mm"))
     if precip is not None:
-        # Dated by its own stamp, not by the source line's observation time.
-        # The two come from the same INCA slice but not the same row, so a
-        # slice with a current temperature and an hours-old `RR` would
-        # otherwise read as an hour of rain that has just fallen.
+        # Dated by its own stamp, not the observation time: see
+        # `weather.merge_current_conditions`.
         covers = _hm(data.get("precipitation_1h_at"))
         window = f"hour to {covers}" if covers is not None else "last hour"
         lines.append(f"🌧️ Precipitation ({window}): {precip} mm")
@@ -176,9 +183,7 @@ def render_current(data: dict[str, Any]) -> str:
     if cloud is not None:
         lines.append(f"☁️ Cloud cover: {cloud}%")
 
-    tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
-    if tz_line is not None:
-        lines.append(tz_line)
+    lines.append(_tz_line(data.get("tz_abbr")))
 
     observed = _hm(data.get("observed_at"))
     source_line = f"📡 Source: {data['source']}"
@@ -207,7 +212,7 @@ def _hourly_line(hour: dict[str, Any]) -> str:
     traces to a thousandth of a millimetre, and "0 mm" beside a chance of
     rain reads as a contradiction.
     """
-    tstr = _hm(hour.get("time")) or "??:??"
+    tstr = f"{hour['time']:%H:%M}"
     temp = _temp(hour.get("temperature_c"))
     head = f"{tstr}: {temp}°C" if temp is not None else f"{tstr}: n/a"
     if hour.get("condition"):
@@ -226,27 +231,29 @@ def _hourly_line(hour: dict[str, Any]) -> str:
     if wind is not None:
         segments.append(f"wind {wind} m/s")
 
+    snow_limit = _round_int(hour.get("snow_limit_m"))
+    if snow_limit is not None:
+        segments.append(f"snow limit {snow_limit} m")
+
     if segments:
         head += ", " + ", ".join(segments)
     return head
 
 
-def normalize_hourly_geosphere(
+def normalize_hourly(
     assembled: dict[str, Any],
     latitude: float,
     longitude: float,
     requested_hours: int,
 ) -> dict[str, Any]:
-    """Fold an :func:`weather.assemble_hourly_forecast` result into the uniform
-    hourly shape, localizing times to Vienna and computing the horizon note."""
+    """Shape an :func:`weather.async_fetch_hourly_forecast` result for
+    rendering, localizing times to Vienna and computing the horizon note."""
     tz = ZoneInfo(GEOSPHERE_TZ)
     hours = [
-        {**hour, "time": hour["time"].astimezone(tz)}
-        for hour in assembled.get("hourly", [])
+        {**hour, "time": hour["time"].astimezone(tz)} for hour in assembled["hourly"]
     ]
     reference = assembled.get("reference_time")
     reference_local = reference.astimezone(tz) if reference is not None else None
-    sources = assembled.get("sources") or ["AROME"]
 
     note = None
     if hours and len(hours) < requested_hours:
@@ -261,48 +268,35 @@ def normalize_hourly_geosphere(
         "longitude": longitude,
         "requested_hours": requested_hours,
         "hours": hours,
-        "model": "AROME",
         "reference_time": reference_local,
-        "tz_id": GEOSPHERE_TZ,
         "tz_abbr": reference_local.tzname() if reference_local is not None else None,
-        "source": f"GeoSphere ({' + '.join(sources)})",
+        "source": _source(assembled["sources"]),
         "note": note,
     }
 
 
 def render_hourly(data: dict[str, Any]) -> str:
-    """Render the uniform hourly dict as compact emoji markdown."""
-    requested = data.get("requested_hours") or len(data.get("hours", []))
+    """Render the normalized hourly dict as compact emoji markdown."""
     lines = [
-        f"# {requested}-Hour Forecast for "
+        f"# {data['requested_hours']}-Hour Forecast for "
         f"{_coords(data['latitude'], data['longitude'])}",
+        "",
+        _model_header(data),
         "",
     ]
 
-    header = f"{data['model']} model"
-    reference = data.get("reference_time")
-    if reference is not None:
-        header += f", reference {reference:%Y-%m-%d %H:%M}"
-        if data.get("tz_abbr"):
-            header += f" {data['tz_abbr']}"
-    header += f" · Source: {data['source']}"
-    lines.append(header)
-    lines.append("")
-
-    hours = data.get("hours", [])
+    hours = data["hours"]
     shows_chance = False
     if hours:
         current_day: date | None = None
         for hour in hours:
-            when = hour.get("time")
-            day = when.date() if when is not None else None
-            if day is not None and day != current_day:
-                lines.append(f"{when:%a} {when:%Y-%m-%d}")
-                current_day = day
-            indent = "  " if current_day is not None else ""
+            when = hour["time"]
+            if when.date() != current_day:
+                lines.append(f"{when:%a %Y-%m-%d}")
+                current_day = when.date()
             line = _hourly_line(hour)
             shows_chance = shows_chance or "% chance)" in line
-            lines.append(f"{indent}{line}")
+            lines.append(f"  {line}")
     else:
         lines.append("No forecast hours available for the requested window.")
 
@@ -319,88 +313,57 @@ def render_hourly(data: dict[str, Any]) -> str:
 # --- Storm outlook ---
 
 
-def _outlook(
-    rows: list[dict[str, Any]],
-    now: datetime,
-    ensemble_reference_time: datetime | None,
-    localize: Callable[[datetime], datetime] | None = None,
+def normalize_outlook(
+    assembled: dict[str, Any],
+    latitude: float,
+    longitude: float,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Run every outlook derivation over one hourly series.
+    """Run every outlook derivation over an assembled hourly forecast.
 
-    ``rows`` and ``now`` must share a timezone convention (both aware, or both
-    naive local). ``localize`` optionally maps the resulting timestamps into the
-    zone the renderer prints.
-
-    Each horizon is windowed once and read from, rather than every derivation
-    re-walking the series for itself. Whether the ensemble may vote is decided
+    The derivation runs on the aware UTC rows; only the reported timestamps are
+    localized to Vienna, so no comparison ever crosses a zone. Each horizon is
+    windowed once and read from, and whether the ensemble may vote is decided
     once, so the windowed answer and the full scan cannot disagree on it.
     """
-    ensemble = ensemble_is_current(ensemble_reference_time, now)
+    now = now or datetime.now(UTC)
+    tz = ZoneInfo(GEOSPHERE_TZ)
+    rows = assembled["hourly"]
+    ensemble = ensemble_is_current(assembled.get("ensemble_reference_time"), now)
     short_window = window(rows, OUTLOOK_SHORT_HORIZON_HOURS, now)
     long_window = window(rows, OUTLOOK_LONG_HORIZON_HOURS, now)
     gust_short, gust_short_at = max_gust(short_window)
     gust_long, gust_long_at = max_gust(long_window)
     storm_short, storm_short_source = thunderstorm_outlook(short_window, ensemble)
     storm_at, storm_source = next_thunderstorm(rows, now, ensemble)
+    reference = assembled.get("reference_time")
+    reference_local = reference.astimezone(tz) if reference is not None else None
 
-    def _when(value: datetime | None) -> datetime | None:
-        if value is None or localize is None:
-            return value
-        return localize(value)
+    def local(when: datetime | None) -> datetime | None:
+        return when.astimezone(tz) if when is not None else None
 
     return {
+        "latitude": latitude,
+        "longitude": longitude,
         "short_horizon_hours": OUTLOOK_SHORT_HORIZON_HOURS,
         "long_horizon_hours": OUTLOOK_LONG_HORIZON_HOURS,
         "max_gust_short_ms": gust_short,
-        "max_gust_short_at": _when(gust_short_at),
+        "max_gust_short_at": local(gust_short_at),
         "max_gust_long_ms": gust_long,
-        "max_gust_long_at": _when(gust_long_at),
+        "max_gust_long_at": local(gust_long_at),
         "thunderstorm_short": storm_short,
         "thunderstorm_short_source": storm_short_source,
-        "next_thunderstorm_at": _when(storm_at),
+        "next_thunderstorm_at": local(storm_at),
         "next_thunderstorm_source": storm_source,
         "ensemble_current": ensemble,
         "max_cape_long_jkg": max_cape(long_window),
         "hours_available": len(rows),
-        # How far ahead the all-clear above actually reaches. Nominally ~60 h,
-        # but publication lag and a stale or truncated run hand over fewer,
-        # and the all-clear must name the span it was actually scanned over.
+        # How far ahead an all-clear actually reaches: nominally ~60 h, but
+        # publication lag and a stale or truncated run hand over fewer.
         "scanned_horizon_hours": horizon_hours(rows, now),
-    }
-
-
-def normalize_outlook_geosphere(
-    assembled: dict[str, Any],
-    latitude: float,
-    longitude: float,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    """Fold an assembled GeoSphere hourly forecast into the uniform outlook shape.
-
-    The derivation runs on the aware UTC rows; only the reported timestamps are
-    localized to Vienna, so no comparison ever crosses a zone.
-    """
-    now = now or datetime.now(UTC)
-    tz = ZoneInfo(GEOSPHERE_TZ)
-    rows = assembled.get("hourly", [])
-    data = _outlook(
-        rows,
-        now,
-        assembled.get("ensemble_reference_time"),
-        localize=lambda when: when.astimezone(tz),
-    )
-    sources = assembled.get("sources") or ["AROME"]
-    reference = assembled.get("reference_time")
-    reference_local = reference.astimezone(tz) if reference is not None else None
-    return {
-        **data,
-        "latitude": latitude,
-        "longitude": longitude,
-        "model": "AROME",
         "reference_time": reference_local,
-        "tz_id": GEOSPHERE_TZ,
         "tz_abbr": reference_local.tzname() if reference_local is not None else None,
-        "source": f"GeoSphere ({' + '.join(sources)})",
+        "source": _source(assembled["sources"]),
     }
 
 
@@ -433,7 +396,7 @@ _NO_ENSEMBLE_LINE = (
 
 
 def render_outlook(data: dict[str, Any]) -> str:
-    """Render the uniform storm-outlook dict as compact emoji markdown."""
+    """Render the normalized storm-outlook dict as compact emoji markdown."""
     short = data["short_horizon_hours"]
     long = data["long_horizon_hours"]
     lines = [
@@ -441,17 +404,10 @@ def render_outlook(data: dict[str, Any]) -> str:
         "",
     ]
 
-    header = f"{data['model']} model"
-    reference = data.get("reference_time")
-    if reference is not None:
-        header += f", reference {reference:%Y-%m-%d %H:%M}"
-        if data.get("tz_abbr"):
-            header += f" {data['tz_abbr']}"
-    header += f" · Source: {data['source']}"
-    lines.append(header)
+    lines.append(_model_header(data))
     lines.append("")
 
-    if not data.get("hours_available"):
+    if not data["hours_available"]:
         lines.append("No forecast hours available for the outlook window.")
         return "\n".join(lines)
 
@@ -492,9 +448,7 @@ def render_outlook(data: dict[str, Any]) -> str:
     if cape_max is not None:
         lines.append(f"🌡️ Max CAPE next {long} h: {cape_max} J/kg")
 
-    tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
-    if tz_line is not None:
-        lines.append(tz_line)
+    lines.append(_tz_line(data.get("tz_abbr")))
 
     lines.append("")
     lines.append(
@@ -514,20 +468,19 @@ def render_outlook(data: dict[str, Any]) -> str:
 _POLLUTANT_LABELS = tuple((key, label) for key, label, _ in AIR_QUALITY_POLLUTANTS)
 
 
-def normalize_air_quality_geosphere(
+def normalize_air_quality(
     merged: dict[str, Any],
     latitude: float,
     longitude: float,
 ) -> dict[str, Any]:
-    """Fold an :func:`air_quality.merge_air_quality` dict into the uniform shape."""
+    """Shape an :func:`air_quality.async_fetch_air_quality` dict for rendering."""
     tz = ZoneInfo(GEOSPHERE_TZ)
     observed = merged.get("observed_at")
     observed_local = observed.astimezone(tz) if observed is not None else None
-    sources = merged.get("sources") or ["WRF-Chem"]
     return {
         "latitude": latitude,
         "longitude": longitude,
-        "pollutants": merged.get("pollutants") or {},
+        "pollutants": merged["pollutants"],
         "days": [
             {"label": label, "band": merged.get(f"aqi_band_{key}")}
             for key, label in (
@@ -537,9 +490,8 @@ def normalize_air_quality_geosphere(
             )
         ],
         "observed_at": observed_local,
-        "tz_id": GEOSPHERE_TZ,
         "tz_abbr": observed_local.tzname() if observed_local is not None else None,
-        "source": f"GeoSphere ({' + '.join(sources)}, 3 km)",
+        "source": _source(merged["sources"], ", 3 km"),
     }
 
 
@@ -550,27 +502,27 @@ def _aqi_day_text(day: dict[str, Any]) -> str | None:
     index, so the band is the whole figure.
     """
     band = day.get("band")
-    label = aqi_label(band)
+    label = AQI_BAND_LABELS.get(band)
     if label is None:
         return None
     return f"{band} ({label}) {day['label']}"
 
 
 def render_air_quality(data: dict[str, Any]) -> str:
-    """Render the uniform air-quality dict as compact emoji markdown."""
+    """Render the normalized air-quality dict as compact emoji markdown."""
     lines = [
         f"# Air Quality at {_coords(data['latitude'], data['longitude'])}",
         "",
     ]
 
-    days = [text for text in map(_aqi_day_text, data.get("days", [])) if text]
+    days = [text for text in map(_aqi_day_text, data["days"]) if text]
     if days:
         lines.append(f"🏷️ European AQI: {' · '.join(days)}")
 
     concentrations = [
         f"{label} {round(value)} µg/m³"
         for key, label in _POLLUTANT_LABELS
-        if (value := (data.get("pollutants") or {}).get(key)) is not None
+        if (value := data["pollutants"].get(key)) is not None
     ]
     if concentrations:
         observed = _hm(data.get("observed_at"))
@@ -583,9 +535,7 @@ def render_air_quality(data: dict[str, Any]) -> str:
     if empty:
         lines.append("No air-quality data available for this location.")
     else:
-        tz_line = _tz_line(data.get("tz_id"), data.get("tz_abbr"))
-        if tz_line is not None:
-            lines.append(tz_line)
+        lines.append(_tz_line(data.get("tz_abbr")))
 
     # Named even when nothing came back: which source drew the blank is what
     # tells the caller whether retrying or asking elsewhere is worth anything.

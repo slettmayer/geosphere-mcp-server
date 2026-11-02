@@ -9,13 +9,13 @@ A thunderstorm hour is one whose weather symbol is a thunderstorm code, or
 whose current C-LAEF ensemble run allows a storm. Either suffices: a false
 alarm costs less than a miss.
 
-Operates on the row dicts produced by :func:`weather.assemble_hourly_forecast`,
-read through ``.get`` so a row missing a field is judged on what it carries.
+Operates on the row dicts produced by :func:`weather.assemble_hourly_forecast`.
+Every row has a ``time``; its values are read through ``.get``, so a missing
+value is judged on what the row does carry.
 Gust values are returned in m/s, matching the rows themselves.
 
-Ported from ha-geosphere-next, where the same functions read ``HourlyForecast``
-dataclass attributes. Here :func:`window` is applied once by the caller and
-handed to the window readers, so one series is walked three times, not six.
+:func:`window` is applied once by the caller and handed to the window
+readers, so one series is walked once per horizon.
 """
 
 from __future__ import annotations
@@ -33,24 +33,9 @@ from geosphere_mcp_server.const import (
     THUNDER_SOURCE_SYMBOL,
 )
 
-# Both source paths deliver hourly rows, so the hour a row describes runs from
-# its own stamp to one step later. Used to find the row covering `now` without
-# assuming anything about where the stamps sit on the clock — see `_from`.
-_STEP = timedelta(hours=1)
-
-
-def _from(now: datetime) -> datetime:
-    """Exclusive lower bound selecting the hour already under way, and later.
-
-    A row counts once its hour has not yet ended: ``row + _STEP > now``, i.e.
-    ``row > now - _STEP``. Deliberately *not* ``now.replace(minute=0)``: that
-    form only works while every stamp sits on a whole UTC hour, and it fails
-    in the one direction that matters — landing *above* an in-progress row
-    stamped off the hour grid and dropping it, silently turning a storm under
-    way into an all-clear. The forecast does stamp on whole UTC hours, so this
-    costs nothing; it just does not make the assumption load-bearing.
-    """
-    return now - _STEP
+# A row describes the hour beginning at its stamp, so it still counts while
+# `row + _HOUR > now`: the hour already under way, and every later one.
+_HOUR = timedelta(hours=1)
 
 
 def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
@@ -72,16 +57,10 @@ def window(rows: list[dict[str, Any]], hours: int, now: datetime) -> list[dict]:
     so passing times in a DST-observing zone would make the horizon 11 or 13
     real hours across a transition. GeoSphere stamps are UTC and the derivation
     runs on them directly; only the reported timestamps are localized to Vienna
-    for display. The stamps need not align with the UTC hour grid — see
-    :func:`_from`.
+    for display.
     """
-    start = _from(now)
     end = now + timedelta(hours=hours)
-    return [
-        row
-        for row in rows
-        if row.get("time") is not None and start < row["time"] <= end
-    ]
+    return [row for row in rows if now - _HOUR < row["time"] <= end]
 
 
 def ensemble_is_current(reference_time: datetime | None, now: datetime) -> bool:
@@ -179,20 +158,18 @@ def next_thunderstorm(
     :func:`thunderstorm_outlook`, so whenever that reports a storm in its
     window, this names an hour inside it.
 
-    The scan starts at the hour already under way (see :func:`_from`), so when
+    The scan starts at the hour already under way, so when
     the storm hour is that one the returned timestamp is in the past — by up to
     59 minutes. That is intentional: it means "storm in progress". Downstream
     lead-time math must treat a non-positive lead time as "now" rather than
     assuming the timestamp is always in the future.
     """
-    start = _from(now)
     for row in rows:
-        when = row.get("time")
-        if when is None or when <= start:
+        if row["time"] <= now - _HOUR:
             continue
         source = _source(*_storm_signals(row, ensemble))
         if source is not None:
-            return when, source
+            return row["time"], source
     return None, None
 
 
@@ -204,7 +181,7 @@ def horizon_hours(rows: list[dict[str, Any]], now: datetime) -> int | None:
     "none in the forecast horizon" is only honest next to the horizon it was
     actually scanned over.
     """
-    times = [row["time"] for row in rows if row.get("time") is not None]
-    if not times:
+    if not rows:
         return None
-    return max(0, round((max(times) - now).total_seconds() / 3600))
+    last = max(row["time"] for row in rows)
+    return max(0, round((last - now).total_seconds() / 3600))

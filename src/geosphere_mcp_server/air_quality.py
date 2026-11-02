@@ -3,15 +3,12 @@
 ``merge_air_quality`` takes already-fetched :class:`GeoSphereResponse` objects
 and is fully testable without I/O; ``async_fetch_air_quality`` orchestrates the
 two concurrent HTTP calls and applies the graceful-degradation rule.
-
-Ported from the ha-geosphere-next air-quality coordinator.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,13 +23,10 @@ from geosphere_mcp_server.const import (
     GEOSPHERE_TZ,
 )
 from geosphere_mcp_server.geosphere_api import (
-    GeoSphereApiError,
-    GeoSphereOutOfDomainError,
     GeoSphereResponse,
     async_get_timeseries,
+    optional_response,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 
 def merge_air_quality(
@@ -70,9 +64,6 @@ def merge_air_quality(
 
     return {
         "observed_at": observed_at,
-        "reference_time": chem.reference_time,
-        "grid_latitude": chem.grid_latitude,
-        "grid_longitude": chem.grid_longitude,
         "pollutants": pollutants,
         # EEA band index (1-6). GeoSphere publishes no underlying numeric
         # index, so the band is the whole figure the renderer has to work with.
@@ -97,10 +88,18 @@ async def async_fetch_air_quality(
     notice. The result carries a ``sources`` list of the contributing datasets.
     """
     now = now or datetime.now(UTC)
+    # Only the stamp nearest `now` is read: one of the two hours around it.
+    hour = now.replace(minute=0, second=0, microsecond=0)
 
     chem_res, aqi_res = await asyncio.gather(
         async_get_timeseries(
-            session, *DATASET_CHEM, CHEM_PARAMETERS, latitude, longitude
+            session,
+            *DATASET_CHEM,
+            CHEM_PARAMETERS,
+            latitude,
+            longitude,
+            start=hour,
+            end=hour + timedelta(hours=1),
         ),
         async_get_timeseries(
             session, *DATASET_CHEM_AQI, CHEM_AQI_PARAMETERS, latitude, longitude
@@ -112,15 +111,7 @@ async def async_fetch_air_quality(
         raise chem_res
     chem: GeoSphereResponse = chem_res
 
-    aqi: GeoSphereResponse | None = None
-    if isinstance(aqi_res, GeoSphereOutOfDomainError):
-        _LOGGER.debug("Daily AQI outside coverage, keeping pollutants only")
-    elif isinstance(aqi_res, GeoSphereApiError):
-        _LOGGER.warning("AQI fetch failed, keeping pollutants only: %s", aqi_res)
-    elif isinstance(aqi_res, BaseException):
-        raise aqi_res
-    else:
-        aqi = aqi_res
+    aqi = optional_response(aqi_res, "Daily AQI")
 
     merged = merge_air_quality(chem, aqi, now)
     merged["sources"] = ["WRF-Chem"] + (["daily AQI"] if aqi is not None else [])

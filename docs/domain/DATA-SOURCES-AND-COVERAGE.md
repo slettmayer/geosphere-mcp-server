@@ -46,16 +46,17 @@ Resource IDs, the per-dataset parameter lists, and the 30 s request timeout live
 is that ensemble on the same grid, publishing only p10/p50/p90 percentiles — no member counts.
 
 Requested parameters (`AROME_PARAMETERS`): `2t` (°C), `2r` (%), `10u`/`10v` (wind components),
-`10fg` (peak 10 m gust, m/s), `tcc` (cloud cover, **%**), `tp`/`sf` (per-hour precipitation/snowfall,
-kg m⁻²), `snowlmt` (m), `cape` (J/kg, declared `m2 s-2`, which is the same unit) and `sy`
+`10fg` (peak 10 m gust, m/s), `tcc` (cloud cover, **%**), `tp` (per-hour precipitation, kg m⁻²),
+`snowlmt` (m), `cape` (J/kg, declared `m2 s-2`, which is the same unit) and `sy`
 (GeoSphere's weather-symbol code — see [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)). From the
 ensemble (`ENSEMBLE_PARAMETERS`): `tp_p10`, `tp_p50`, `tp_p90` (kg m⁻²) and `cape_p90` (J/kg). There is
 no convective inhibition and no run-accumulated series. The dataset also publishes `msl`, `pt` (a
-precipitation-type code distinct from the nowcast's), `rain`, `ssrd` and `sund`, which are not requested.
+precipitation-type code distinct from the nowcast's), `rain`, `sf`, `ssrd` and `sund`, which are not
+requested.
 
 Each parameter either holds at its stamp or covers the interval **ending** at it, and which is decided by
 measurement, not by name: requested from the run's own t0, an interval parameter is `null` at index 0.
-`10fg`, `tp`, `sf`, `sy` and the `tp` percentiles are interval-ending, so a row stamped `T` reads them at
+`10fg`, `tp`, `sy` and the `tp` percentiles are interval-ending, so a row stamped `T` reads them at
 the *next* stamp to describe the hour `T..T+1h`; `2t`, `2r`, `10u`/`10v`, `tcc`, `cape`, `snowlmt` and
 `cape_p90` are instantaneous and read at `T`. `scripts/record_fixtures.py` prints this classification, and
 the recorded fixtures pin it — see [../tech/TESTING.md](../tech/TESTING.md). A new parameter has to be
@@ -73,6 +74,9 @@ hours past the window the caller asked for — one because the last hour's inter
 following stamp, one so rounding at the boundary cannot clip that successor. A 6-hour request therefore
 transfers 9 hourly steps rather than the full horizon. A `start` before the run's t0 comes back at t0.
 `get_storm_outlook` asks for `AROME_MAX_HOURS`, so its scan still spans everything AROME publishes.
+`get_current_weather` bounds its AROME request the same way for the single hour in progress
+(`weather._forecast_bounds`), and `get_air_quality` asks WRF-Chem only for the two hours around now, the
+stamp nearest now being the only one it reads.
 
 Bounds are serialized as naive stamps, which the API reads as UTC, so an aware `start`/`end` is converted
 to UTC first — formatting it directly would drop the offset and shift the whole window.

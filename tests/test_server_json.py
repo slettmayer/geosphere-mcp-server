@@ -4,14 +4,6 @@ These run locally and in CI, minutes before a release rather than during one.
 The registry only validates at publish time — which is *after* the PyPI upload
 has already succeeded and the git tag is immovable, so a rejection there cannot
 be fixed by re-running the job. It costs a whole version number.
-
-That is not hypothetical. The sibling `calc-mcp-server` burned two versions to
-it on 2026-07-30: 0.1.0 on `expected length <= 100` for a 116-character
-description, then 0.1.1 on a missing `mcp-name:` ownership marker. Both times
-PyPI and the GitHub Release succeeded and only the registry step failed.
-
-This repo currently satisfies every check — the description is 98 characters,
-two under the cap. These tests exist so a future edit cannot quietly cross it.
 """
 
 from __future__ import annotations

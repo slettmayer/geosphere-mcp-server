@@ -1,8 +1,4 @@
-"""Tests for the pure forecast-outlook functions.
-
-Cases ported from ha-geosphere-next tests/test_outlook.py, adapted to the row
-dicts this server passes around instead of the HourlyForecast dataclass.
-"""
+"""Tests for the pure forecast-outlook functions."""
 
 from __future__ import annotations
 
@@ -247,19 +243,9 @@ def test_window_rounds_up_to_whole_hourly_steps() -> None:
     )
 
 
-def test_window_skips_rows_without_a_timestamp() -> None:
-    """A malformed row must not crash the comparison."""
-    rows = [{"time": None, "wind_gust_ms": 99.0}, _hour(0, gust=4.0)]
-    assert max_gust(window(rows, 1, NOW)) == (
-        4.0,
-        datetime(2026, 7, 15, 16, 0, tzinfo=UTC),
-    )
-
-
 def test_horizon_hours_measures_what_an_all_clear_covers() -> None:
     """NOW is 16:30, so a series ending at 20:00 leaves 3.5 h -> 4."""
     assert horizon_hours([_hour(0), _hour(4)], NOW) == 4
     # A series already behind us has no horizon left, never a negative one.
     assert horizon_hours([_hour(-5)], NOW) == 0
     assert horizon_hours([], NOW) is None
-    assert horizon_hours([{"time": None}], NOW) is None

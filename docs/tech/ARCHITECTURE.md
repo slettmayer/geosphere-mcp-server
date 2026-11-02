@@ -54,12 +54,11 @@ One module per responsibility. No sub-packages.
   call via `async with`), catching API exceptions and turning them into short markdown error lines
   (including `OUT_OF_DOMAIN_MESSAGE` for an uncovered point), all argument parsing/validation/clamping,
   and the `main()` entry point
-- Argument parsing helpers: `_parse_start` (ISO datetime for `get_hourly_forecast`) and `_clamp` (horizon
+- Argument parsing: `_parse_start` (ISO datetime for `get_hourly_forecast`) and clamping `hours` (horizon
   bounds). Both run **before** any session is opened, so a validation failure never issues an HTTP request.
 - Does not own: HTTP communication, the merge/derivation logic
 - Calls: `weather.py` (fetch + merge), `air_quality.py`, and `format.py` (normalize + render) -- passing
   in the session
-- `RATE_LIMIT_RETRY_MAX_S = 5.0` is defined here (not in `const.py`) -- the only literal threshold outside the central constants module
 
 **`weather.py` (Orchestration Layer)**
 - Owns: the current-conditions merge chain (INCA -> nowcast -> AROME per field), hourly assembly (interval-ending parameters and the weather symbol read one stamp on, wind-from-components, the ensemble's POP estimate and storm inputs per row), the once-per-code warnings for unknown `pt` and `sy` codes
@@ -77,20 +76,21 @@ One module per responsibility. No sub-packages.
 
 **`geosphere_api.py` (Data Access Layer)**
 - Owns: all HTTP communication, URL/query construction, GeoJSON parsing, error taxonomy
-  (connection/timeout, 429, out-of-domain 400)
+  (connection/timeout, 429, out-of-domain 400), and `optional_response`, which drops a failed secondary
+  dataset (nowcast, INCA, C-LAEF, daily AQI) with a log line
 - Does not own: session creation/teardown, merge logic, MCP concerns
 - Raises typed exceptions on failure (see Error Signaling)
 
 **`condition.py` (Pure Derivation)**
-- Owns: `derive_condition_from_symbol` (the `sy` mapping), `derive_current_condition`, `is_thunder_symbol`, `is_precipitating`, `derive_precipitation_type`, `is_night` (astral), Magnus dew point, apparent temperature, wind-from-components
+- Owns: `derive_condition_from_symbol` (the `sy` mapping), `derive_current_condition`, `is_thunder_symbol`, `is_precipitating`, `derive_precipitation_type`, `is_night` (astral), apparent temperature, wind-from-components
 - No I/O, no HTTP, no MCP/HA imports
 
 **`outlook.py` (Pure Derivation)**
 - Owns: the round-up `window`, `ensemble_is_current` (the 12 h age rule), the window readers
   `max_gust` / `max_cape` / `thunderstorm_outlook`, the full-series `next_thunderstorm` (storm hour and
   its signal), and `horizon_hours`
-- Reads the hourly **row dicts** `weather.assemble_hourly_forecast` produces, through `.get`, so an hour
-  missing a field degrades rather than raising
+- Reads the hourly **row dicts** `weather.assemble_hourly_forecast` produces; every row has a `time`, and
+  its values are read through `.get`, so a missing value degrades rather than raising
 - Depends only on `condition.is_thunder_symbol` and `const.py`; no I/O, no MCP/HA imports
 
 **`format.py` (Normalization + Rendering)**
@@ -104,8 +104,7 @@ One module per responsibility. No sub-packages.
   (see [../domain/OUTPUT-CONTRACT.md](../domain/OUTPUT-CONTRACT.md))
 
 **`const.py` (Configuration)**
-- Owns: nearly all literal values -- the API base URL, dataset resource IDs, parameter lists, thresholds, the condition vocabulary, timeouts
-- The sole documented exception is `RATE_LIMIT_RETRY_MAX_S` in `server.py` (see Known Risks)
+- Owns: all literal values -- the API base URL, dataset resource IDs, parameter lists, thresholds, the condition vocabulary, timeouts
 
 ### Data Flow
 ```
@@ -136,11 +135,11 @@ Coverage is decided by the upstream API, not by a hardcoded bounding box: the fe
 
 | Exception | Raised for | Caught by |
 |-----------|------------|-----------|
-| `GeoSphereApiError` | Base; also a rejected request or an unexpected HTTP status | `_guarded` generic handler |
-| `GeoSphereConnectionError` | Network failure (`aiohttp.ClientError` is wrapped) | `_guarded` generic handler |
-| `GeoSphereTimeoutError` | A `GEOSPHERE_TIMEOUT` breach; subclasses `GeoSphereConnectionError` | `_guarded` timeout handler |
-| `GeoSphereRateLimitError` | HTTP 429; carries a `retry_after` attribute | `_guarded` rate-limit handler |
-| `GeoSphereOutOfDomainError` | HTTP 400 containing "outside of dataset bounds" | `_guarded` out-of-domain handler |
+| `GeoSphereApiError` | Base; also a rejected request or an unexpected HTTP status | `_error_line` generic case |
+| `GeoSphereConnectionError` | Network failure (`aiohttp.ClientError` is wrapped) | `_error_line` generic case |
+| `GeoSphereTimeoutError` | A `GEOSPHERE_TIMEOUT` breach; subclasses `GeoSphereConnectionError` | `_error_line` timeout case |
+| `GeoSphereRateLimitError` | HTTP 429; carries a `retry_after` attribute | `_guarded` retry, then `_error_line` |
+| `GeoSphereOutOfDomainError` | HTTP 400 containing "outside of dataset bounds" | `_error_line` out-of-domain case |
 
 **Validation lines** are returned by the tool body before `_guarded` runs and before any session opens:
 
@@ -149,22 +148,21 @@ Coverage is decided by the upstream API, not by a hardcoded bounding box: the fe
 An over-long `hours` value is **clamped silently** rather than rejected — see
 [../domain/OUTPUT-CONTRACT.md](../domain/OUTPUT-CONTRACT.md).
 
-**Runtime failures** are funnelled through the `_guarded` wrapper, which returns:
+**Runtime failures** are funnelled through the `_guarded` wrapper, which maps each to a line with
+`_error_line`:
 
 - out-of-domain -> `OUT_OF_DOMAIN_MESSAGE`, checked **first** so a point outside the grid never falls
   through to a retryable-sounding line
 - 429 -> the server retries **once**, but only when `retry_after <= RATE_LIMIT_RETRY_MAX_S` (5 s); a
   longer or absent retry-after skips the retry. The message is
   `⚠️ GeoSphere rate limit exceeded (retry in {N}s)` when the API sent a `Retry-After` header, else
-  `... (retry shortly)`. A failing retry is logged and the original rate-limit message is still returned —
-  except when the retry itself is out-of-domain, which yields the coverage line.
+  `... (retry shortly)`. A failing retry answers with its own failure's line.
 - a timeout -> `⚠️ Timeout fetching weather data`
 - anything else -> `⚠️ No weather data available` (logged at warning level)
 
-The timeout branch catches `GeoSphereTimeoutError` **as well as** a bare `TimeoutError`. This matters: the
-client never lets a bare `asyncio` timeout escape — it wraps it in its own typed error — so catching only
-the builtin would silently route every real timeout to the generic handler. Any new client must therefore
-either raise a timeout type or be added to that branch. A non-timeout network failure stays a plain
+The timeout case matches `GeoSphereTimeoutError`, not the builtin `TimeoutError`: the client never lets a
+bare `asyncio` timeout escape — it wraps it in its own typed error. Any new client must therefore raise a
+typed timeout too, or its timeouts land in the generic case. A non-timeout network failure stays a plain
 `GeoSphereConnectionError` and is reported as "no weather data", because the caller can do nothing
 differently about it.
 
@@ -192,7 +190,6 @@ every tool answers an uncovered point identically. Tools never raise across the 
 - GeoSphere dataset resource IDs are versioned -- a catalog rotation breaks the server until IDs in `const.py` are bumped.
 - Per-call session creation prevents HTTP connection reuse.
 - `condition.py` duplicates HA condition string literals to stay import-free -- could drift if HA renames a condition.
-- `RATE_LIMIT_RETRY_MAX_S` lives in `server.py`, not `const.py` -- a documented deviation from the "constants in `const.py` only" convention; move it if a second server-layer threshold appears.
 - The timeout branch depends on the client raising a dedicated timeout type. A new client that wrapped
   timeouts into a plain connection error would silently regress to the generic "no data" line, since a
   bare `TimeoutError` never reaches the server layer.

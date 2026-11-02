@@ -34,7 +34,6 @@ def _assert_rendered(result: str) -> None:
 # --- Vienna: full GeoSphere coverage ---
 
 
-@pytest.mark.asyncio
 async def test_current_weather_vienna_uses_geosphere() -> None:
     result = await get_current_weather(*VIENNA)
     _assert_rendered(result)
@@ -42,7 +41,7 @@ async def test_current_weather_vienna_uses_geosphere() -> None:
     assert "Temperature" in result
     # The source line names every contributing dataset, so this pins the
     # nowcast as actually present. Without it a rejected request degrades
-    # silently -- `_optional_response` swallows any GeoSphereApiError -- and
+    # silently -- `optional_response` swallows any GeoSphereApiError -- and
     # every assertion above still passes while the gust, the precipitation
     # type and `is_precipitating` quietly vanish. The nowcast call carries an
     # anchored `start`; this is what fails loudly if the API ever stops
@@ -50,7 +49,6 @@ async def test_current_weather_vienna_uses_geosphere() -> None:
     assert "nowcast" in result, result
 
 
-@pytest.mark.asyncio
 async def test_hourly_forecast_vienna_uses_geosphere() -> None:
     result = await get_hourly_forecast(*VIENNA, hours=6)
     _assert_rendered(result)
@@ -62,7 +60,6 @@ async def test_hourly_forecast_vienna_uses_geosphere() -> None:
     assert "C-LAEF ensemble" in result, result
 
 
-@pytest.mark.asyncio
 async def test_storm_outlook_vienna_uses_geosphere() -> None:
     result = await get_storm_outlook(*VIENNA)
     _assert_rendered(result)
@@ -70,7 +67,6 @@ async def test_storm_outlook_vienna_uses_geosphere() -> None:
     assert "Max gust next 1 h: unknown" not in result, result
 
 
-@pytest.mark.asyncio
 async def test_air_quality_vienna_uses_geosphere() -> None:
     result = await get_air_quality(*VIENNA)
     _assert_rendered(result)
@@ -80,14 +76,12 @@ async def test_air_quality_vienna_uses_geosphere() -> None:
 # --- Munich: AROME domain, outside Austria (degraded GeoSphere) ---
 
 
-@pytest.mark.asyncio
 async def test_current_weather_munich_degrades_gracefully() -> None:
     result = await get_current_weather(*MUNICH)
     _assert_rendered(result)
     assert "Temperature" in result
 
 
-@pytest.mark.asyncio
 async def test_hourly_forecast_munich() -> None:
     result = await get_hourly_forecast(*MUNICH, hours=6)
     _assert_rendered(result)
@@ -101,7 +95,6 @@ async def test_hourly_forecast_munich() -> None:
 # keeps an uncovered point from reading as a generic failure.
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool",
     [get_current_weather, get_hourly_forecast, get_storm_outlook, get_air_quality],

@@ -15,13 +15,18 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from mcp.server import MCPServer
 
 from geosphere_mcp_server import __version__, air_quality, weather
 from geosphere_mcp_server import format as fmt
-from geosphere_mcp_server.const import AROME_MAX_HOURS
+from geosphere_mcp_server.const import (
+    AROME_MAX_HOURS,
+    GEOSPHERE_TZ,
+    RATE_LIMIT_RETRY_MAX_S,
+)
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
     GeoSphereRateLimitError,
@@ -29,10 +34,6 @@ from geosphere_mcp_server.geosphere_api import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Retry a rate-limited GeoSphere request once when the server asks us to wait
-# no longer than this; otherwise surface the limit to the caller immediately.
-RATE_LIMIT_RETRY_MAX_S = 5.0
 
 # Returned verbatim for a point outside the grid of whichever dataset the tool
 # asked for. Phrased so a caller learns the location is unservable rather than
@@ -49,8 +50,7 @@ OUT_OF_DOMAIN_MESSAGE = (
 
 mcp = MCPServer(
     "geosphere",
-    # v2 advertises this verbatim and defaults it to "" (v1 had no such
-    # parameter and reported the SDK's own version instead).
+    # Advertised to clients verbatim; the SDK defaults it to "".
     version=__version__,
     instructions=(
         "High-resolution weather forecasts and current conditions for "
@@ -69,53 +69,50 @@ mcp = MCPServer(
 )
 
 
-def _clamp(value: int, low: int, high: int) -> int:
-    """Clamp ``value`` into the inclusive ``[low, high]`` range."""
-    return max(low, min(value, high))
-
-
-def _rate_limit_message(retry_after: float | None) -> str:
-    """Build the user-facing GeoSphere rate-limit line."""
-    if retry_after is not None:
-        return f"⚠️ GeoSphere rate limit exceeded (retry in {int(retry_after)}s)"
-    return "⚠️ GeoSphere rate limit exceeded (retry shortly)"
+def _error_line(err: Exception) -> str:
+    """The markdown line a tool answers with when ``err`` ends its fetch."""
+    if isinstance(err, GeoSphereOutOfDomainError):
+        return OUT_OF_DOMAIN_MESSAGE
+    if isinstance(err, GeoSphereTimeoutError):
+        return "⚠️ Timeout fetching weather data"
+    if isinstance(err, GeoSphereRateLimitError):
+        if err.retry_after is not None:
+            return f"⚠️ GeoSphere rate limit exceeded (retry in {int(err.retry_after)}s)"
+        return "⚠️ GeoSphere rate limit exceeded (retry shortly)"
+    _LOGGER.warning("Weather fetch failed: %s", err)
+    return "⚠️ No weather data available"
 
 
 async def _guarded(work: Callable[[], Awaitable[str]]) -> str:
     """Run ``work`` translating every failure into a markdown error line.
 
-    Handles the single retry-once behaviour for short GeoSphere rate limits.
+    A rate limit with a short enough ``Retry-After`` is retried once.
     Out-of-domain is caught here rather than inside each tool: with no
     worldwide source behind it, every tool answers an uncovered point the same
     way, and it is the one failure the caller can act on.
     """
     try:
         return await work()
-    except GeoSphereOutOfDomainError:
-        return OUT_OF_DOMAIN_MESSAGE
-    except (TimeoutError, GeoSphereTimeoutError):
-        # The API client wraps asyncio timeouts into its own typed error, so
-        # both that and a bare TimeoutError must be handled here.
-        return "⚠️ Timeout fetching weather data"
     except GeoSphereRateLimitError as err:
-        retry_after = err.retry_after
-        if retry_after is not None and retry_after <= RATE_LIMIT_RETRY_MAX_S:
-            _LOGGER.info("GeoSphere rate limited, retrying in %ss", retry_after)
-            await asyncio.sleep(retry_after)
-            try:
-                return await work()
-            except GeoSphereOutOfDomainError:
-                return OUT_OF_DOMAIN_MESSAGE
-            except Exception as retry_err:  # noqa: BLE001
-                _LOGGER.warning("GeoSphere retry failed: %s", retry_err)
-        return _rate_limit_message(retry_after)
+        wait = err.retry_after
+        if wait is None or wait > RATE_LIMIT_RETRY_MAX_S:
+            return _error_line(err)
+        _LOGGER.info("GeoSphere rate limited, retrying in %ss", wait)
+        await asyncio.sleep(wait)
     except Exception as err:  # noqa: BLE001
-        _LOGGER.warning("Weather fetch failed: %s", err)
-        return "⚠️ No weather data available"
+        return _error_line(err)
+    try:
+        return await work()
+    except Exception as err:  # noqa: BLE001
+        return _error_line(err)
 
 
 def _parse_start(start: str | None) -> tuple[datetime | None, str | None]:
-    """Parse an ISO start string; return (datetime, error-line-or-None)."""
+    """Parse an ISO start string; return (UTC datetime, error-line-or-None).
+
+    A value without an offset is Vienna local time, the zone every tool
+    reports its times in, so a time read off the output can be passed back.
+    """
     if start is None:
         return None, None
     try:
@@ -125,8 +122,8 @@ def _parse_start(start: str | None) -> tuple[datetime | None, str | None]:
             f"⚠️ Invalid start time '{start}'; use ISO 8601 (e.g. 2026-07-22T15:00)"
         )
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed, None
+        parsed = parsed.replace(tzinfo=ZoneInfo(GEOSPHERE_TZ))
+    return parsed.astimezone(UTC), None
 
 
 @mcp.tool()
@@ -151,7 +148,7 @@ async def get_current_weather(latitude: float, longitude: float) -> str:
             current = await weather.async_fetch_current_conditions(
                 session, latitude, longitude
             )
-            data = fmt.normalize_current_geosphere(current, latitude, longitude)
+            data = fmt.normalize_current(current, latitude, longitude)
             return fmt.render_current(data)
 
     return await _guarded(work)
@@ -178,13 +175,14 @@ async def get_hourly_forecast(
         longitude: Decimal longitude (e.g. 16.3738 for Vienna).
         hours: Number of forecast hours (default 24, clamped to 1–60).
         start: Optional ISO 8601 start time (e.g. "2026-07-22T15:00"); the
-            forecast begins at/after this instant instead of now.
+            forecast begins at/after this instant instead of now. Without
+            an offset it is Vienna local time, like the times in the output.
     """
     start_dt, error = _parse_start(start)
     if error is not None:
         return error
 
-    forecast_hours = _clamp(hours, 1, AROME_MAX_HOURS)
+    forecast_hours = max(1, min(hours, AROME_MAX_HOURS))
 
     async def work() -> str:
         async with aiohttp.ClientSession() as session:
@@ -195,9 +193,7 @@ async def get_hourly_forecast(
                 hours=forecast_hours,
                 start=start_dt,
             )
-            data = fmt.normalize_hourly_geosphere(
-                assembled, latitude, longitude, forecast_hours
-            )
+            data = fmt.normalize_hourly(assembled, latitude, longitude, forecast_hours)
             return fmt.render_hourly(data)
 
     return await _guarded(work)
@@ -244,7 +240,7 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
             assembled = await weather.async_fetch_hourly_forecast(
                 session, latitude, longitude, hours=AROME_MAX_HOURS
             )
-            data = fmt.normalize_outlook_geosphere(assembled, latitude, longitude)
+            data = fmt.normalize_outlook(assembled, latitude, longitude)
             return fmt.render_outlook(data)
 
     return await _guarded(work)
@@ -277,7 +273,7 @@ async def get_air_quality(latitude: float, longitude: float) -> str:
             merged = await air_quality.async_fetch_air_quality(
                 session, latitude, longitude
             )
-            data = fmt.normalize_air_quality_geosphere(merged, latitude, longitude)
+            data = fmt.normalize_air_quality(merged, latitude, longitude)
             return fmt.render_air_quality(data)
 
     return await _guarded(work)

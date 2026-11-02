@@ -26,7 +26,7 @@ Documents naming patterns, code style, import ordering, error handling, and logg
 | MCP tools | `<verb>_<noun>` (no prefix) | `get_current_weather`, `get_hourly_forecast` |
 | Async API fetch | `<verb>_<noun>` module-level async | `async_get_timeseries`, `async_fetch_current_conditions` |
 | Derived logic | `derive_<noun>` | `derive_condition_from_symbol`, `derive_current_condition` |
-| Private helpers | `_<verb>_<noun>` | `_diff`, `_percent`, `_wind_from_components` |
+| Private helpers | `_<verb>_<noun>` | `_parse_start`, `_forecast_bounds`, `_ensemble_by_timestamp` |
 
 - Module-level async functions only -- no client classes.
 
@@ -37,7 +37,6 @@ Documents naming patterns, code style, import ordering, error handling, and logg
 
 ### Constants
 - `UPPER_SNAKE_CASE`, centralized in `const.py` (the API base URL, dataset resource IDs, parameter lists, thresholds, the condition vocabulary, timeouts) -- no inline magic values
-- One documented exception: `RATE_LIMIT_RETRY_MAX_S = 5.0` lives in `server.py`, since it governs presentation-layer retry policy rather than a data/derivation value
 - Test fixture data uses `SAMPLE_*` prefix
 
 ### Logger

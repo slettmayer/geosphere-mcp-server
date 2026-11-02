@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from geosphere_mcp_server import air_quality, weather
 from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
@@ -45,14 +47,10 @@ SAMPLE_CURRENT = {
     "cloud_cover_pct": 40.0,
     "condition": "partlycloudy",
     "sources": ["INCA", "AROME"],
-    "grid_latitude": 48.219,
-    "grid_longitude": 16.362,
 }
 
 SAMPLE_ASSEMBLED = {
     "reference_time": datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
-    "grid_latitude": 48.219,
-    "grid_longitude": 16.362,
     "sources": ["AROME", "C-LAEF ensemble"],
     "hourly": [
         {
@@ -78,43 +76,56 @@ async def test_current_geosphere_happy_path() -> None:
     assert "📡 Source: GeoSphere (INCA + AROME)" in out
 
 
-async def test_current_out_of_domain_reports_no_coverage() -> None:
-    """A point outside the AROME grid gets the coverage line, not a failure.
+# --- failures, common to every tool ---
+
+# Each tool, and the fetch helper it delegates to.
+TOOLS = [
+    pytest.param(
+        get_current_weather, weather, "async_fetch_current_conditions", id="current"
+    ),
+    pytest.param(
+        get_hourly_forecast, weather, "async_fetch_hourly_forecast", id="hourly"
+    ),
+    pytest.param(get_storm_outlook, weather, "async_fetch_hourly_forecast", id="storm"),
+    pytest.param(
+        get_air_quality, air_quality, "async_fetch_air_quality", id="air_quality"
+    ),
+]
+
+
+@pytest.mark.parametrize(("tool", "module", "helper"), TOOLS)
+@pytest.mark.parametrize(
+    ("error", "line"),
+    [
+        pytest.param(
+            GeoSphereOutOfDomainError("oob"), OUT_OF_DOMAIN_MESSAGE, id="coverage"
+        ),
+        pytest.param(
+            GeoSphereTimeoutError("timed out"),
+            "⚠️ Timeout fetching weather data",
+            id="timeout",
+        ),
+        pytest.param(
+            GeoSphereRateLimitError("429", retry_after=30),
+            "⚠️ GeoSphere rate limit exceeded (retry in 30s)",
+            id="rate-limit",
+        ),
+        pytest.param(ValueError("boom"), "⚠️ No weather data available", id="other"),
+    ],
+)
+async def test_every_tool_answers_a_failure_with_its_line(
+    tool, module, helper, error: Exception, line: str
+) -> None:
+    """A point outside coverage gets the coverage line, never a failure line.
 
     With no worldwide source behind it, "outside coverage" is a permanent
-    property of the location — the caller must be able to tell it apart from
-    the transient failures below, which are worth retrying.
+    property of the location; the caller must be able to tell it apart from
+    the transient failures, which are worth retrying.
     """
-    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
-    with patch.object(weather, "async_fetch_current_conditions", fetch):
-        out = await get_current_weather(38.7, -9.1)
-    assert out == OUT_OF_DOMAIN_MESSAGE
-    assert "Outside coverage" in out
-
-
-async def test_current_timeout_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=TimeoutError())
-    with patch.object(weather, "async_fetch_current_conditions", fetch):
-        out = await get_current_weather(LAT, LON)
-    assert out == "⚠️ Timeout fetching weather data"
-
-
-async def test_current_client_timeout_returns_warning() -> None:
-    """The client's wrapped timeout must reach the timeout line, not the
-
-    generic "no data" line -- the API layer never raises a bare TimeoutError.
-    """
-    fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
-    with patch.object(weather, "async_fetch_current_conditions", fetch):
-        out = await get_current_weather(LAT, LON)
-    assert out == "⚠️ Timeout fetching weather data"
-
-
-async def test_current_unexpected_error_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=ValueError("boom"))
-    with patch.object(weather, "async_fetch_current_conditions", fetch):
-        out = await get_current_weather(LAT, LON)
-    assert out == "⚠️ No weather data available"
+    fetch = AsyncMock(side_effect=error)
+    with patch.object(module, helper, fetch):
+        out = await tool(LAT, LON)
+    assert out == line
 
 
 # --- rate limiting ---
@@ -180,13 +191,6 @@ async def test_hourly_clamps_hours_to_60() -> None:
     assert fetch.await_args.kwargs["hours"] == 60
 
 
-async def test_hourly_out_of_domain_reports_no_coverage() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
-    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        out = await get_hourly_forecast(38.7, -9.1, hours=24)
-    assert out == OUT_OF_DOMAIN_MESSAGE
-
-
 async def test_hourly_invalid_start_returns_error_line() -> None:
     fetch = AsyncMock(return_value=SAMPLE_ASSEMBLED)
     with patch.object(weather, "async_fetch_hourly_forecast", fetch):
@@ -195,12 +199,27 @@ async def test_hourly_invalid_start_returns_error_line() -> None:
     fetch.assert_not_awaited()
 
 
-async def test_hourly_valid_start_is_parsed_and_passed() -> None:
+@pytest.mark.parametrize(
+    ("start", "expected"),
+    [
+        # No offset: Vienna local, the zone the output is shown in (CEST).
+        ("2026-07-15T14:00", datetime(2026, 7, 15, 12, 0, tzinfo=UTC)),
+        # CET in winter.
+        ("2026-01-15T14:00", datetime(2026, 1, 15, 13, 0, tzinfo=UTC)),
+        # An explicit offset is taken as given.
+        ("2026-07-15T14:00+00:00", datetime(2026, 7, 15, 14, 0, tzinfo=UTC)),
+        ("2026-07-15T14:00+02:00", datetime(2026, 7, 15, 12, 0, tzinfo=UTC)),
+    ],
+)
+async def test_hourly_start_is_parsed_and_passed(
+    start: str, expected: datetime
+) -> None:
     fetch = AsyncMock(return_value=SAMPLE_ASSEMBLED)
     with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        await get_hourly_forecast(LAT, LON, start="2026-07-15T14:00")
+        await get_hourly_forecast(LAT, LON, start=start)
     passed = fetch.await_args.kwargs["start"]
-    assert passed == datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
+    assert passed == expected
+    assert passed.utcoffset() == timedelta(0)
 
 
 # --- get_storm_outlook ---
@@ -273,27 +292,6 @@ def test_storm_outlook_description_states_the_thresholds() -> None:
     assert f"{ENSEMBLE_MAX_AGE.total_seconds() / 3600:.0f} h old" in doc
 
 
-async def test_storm_outlook_out_of_domain_reports_no_coverage() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
-    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        out = await get_storm_outlook(38.7, -9.1)
-    assert out == OUT_OF_DOMAIN_MESSAGE
-
-
-async def test_storm_outlook_timeout_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
-    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        out = await get_storm_outlook(LAT, LON)
-    assert out == "⚠️ Timeout fetching weather data"
-
-
-async def test_storm_outlook_rate_limit_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereRateLimitError("429", retry_after=30))
-    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
-        out = await get_storm_outlook(LAT, LON)
-    assert "⚠️ GeoSphere rate limit exceeded (retry in 30s)" in out
-
-
 # --- get_air_quality ---
 
 SAMPLE_AIR_QUALITY = {
@@ -319,34 +317,6 @@ async def test_air_quality_geosphere_happy_path() -> None:
     assert "2 (fair) today · 3 (moderate) tomorrow · 2 (fair) in 2 days" in out
     assert "NO₂ 18 µg/m³" in out
     assert "📡 Source: GeoSphere (WRF-Chem + daily AQI, 3 km)" in out
-
-
-async def test_air_quality_out_of_domain_reports_no_coverage() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereOutOfDomainError("oob"))
-    with patch.object(air_quality, "async_fetch_air_quality", fetch):
-        out = await get_air_quality(38.7, -9.1)
-    assert out == OUT_OF_DOMAIN_MESSAGE
-
-
-async def test_air_quality_rate_limit_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereRateLimitError("429", retry_after=30))
-    with patch.object(air_quality, "async_fetch_air_quality", fetch):
-        out = await get_air_quality(LAT, LON)
-    assert out == "⚠️ GeoSphere rate limit exceeded (retry in 30s)"
-
-
-async def test_air_quality_timeout_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=GeoSphereTimeoutError("timed out"))
-    with patch.object(air_quality, "async_fetch_air_quality", fetch):
-        out = await get_air_quality(LAT, LON)
-    assert out == "⚠️ Timeout fetching weather data"
-
-
-async def test_air_quality_unexpected_error_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=ValueError("boom"))
-    with patch.object(air_quality, "async_fetch_air_quality", fetch):
-        out = await get_air_quality(LAT, LON)
-    assert out == "⚠️ No weather data available"
 
 
 async def test_air_quality_empty_in_domain_response_is_not_out_of_coverage() -> None:

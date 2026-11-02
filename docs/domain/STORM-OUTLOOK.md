@@ -92,11 +92,7 @@ stamps. A "1 hour" window covers the in-progress hour plus the next one, and can
 ~2 h out. A caller that needs a strict "within the next 60 minutes" answer must compare the returned
 timestamps itself.
 
-The bound is `row > now - 1 h` (`outlook._from`), **not** `now` floored to the top of the hour. The forecast
-does stamp on whole UTC hours, so flooring would work today — but it fails in the one direction that
-matters. A stamp off the hour grid would put the floor *above* the in-progress row and drop it, rendering a
-storm already under way as a clean all-clear. The relative form costs nothing and keeps the grid
-assumption out of the contract.
+The bound is `row > now - 1 h`: a row counts until the hour it describes has ended.
 
 **`next_thunderstorm` can return a timestamp in the past**, by up to 59 minutes, when the storm hour is the
 one already under way. That is the encoding of "a storm is in progress". Lead-time arithmetic downstream
@@ -126,9 +122,9 @@ than an unqualified "forecast horizon". "No storm for 4 h" and "no storm for 60 
 
 ### Degradation and Timestamps
 
-`outlook.py` reads the hourly **row dicts** that `weather.assemble_hourly_forecast` produces, through
-`.get` rather than by indexing — so a row missing a field is judged on what it does carry rather than
-raising. A failed ensemble fetch leaves the ensemble fields `None` and `ensemble_reference_time` unset, so
+`outlook.py` reads the hourly **row dicts** that `weather.assemble_hourly_forecast` produces. Every row
+has a `time`; its values are read through `.get`, so a missing value is judged on what the row does carry.
+A failed ensemble fetch leaves the ensemble fields `None` and `ensemble_reference_time` unset, so
 the ensemble is not current and the outlook rests on the symbol; the renderer says so in an
 `ℹ️ Ensemble signal: unavailable` line.
 

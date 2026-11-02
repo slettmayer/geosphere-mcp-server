@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -103,7 +104,7 @@ def _arome_forecast() -> GeoSphereResponse:
     """Five stamps, 14:00-18:00. NOW is 15:30, so 15:00/16:00/17:00 are emitted.
 
     The series runs one stamp past the last emitted hour on purpose: interval
-    parameters (`10fg`, `tp`, `sf`) and the weather symbol `sy` describe the
+    parameters (`10fg`, `tp`) and the weather symbol `sy` describe the
     interval *ending* at their stamp, so the hour beginning at 17:00 reads
     them from 18:00. Laid out so the hour beginning 15:00 brings 1 mm of rain
     under a rain symbol, 16:00 is dry and partly cloudy, and 17:00 brings
@@ -121,7 +122,6 @@ def _arome_forecast() -> GeoSphereResponse:
             "10fg": [None, 4.0, 6.0, 8.0, 10.0],
             "tcc": [10.0, 20.0, 50.0, 90.0, 90.0],
             "tp": [None, 0.0, 1.0, 0.0, 1.0],
-            "sf": [None, 0.0, 0.0, 0.0, 1.0],
             "snowlmt": [2000.0, 2000.0, 2000.0, 1000.0, 1000.0],
             "cape": [0.0, 0.0, 0.0, 1500.0, 1500.0],
             "sy": [None, 3.0, 8.0, 3.0, 14.0],
@@ -161,7 +161,6 @@ def test_assemble_hourly_drops_past_hours_and_the_successorless_last() -> None:
     assert times == _ts((15, 0), (16, 0), (17, 0))
     assert result["reference_time"] == datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
     assert result["ensemble_reference_time"] == datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
-    assert result["grid_latitude"] == pytest.approx(48.219)
 
 
 def test_assemble_hourly_fields() -> None:
@@ -179,7 +178,6 @@ def test_assemble_hourly_fields() -> None:
     # `tcc` is already a percentage.
     assert first["cloud_cover_pct"] == 20.0
     assert first["snow_limit_m"] == 2000.0
-    assert first["dew_point_c"] is not None
     assert first["weather_symbol"] == 8
     assert first["condition"] == "rainy"
 
@@ -188,7 +186,6 @@ def test_assemble_hourly_fields() -> None:
     assert second["condition"] == "partlycloudy"
 
     third = result["hourly"][2]  # 17:00, snow falls by 18:00 -> snowy
-    assert third["snow_mm"] == 1.0
     assert third["condition"] == "snowy"
     assert third["cape_jkg"] == 1500.0
 
@@ -210,7 +207,6 @@ def test_assemble_hourly_interval_fields_come_from_the_next_stamp() -> None:
             # 5 mm fell between 14:00 and 15:00, under a heavy-rain symbol;
             # nothing after.
             "tp": [5.0, 0.0, 0.0],
-            "sf": [0.0, 0.0, 0.0],
             "10fg": [30.0, 2.0, 2.0],
             "sy": [10.0, 1.0, 1.0],
         },
@@ -332,24 +328,22 @@ def test_assemble_hourly_start_and_hours_filters() -> None:
 @pytest.fixture
 def _fresh_unknown_codes():
     """Each test starts with no unknown `pt` or `sy` code already reported."""
-    weather._UNKNOWN_PT_CODES.clear()
-    weather._UNKNOWN_SY_CODES.clear()
+    weather._REPORTED_CODES.clear()
     yield
-    weather._UNKNOWN_PT_CODES.clear()
-    weather._UNKNOWN_SY_CODES.clear()
+    weather._REPORTED_CODES.clear()
 
 
 @pytest.mark.usefixtures("_fresh_unknown_codes")
 def test_unknown_sy_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
     """Reported once per process, not on every call while it is served."""
     for code in (99, 99, 8, None, 0):
-        weather._warn_unknown_sy_code(code)
+        weather._warn_unknown_code("weather-symbol", code)
     messages = [record.getMessage() for record in caplog.records]
     assert [m for m in messages if "weather-symbol code" in m] == [
-        "Forecast reported weather-symbol code 99, which is not in "
-        "GeoSphere's published table; its hours' condition reads unknown",
-        "Forecast reported weather-symbol code 0, which is not in "
-        "GeoSphere's published table; its hours' condition reads unknown",
+        "GeoSphere reported weather-symbol code 99, which is not in its "
+        "published table; its hours' condition reads unknown",
+        "GeoSphere reported weather-symbol code 0, which is not in its "
+        "published table; its hours' condition reads unknown",
     ]
 
 
@@ -363,7 +357,6 @@ def _nowcast(
     stamps = stamps or _ts((15, 0), (15, 15), (15, 30), (15, 45))
     default: dict[str, list[float | None]] = {
         "t2m": [20.0, 20.5, 21.0, 21.5],
-        "td": [10.0, 10.0, 10.0, 10.0],
         "rh2m": [60.0, 60.0, 60.0, 60.0],
         "rr": [0.0, 0.0, 0.0, 0.0],
         "pt": [255, 255, 255, 255],
@@ -381,11 +374,9 @@ def _inca(rr: list[float | None] | None = None) -> GeoSphereResponse:
         stamps,
         {
             "T2M": [9.0, 9.5],
-            "TD2M": [5.0, 5.5],
             "RH2M": [70.0, 72.0],
             "RR": rr if rr is not None else [0.4, 0.6],
             "P0": [101300.0, 101300.0],
-            "GL": [100.0, 150.0],
             "UU": [0.0, 0.0],
             "VV": [-3.0, -3.0],
         },
@@ -410,17 +401,14 @@ def test_merge_prefers_inca_over_nowcast_and_arome() -> None:
     merged = merge_current_conditions(
         _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
     )
-    # INCA latest (14:30) wins for temp/humidity/wind/dew/pressure.
+    # INCA latest (14:30) wins for temp/humidity/wind/pressure.
     assert merged["temperature_c"] == 9.5
     assert merged["humidity_pct"] == 72.0
-    assert merged["dew_point_c"] == 5.5
     assert merged["pressure_hpa"] == 1013.0  # 101300 Pa -> hPa
-    assert merged["global_radiation_wm2"] == 150.0
     assert merged["precipitation_1h_mm"] == 0.6  # INCA RR
     assert merged["observed_at"] == datetime(2026, 7, 15, 14, 30, tzinfo=UTC)
-    # Cloud, CAPE and the symbol come from AROME's hour in progress (15:00).
+    # Cloud and the symbol come from AROME's hour in progress (15:00).
     assert merged["cloud_cover_pct"] == 20.0
-    assert merged["cape_jkg"] == 0.0
     assert merged["weather_symbol"] == 8
     # Gust prefers nowcast fx.
     assert merged["wind_gust_ms"] == 5.0
@@ -437,12 +425,9 @@ def test_merge_arome_only_degraded() -> None:
     assert merged["humidity_pct"] == 80.0
     assert merged["wind_gust_ms"] == 6.0  # `10fg` covering 15:00-16:00
     assert merged["pressure_hpa"] is None  # INCA-only field
-    assert merged["global_radiation_wm2"] is None
-    assert merged["snow_limit_m"] == 2000.0
-    # Nothing observed precipitation, so neither "wet" nor a confident "dry".
-    assert merged["is_precipitating"] is None
     assert merged["precipitation_1h_mm"] is None
-    # ...and the symbol is the only evidence, so its rain stands.
+    # Nothing observed precipitation, so the symbol is the only evidence and
+    # its rain stands.
     assert merged["condition"] == "rainy"
     # AROME rows are stamped at the top of their hour, so at 15:30 these values
     # are half an hour old. Claiming `now` would hide that.
@@ -452,9 +437,8 @@ def test_merge_arome_only_degraded() -> None:
 def test_merge_observed_at_follows_the_temperature_not_precipitation() -> None:
     """An INCA slice with temperature but no RR must not claim to be current.
 
-    `observed_at` used to come from the RR series alone, so an analysis whose
-    precipitation was absent reported `now` while the temperature on display
-    was an hour old -- the one case the timestamp exists to catch.
+    Dated by the precipitation instead, an analysis without `RR` would report
+    `now` while the temperature on display is an hour old.
     """
     inca = _response(
         "inca-v1-1h-1km",
@@ -599,14 +583,12 @@ def test_merge_without_inca_rr_reports_no_hourly_accumulation() -> None:
     """Nowcast buckets are never summed into the hourly total.
 
     The endpoint serves one model run clamped to its own t0, so the buckets on
-    hand cover 15-45 min; summing them published a quarter-hour of rain as an
-    hour. With no INCA `RR` the field is simply absent.
+    hand cover 15-45 min, never an hour. With no INCA `RR` the field is absent.
     """
     nowcast = _nowcast(
         stamps=_ts((14, 45), (15, 0), (15, 15), (15, 30), (15, 45)),
         data={
             "t2m": [20.0, 20.0, 20.0, 20.0, 20.0],
-            "td": [10.0, 10.0, 10.0, 10.0, 10.0],
             "rh2m": [60.0, 60.0, 60.0, 60.0, 60.0],
             "rr": [0.5, 0.1, 0.2, 0.3, 9.0],
             "pt": [255, 255, 255, 255, 255],
@@ -621,15 +603,6 @@ def test_merge_without_inca_rr_reports_no_hourly_accumulation() -> None:
     assert merged["precipitation_1h_mm"] is None
 
 
-def test_merge_is_precipitating_unknown_without_a_nowcast() -> None:
-    """INCA `RR` never answers "is it raining now" -- that is an hour total."""
-    merged = merge_current_conditions(
-        None, _inca(), _arome_forecast(), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_1h_mm"] == 0.6  # the accumulation still stands
-    assert merged["is_precipitating"] is None
-
-
 def _stale_inca(stamp: tuple[int, int], rr: float = 5.0) -> GeoSphereResponse:
     """A single INCA analysis at `stamp` carrying `rr` of rain."""
     return _response(
@@ -637,11 +610,9 @@ def _stale_inca(stamp: tuple[int, int], rr: float = 5.0) -> GeoSphereResponse:
         _ts(stamp),
         {
             "T2M": [20.0],
-            "TD2M": [10.0],
             "RH2M": [60.0],
             "RR": [rr],
             "P0": [101300.0],
-            "GL": [150.0],
             "UU": [0.0],
             "VV": [-3.0],
         },
@@ -658,21 +629,6 @@ def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
     """
     merged = merge_current_conditions(
         None, _stale_inca((12, 0)), _arome_now(3), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_1h_mm"] == 5.0
-    assert merged["condition"] == "partlycloudy"
-
-
-def test_merge_future_dated_inca_rr_does_not_drive_the_condition() -> None:
-    """A negative age is not freshness.
-
-    `age <= INCA_RR_MAX_AGE_SECONDS` alone is satisfied by a future stamp, so
-    an hour that has not happened yet would read as the freshest reading there
-    is. The fetch path bounds INCA at `end=now`, but this merge takes its own
-    `now` and nothing in the signature ties the two together.
-    """
-    merged = merge_current_conditions(
-        None, _stale_inca((17, 30)), _arome_now(3), 48.219, 16.362, NOW
     )
     assert merged["precipitation_1h_mm"] == 5.0
     assert merged["condition"] == "partlycloudy"
@@ -710,37 +666,7 @@ def test_merge_a_dry_pt_without_a_rate_still_decides() -> None:
     merged = merge_current_conditions(
         nowcast, _stale_inca((14, 30)), _arome_now(8), 48.219, 16.362, NOW
     )
-    assert merged["is_precipitating"] is False
     assert merged["condition"] == "cloudy"
-
-
-def test_merge_precip_type_255_not_precipitating() -> None:
-    merged = merge_current_conditions(
-        _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_type"] == 255
-    assert merged["is_precipitating"] is False
-
-
-def test_merge_precip_type_signals_precipitation() -> None:
-    nowcast = _nowcast(
-        data={
-            "t2m": [15.0, 15.0, 15.0, 15.0],
-            "td": [12.0, 12.0, 12.0, 12.0],
-            "rh2m": [90.0, 90.0, 90.0, 90.0],
-            "rr": [0.5, 0.5, 0.5, 0.5],
-            "pt": [1, 1, 1, 1],
-            "dd": [180.0, 180.0, 180.0, 180.0],
-            "ff": [2.0, 2.0, 2.0, 2.0],
-            "fx": [5.0, 5.0, 5.0, 5.0],
-        }
-    )
-    merged = merge_current_conditions(
-        nowcast, None, _arome_forecast(), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_type"] == 1
-    assert merged["is_precipitating"] is True
-    assert merged["condition"] == "rainy"
 
 
 def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
@@ -748,7 +674,6 @@ def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
     return _nowcast(
         data={
             "t2m": [15.0, 15.0, 15.0, 15.0],
-            "td": [12.0, 12.0, 12.0, 12.0],
             "rh2m": [90.0, 90.0, 90.0, 90.0],
             "rr": [rr, rr, rr, rr],
             "pt": [pt, pt, pt, pt],
@@ -759,11 +684,21 @@ def _nowcast_with(pt: float, rr: float = 0.5) -> GeoSphereResponse:
     )
 
 
-def test_merge_precipitation_kind_reads_the_dry_code() -> None:
+def test_merge_precip_type_255_is_dry() -> None:
     merged = merge_current_conditions(
         _nowcast(), _inca(), _arome_forecast(), 48.219, 16.362, NOW
     )
+    assert merged["precipitation_type"] == 255
     assert merged["precipitation_kind"] == "no_precipitation"
+    assert merged["condition"] == "cloudy"
+
+
+def test_merge_precip_type_signals_precipitation() -> None:
+    merged = merge_current_conditions(
+        _nowcast_with(1), None, _arome_forecast(), 48.219, 16.362, NOW
+    )
+    assert merged["precipitation_type"] == 1
+    assert merged["condition"] == "rainy"
 
 
 def test_merge_precipitation_kind_decodes_snow_at_any_temperature() -> None:
@@ -780,7 +715,7 @@ def test_merge_precipitation_kind_is_absent_when_255_meets_a_rate() -> None:
     merged = merge_current_conditions(
         _nowcast_with(255), None, _arome_forecast(), 48.219, 16.362, NOW
     )
-    assert merged["is_precipitating"] is True
+    assert merged["condition"] == "rainy"
     assert merged["precipitation_kind"] is None
 
 
@@ -790,35 +725,37 @@ def test_merge_unknown_pt_code_has_no_kind() -> None:
     )
     assert merged["precipitation_kind"] is None
     # Still precipitating: an unknown code says *that*, just not *what*.
-    assert merged["is_precipitating"] is True
+    assert merged["condition"] == "rainy"
 
 
 @pytest.mark.usefixtures("_fresh_unknown_codes")
 def test_unknown_pt_code_is_warned_once(caplog: pytest.LogCaptureFixture) -> None:
     """Reported once per process, not on every call while it is falling."""
     for code in (2, 2, 1, 255, None):
-        weather._warn_unknown_pt_code(code)
+        weather._warn_unknown_code("precipitation-type", code)
+    # The same number is tracked per table: 99 is no `pt` code either.
+    weather._warn_unknown_code("weather-symbol", 99)
+    weather._warn_unknown_code("precipitation-type", 99)
     messages = [record.getMessage() for record in caplog.records]
     assert [m for m in messages if "precipitation-type code" in m] == [
-        "Nowcast reported precipitation-type code 2, which is not in "
-        "GeoSphere's published table; reporting no kind for it"
+        "GeoSphere reported precipitation-type code 2, which is not in its "
+        "published table; reporting no kind for it",
+        "GeoSphere reported precipitation-type code 99, which is not in its "
+        "published table; reporting no kind for it",
     ]
 
 
 # --- async_fetch_current_conditions ---
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_all_sources() -> None:
     mock = AsyncMock(side_effect=[_arome_forecast(), _nowcast(), _inca()])
     with patch.object(weather, "async_get_timeseries", mock):
         result = await async_fetch_current_conditions(None, 48.219, 16.362, now=NOW)
     assert result["sources"] == ["INCA", "nowcast", "AROME"]
     assert result["temperature_c"] == 9.5
-    assert result["grid_latitude"] == pytest.approx(48.219)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_anchors_the_arome_request() -> None:
     """The AROME call names a `start`, or the hour in progress may not be in it.
 
@@ -836,9 +773,10 @@ async def test_async_fetch_current_anchors_the_arome_request() -> None:
     arome_call = mock.await_args_list[0]
     expected = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     assert arome_call.kwargs["start"] == expected
+    # Bounded, too: past the hour under way only its successor is read.
+    assert arome_call.kwargs["end"] == NOW + timedelta(hours=3)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_anchors_the_nowcast_request() -> None:
     """The nowcast call names a `start` floored to the 15-min grid.
 
@@ -857,7 +795,6 @@ async def test_async_fetch_current_anchors_the_nowcast_request() -> None:
     assert nowcast_call.kwargs["start"] == bucket - NOWCAST_LOOKBACK
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_degrades_to_arome_only() -> None:
     """INCA/nowcast out-of-domain degrade to an AROME-only snapshot."""
     mock = AsyncMock(
@@ -873,7 +810,6 @@ async def test_async_fetch_current_degrades_to_arome_only() -> None:
     assert result["temperature_c"] == 11.0
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_current_arome_out_of_domain_raises() -> None:
     """AROME out of domain propagates so the caller can fall back."""
     mock = AsyncMock(
@@ -893,7 +829,6 @@ async def test_async_fetch_current_arome_out_of_domain_raises() -> None:
 # --- async_fetch_hourly_forecast ---
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_with_ensemble() -> None:
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
     with patch.object(weather, "async_get_timeseries", mock):
@@ -905,7 +840,6 @@ async def test_async_fetch_hourly_with_ensemble() -> None:
     assert pop[datetime(2026, 7, 15, 16, 0, tzinfo=UTC)] == 70
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_ensemble_failure_omits_pop() -> None:
     mock = AsyncMock(
         side_effect=[_arome_forecast(), GeoSphereOutOfDomainError("ens oob")]
@@ -916,7 +850,6 @@ async def test_async_fetch_hourly_ensemble_failure_omits_pop() -> None:
     assert all(h["precipitation_probability_pct"] is None for h in result["hourly"])
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
     mock = AsyncMock(
         side_effect=[
@@ -931,7 +864,6 @@ async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
         await async_fetch_hourly_forecast(None, 38.7, -9.1, now=NOW)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
     """Both requests ask for one hour before the current top of the hour.
 
@@ -954,7 +886,6 @@ async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
         assert call.kwargs["start"] == expected
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_keeps_the_in_progress_hour() -> None:
     """With the predecessor present, the series starts at the current hour."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -1003,7 +934,6 @@ def test_arome_current_needs_a_successor() -> None:
     assert weather._arome_current(None, 48.219, 16.362, NOW) is None
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
     """`hours=N` must not pull the whole ~60 h horizon and discard most of it."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -1020,7 +950,6 @@ async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
         assert call.kwargs["end"] == top_of_hour + timedelta(hours=8)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
     """A `start` in the future moves the whole fetched window with it."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -1035,7 +964,6 @@ async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
         assert call.kwargs["end"] == later + timedelta(hours=6)
 
 
-@pytest.mark.asyncio
 async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> None:
     """A `start` before now must not drag the window backwards."""
     mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
@@ -1073,7 +1001,7 @@ def test_recorded_stampings_match_the_parameter_tables() -> None:
     Pins the classification `AROME_PARAMETERS` and `ENSEMBLE_PARAMETERS` are
     read by: a parameter that moved class would shift its field by an hour.
     """
-    interval = {"10fg", "tp", "sf", "sy", "tp_p10", "tp_p50", "tp_p90"}
+    interval = {"10fg", "tp", "sy", "tp_p10", "tp_p50", "tp_p90"}
     for name, parameters in (
         ("nwp", AROME_PARAMETERS),
         ("ensemble", ENSEMBLE_PARAMETERS),
@@ -1117,7 +1045,6 @@ def test_recorded_symbol_agrees_with_the_rows_precipitation() -> None:
         assert (row["weather_symbol"] in SY_PRECIPITATION) == wet, row["time"]
 
 
-@pytest.mark.asyncio
 async def test_recorded_current_conditions_end_to_end() -> None:
     """A dry nowcast under the hour's rain symbol reads `cloudy`."""
     mock = AsyncMock(
@@ -1130,6 +1057,42 @@ async def test_recorded_current_conditions_end_to_end() -> None:
     assert result["sources"] == ["INCA", "nowcast", "AROME"]
     assert result["weather_symbol"] == 8
     assert result["precipitation_type"] == 255
-    assert result["is_precipitating"] is False
     assert result["condition"] == "cloudy"
     assert result["cloud_cover_pct"] == 100.0
+
+
+def _bounded(response: GeoSphereResponse, start: datetime, end: datetime):
+    """``response`` cut to ``[start, end]``, as the API serves a bounded request."""
+    keep = [i for i, ts in enumerate(response.timestamps) if start <= ts <= end]
+    return dataclasses.replace(
+        response,
+        timestamps=[response.timestamps[i] for i in keep],
+        parameters={
+            name: dataclasses.replace(series, data=[series.data[i] for i in keep])
+            for name, series in response.parameters.items()
+        },
+    )
+
+
+async def test_recorded_current_conditions_survive_the_request_bounds() -> None:
+    """The bounded AROME request still holds every row the merge reads.
+
+    The merge reads the hour under way and, for its interval fields and
+    weather symbol, the stamp after it. Cutting the recording to the bounds
+    the fetch asks for must not change a single field.
+    """
+    nwp = _recorded("nwp")
+    mock = AsyncMock(side_effect=[nwp, _recorded("nowcast"), _recorded("inca")])
+    with patch.object(weather, "async_get_timeseries", mock):
+        full = await async_fetch_current_conditions(
+            None, RECORDED_LAT, RECORDED_LON, now=RECORDED_AT
+        )
+    bounds = mock.await_args_list[0].kwargs
+    bounded = _bounded(nwp, bounds["start"], bounds["end"])
+    assert len(bounded.timestamps) < len(nwp.timestamps)
+    mock = AsyncMock(side_effect=[bounded, _recorded("nowcast"), _recorded("inca")])
+    with patch.object(weather, "async_get_timeseries", mock):
+        cut = await async_fetch_current_conditions(
+            None, RECORDED_LAT, RECORDED_LON, now=RECORDED_AT
+        )
+    assert cut == full

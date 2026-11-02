@@ -157,17 +157,18 @@ def test_merge_empty_chem_series() -> None:
     }
 
 
-@pytest.mark.asyncio
 async def test_fetch_reports_both_sources() -> None:
-    with patch(
-        "geosphere_mcp_server.air_quality.async_get_timeseries",
-        new=AsyncMock(side_effect=[_chem(), _aqi()]),
-    ):
+    mock = AsyncMock(side_effect=[_chem(), _aqi()])
+    with patch("geosphere_mcp_server.air_quality.async_get_timeseries", new=mock):
         merged = await async_fetch_air_quality(None, 48.22, 16.37, now=NOW)
     assert merged["sources"] == ["WRF-Chem", "daily AQI"]
+    # The pollutants are read at the stamp nearest NOW, so only the two hours
+    # around it are requested.
+    chem_call = mock.await_args_list[0]
+    assert chem_call.kwargs["start"] == datetime(2026, 7, 15, 15, 0, tzinfo=UTC)
+    assert chem_call.kwargs["end"] == datetime(2026, 7, 15, 16, 0, tzinfo=UTC)
 
 
-@pytest.mark.asyncio
 async def test_fetch_degrades_when_the_aqi_fails() -> None:
     """A secondary failure keeps the concentrations alive."""
     with patch(
@@ -180,7 +181,6 @@ async def test_fetch_degrades_when_the_aqi_fails() -> None:
     assert merged["aqi_band_today"] is None
 
 
-@pytest.mark.asyncio
 async def test_fetch_propagates_a_chem_failure() -> None:
     """The primary dataset failing is the caller's problem, not a degradation."""
     with (

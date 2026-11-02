@@ -106,7 +106,7 @@ Hour-by-hour forecast from AROME, up to ~60 h. Each hour's condition is GeoSpher
 | `latitude` | float | required | Decimal latitude (e.g. `48.2208`) |
 | `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
 | `hours` | int | 24 | Forecast hours (clamped to 1–60) |
-| `start` | string | now | Optional ISO 8601 start (e.g. `2026-07-22T15:00`); forecast begins at/after this instant |
+| `start` | string | now | Optional ISO 8601 start (e.g. `2026-07-22T15:00`); forecast begins at/after this instant. Without an offset it is Vienna local time, like the output |
 
 ```
 # 3-Hour Forecast for 48.2208, 16.3738
@@ -114,14 +114,14 @@ Hour-by-hour forecast from AROME, up to ~60 h. Each hour's condition is GeoSpher
 AROME model, reference 2026-07-22 12:00 CEST · Source: GeoSphere (AROME + C-LAEF ensemble)
 
 Wed 2026-07-22
-  15:00: 24.7°C — partlycloudy, wind 3 m/s
-  16:00: 23.9°C — rainy, 1.2 mm (70% chance), wind 4 m/s
-  17:00: 22.5°C — cloudy, wind 3 m/s
+  15:00: 24.7°C — partlycloudy, wind 3 m/s, snow limit 3410 m
+  16:00: 23.9°C — rainy, 1.2 mm (70% chance), wind 4 m/s, snow limit 3380 m
+  17:00: 22.5°C — cloudy, wind 3 m/s, snow limit 3350 m
 
 Precipitation chance is an estimate derived from the C-LAEF ensemble percentiles (0/30/70/95 %), not a probability GeoSphere publishes.
 ```
 
-The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note naming where the horizon ends — there is nothing further ahead to reach for. Dry hours, and hours whose amount rounds to 0 mm, omit the precipitation and chance parts; the estimate note appears only when a chance is shown.
+The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note naming where the horizon ends — there is nothing further ahead to reach for. Dry hours, and hours whose amount rounds to 0 mm, omit the precipitation and chance parts; the estimate note appears only when a chance is shown. Each hour ends with the forecast snow limit in metres, omitted when the run has none.
 
 ### `get_storm_outlook`
 
@@ -177,17 +177,6 @@ Pollutant concentrations now, plus the European Air Quality Index for today, tom
 The AQI is reported as its 1–6 EEA band (1 good … 6 extremely poor), which is what GeoSphere publishes — there is no underlying numeric index to show alongside it. These are **model forecasts, not station measurements** — expect them to track a nearby monitoring station without matching it.
 
 A point inside the 3 km grid can still come back empty when a WRF-Chem run is stale or incomplete; the response then says `No air-quality data available for this location` and still names the source, which is a different answer from being out of coverage.
-
-### Output changes after 0.6.0
-
-GeoSphere retired the forecast datasets this server used (`nwp-v1-1h-2500m`, `ensemble-v1-1h-2500m`); the server now reads `nwp-v2-1h-1km` and `ensemble-v2-1h-1km`. What an agent reading the tools will notice:
-
-- **Conditions** come from GeoSphere's weather symbol. `windy`, `windy-variant` and dry `lightning` no longer occur; `fog` comes only from GeoSphere's fog symbols and may not occur at all. An hour with a missing or unknown symbol has no condition.
-- **Current condition:** observed rain reads `pouring` from 5 mm/h (was 4 mm/h); nothing falling under a rain or thunder symbol reads `cloudy`; outside Austria (no observations) the symbol stands, so rain and thunderstorms can now appear there.
-- **`get_storm_outlook`:** the source line includes `C-LAEF ensemble`; `Thunderstorm expected next 1 h: yes` gains `(signal: …)`; `Next thunderstorm` shows `(signal: …)` instead of `(CAPE N J/kg)`; `unknown` now reads `unknown (no forecast hours in the window)` and `Next thunderstorm` no longer reports `unknown`; a new `ℹ️ Ensemble signal: unavailable …` line appears without a current ensemble run; a second trailing note defines a thunderstorm hour. Expect more thunderstorm answers in convective weather.
-- **`get_hourly_forecast`:** a trailing note labels the precipitation chance as an estimate; amounts that round to 0 mm are no longer printed.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Data sources & attribution
 

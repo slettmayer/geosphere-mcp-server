@@ -24,7 +24,7 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 - `from __future__ import annotations` required in every file
 
 ### Framework
-- **MCPServer** (`mcp[cli]`, the Python SDK's high-level server API) -- exposes Python async functions as Model Context
+- **MCPServer** (`mcp`, the Python SDK's high-level server API) -- exposes Python async functions as Model Context
   Protocol tools over stdio transport, registered via `@mcp.tool()`. The framework handles protocol
   serialization, tool schema generation from type hints and docstrings, and the transport lifecycle.
   `@mcp.tool()` returns the plain undecorated function, so tools stay directly callable -- which is what
@@ -81,7 +81,7 @@ Documents the languages, frameworks, build tools, and key libraries used in this
 No Docker, Kubernetes, Terraform, or cloud platform configuration. Distributed as a PyPI package, run locally via `uvx`.
 
 ## Dependencies
-- Runtime: `mcp[cli]>=2,<3`, `aiohttp>=3.0.0`, `astral>=3.2`
+- Runtime: `mcp>=2,<3`, `aiohttp>=3.0.0`, `astral>=3.2`
 - The `mcp` major is bounded (`<3`) because the SDK breaks its high-level server API across majors:
   **mcp 2.0.0** (2026-07-28) removed `mcp.server.fastmcp` and replaced `FastMCP` with
   `mcp.server.MCPServer`. Bump the bound deliberately, not via Dependabot -- see the

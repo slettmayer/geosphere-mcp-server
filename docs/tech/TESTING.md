@@ -49,11 +49,8 @@ to the new weather.
 time -- description length (<=100), package identifier matching `pyproject.toml`, transport and registry
 type, the OIDC namespace, and the `mcp-name:` ownership marker in the README.
 
-That timing is the point. The registry validates *after* the PyPI upload has succeeded and the tag is
-pushed, and the failed job cannot be re-run (the workflow checks out the tag) nor the tag moved (PyPI
-rejects a re-upload, failing the job the registry step needs). Every rejection therefore costs a version
-number -- the sibling `calc-mcp-server` burned two that way on 2026-07-30. These tests move both checks
-into CI, minutes before a release rather than during one.
+That timing is the point: the registry validates only after the PyPI upload, so a rejection costs a
+version number (see the module docstring of `test_server_json.py`).
 
 ### Test File Naming
 - Unit tests: `test_<module>.py`
@@ -70,8 +67,7 @@ into CI, minutes before a release rather than during one.
   whole live responses live in `tests/fixtures/` instead
 
 ### Async Testing
-- `pytest-asyncio` with `asyncio_mode = "auto"` in `pyproject.toml`
-- Tests still carry explicit `@pytest.mark.asyncio` decorators for clarity
+- `pytest-asyncio` with `asyncio_mode = "auto"` in `pyproject.toml`, so async tests need no marker
 
 ### Mocking
 - `unittest.mock` only (`AsyncMock`, `MagicMock`) -- no third-party mock library
@@ -113,7 +109,7 @@ into CI, minutes before a release rather than during one.
 
 ## Design Decisions
 - **stdlib mock over pytest-mock/responses**: keeps dev dependencies minimal.
-- **Auto asyncio mode with explicit decorators**: `asyncio_mode = "auto"` avoids boilerplate, decorators kept for readability.
+- **Auto asyncio mode**: `asyncio_mode = "auto"` runs every `async def` test without a per-test marker.
 - **Integration tests excluded from CI**: avoids flaky CI from external API dependency and rate limits; run manually for validation.
 
 ## Known Risks

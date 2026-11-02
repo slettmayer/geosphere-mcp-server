@@ -53,7 +53,7 @@ It was confirmed there for `nwp-v1`; that `nwp-v2` follows it is measured, not p
 | 29–32 | (Starkes) Gewitter mit Schneeregen / Schneefall | `lightning-rainy` |
 
 A missing code, or one outside the table, maps to `None` (unknown) — never a guess — and logs one warning
-per code per process (`weather._warn_unknown_sy_code`). The table has no night variants, so `is_night`
+per code per process (`weather._warn_unknown_code`). The table has no night variants, so `is_night`
 (`astral` solar elevation below 0) decides between `sunny` and `clear-night`: for a forecast row at the
 middle of its hour (`FORECAST_ROW_MIDPOINT`), for the current condition at `now`. Every thunderstorm code,
 the sleet and snow ones included, maps to `lightning-rainy`: there is no thundersnow condition, and the
@@ -100,46 +100,35 @@ Thunder is the one thing observations here cannot see, so it comes from the symb
 precipitation is observed. CAPE plays no part in any condition.
 
 ### Current-Conditions Merge Chain
-Each field is filled from a per-field fallback chain (ported from `ha-geosphere-next`):
+Each field is filled from a per-field fallback chain:
 
 | Field | Chain |
 |-------|-------|
 | Temperature, humidity, wind speed, wind bearing | INCA -> nowcast -> AROME |
-| Dew point | INCA -> nowcast |
 | Gust | nowcast -> AROME |
-| Pressure (`P0`, Pa converted to hPa), global radiation | INCA only |
-| Cloud cover, CAPE, snow limit, weather symbol | the AROME row for the hour in progress (`weather._arome_current`, the same assembled row the hourly forecast emits — so the symbol is read from the next stamp, like the gust) |
+| Pressure (`P0`, Pa converted to hPa) | INCA only |
+| Cloud cover, weather symbol | the AROME row for the hour in progress (`weather._arome_current`, the same assembled row the hourly forecast emits — so the symbol is read from the next stamp, like the gust) |
 | 1-hour precipitation | INCA `RR` only -- absent when INCA is |
-| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR` whenever the nowcast reports `pt` or `rr` — a `pt` of 255 is an observed "dry" that INCA never overrules; otherwise INCA `RR`, but only when it is wet (>= 0.1 mm), its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; otherwise `None` (nothing observed). Once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
-| Precipitation flag (`is_precipitating`) | `condition.is_precipitating` on the nowcast `pt` code (255 means none) and the nowcast rate -- never INCA `RR`. Tri-state: absent when neither spoke |
-| Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition. It can still disagree with the flag: with no nowcast `rr` and a current INCA `RR`, the kind is absent while the flag says not precipitating, since the flag reads the nowcast rate only |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR` whenever the nowcast reports `pt` or `rr` — a `pt` of 255 is an observed "dry" that INCA never overrules; otherwise INCA `RR`, but only when it is wet (>= 0.1 mm) and no older than `INCA_RR_MAX_AGE_SECONDS`; otherwise `None` (nothing observed). Once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
+| Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
-**Why the hourly total has no nowcast fallback.** Summing the last four 15-min `rr` buckets was tried and
-removed. The nowcast endpoint serves a single model run, clamped to that run's own t0 and published
-~25-35 min after the analysis it is stamped for, so there were never four buckets to sum: measured
-2026-09-11 against the live API, an unbounded request returns exactly one bucket at or before `now` and an
-anchored one reaches only the serving run's start. Every such sum was a 15-45 minute total labelled as a
-full hour, under-reporting by up to 4x on exactly the degraded path it existed for. Reconstructing a true
+**Why the hourly total has no nowcast fallback.** The nowcast endpoint serves a single model run, clamped
+to that run's own t0 and published ~25-35 min after the analysis it is stamped for, so the buckets on hand
+never cover a full hour: a sum would be a 15-45 minute total labelled as an hour. Reconstructing a true
 hour would need the t0 bucket of four consecutive runs (`forecast_offset=0..3`) — four extra requests per
-call against a shared rate limit. Reporting nothing is the honest answer, and it is why the request now
+call against a shared rate limit. Reporting nothing is the honest answer. The nowcast request still
 carries a `start` anchored to the 15-min grid (`NOWCAST_LOOKBACK`): without one the series holds a single
-bucket, which silently reduced the `RATE_LOOKBACK` peak to the matched bucket it exists to widen.
+bucket at or before `now`, and the `RATE_LOOKBACK` peak needs more than the matched bucket.
 
-**Why `is_precipitating` is tri-state.** "Is it precipitating right now" is an instantaneous question, and
-only the 15-min nowcast observes it. INCA's hourly `RR` is an accumulation over the hour it is stamped
-for, so substituting it reports rain that has already stopped — 2.4 mm falling in the hour to 15:00 still
-reads "wet" at 16:50. With no nowcast at all (a point inside the AROME domain but outside the Austrian
-grid, or a transient fetch failure) nothing observed precipitation, and a confident "dry" would be
-invented, so the flag is absent rather than false — consistent with `precipitation_1h_mm` in the same
-case. The condition derivation *does* still fall back to `RR` when the nowcast reports nothing, but only
-to a **wet** `RR` that is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h) **and not future-dated** — a bare
-age comparison is also satisfied by a negative age, which would let an hour that has not happened yet
-read as the freshest reading there is. The bound catches a slice that has stopped updating, not ordinary
-lag: INCA routinely trails ~90 min, and a tighter bound would flap the condition between `rainy` and the
-symbol's condition once per publish cycle through steady rain. A dry `RR` is never passed on as an
-observation: it would demote a rain or thunder symbol to `cloudy` on the strength of an hour that is
-already over.
+**Why INCA `RR` stands in only when wet and current.** Only the 15-min nowcast observes precipitation
+*now*. INCA's hourly `RR` is an accumulation over the hour it is stamped for, so it can report rain that has
+already stopped — 2.4 mm falling in the hour to 15:00 is still on the books at 16:50. When the nowcast
+reports nothing, the condition still falls back to a **wet** `RR` younger than `INCA_RR_MAX_AGE_SECONDS`
+(2 h). The bound catches a slice that has stopped updating, not ordinary lag: INCA routinely trails
+~90 min, and a tighter bound would flap the condition between `rainy` and the symbol's condition once per
+publish cycle through steady rain. A dry `RR` is never passed on as an observation: it would demote a rain
+or thunder symbol to `cloudy` on the strength of an hour that is already over.
 
 `observed_at` reports the stamp of whichever source supplied the **temperature** — the field the reading
 is judged by — at every rung, so no other field's freshness can vouch for it. The INCA analysis behind the
@@ -154,13 +143,11 @@ staleness this timestamp exists to expose, so the row's own stamp is reported, c
 observation time can never be in the future. INCA publishes ~30 min after the hour it analyses and serves
 the previous slice until the next appears, so `observed_at` can trail real time by ~90 min.
 
-Two values are **derived rather than fetched**: apparent temperature ("feels like", Australian Bureau of
-Meteorology formula from temperature, humidity, and wind) and — on the hourly path only — dew point
-(Magnus formula from temperature and humidity, since the forecast has no dew-point parameter).
+Apparent temperature ("feels like") is **derived rather than fetched**, with the Australian Bureau of
+Meteorology formula from temperature, humidity, and wind.
 
-Not every merged field reaches the output. Dew point, global radiation, snow limit, CAPE, the weather
-symbol, precipitation type, and the precipitation flag are computed and then dropped during normalization;
-on the hourly path wind bearing and dew point are likewise computed but never rendered. See
+The weather symbol and the raw precipitation-type code are merged but not rendered: they feed the
+condition, the `Falling now` line and the once-per-code warnings. See
 [OUTPUT-CONTRACT.md](OUTPUT-CONTRACT.md) for what each tool actually emits.
 
 ### Precipitation Chance (POP)
@@ -202,7 +189,7 @@ entirely and the forecast still renders.
 ## Design Decisions
 - **GeoSphere's own classification over local thresholds**: the condition matches what GeoSphere's products
   show, and no cloud, gust, fog or CAPE threshold needs tuning here. The raw values (cloud cover,
-  precipitation, gusts, CAPE) are unchanged on the rows. Ported from `ha-geosphere-next` 0.16.0.
+  precipitation, gusts, CAPE) are unchanged on the rows.
 - **Observations outrank the symbol for what is falling now**, because the symbol's run is hours old.
   Thunder is the one thing observations cannot see, so it comes from the symbol, and only while
   precipitation is observed.
@@ -215,13 +202,13 @@ entirely and the forecast still renders.
   7.5 minutes past a bucket the *next* one is closer and wins. At exactly 7.5 minutes the two tie, and
   `min` keeps the first of equal keys — the earlier bucket — so the switch happens strictly *after* the
   boundary, not at it. Every nowcast-sourced current field
-  rides that single index — `t2m`, `rh2m`, `td`, `dd`, `ff`, `fx`, `pt` and `rr` — so `is_precipitating`
-  can read `true` at 15:40 from rain the nowcast places at 15:45, and the same is true of the
+  rides that single index — `t2m`, `rh2m`, `dd`, `ff`, `fx`, `pt` and `rr` — so the condition
+  can read rain at 15:40 that the nowcast places at 15:45, and the same is true of the
   temperature and the gust beside it. Only the reported *time* is clamped: `observed_at` takes
   `min(stamp, now)` because an observation time in the future is simply wrong, while a *value* from the
   nearest bucket is not.
 
-  Raised in review (2026-09-11) against `is_precipitating`, whose contract says "falling right now", and
+  Raised in review against the "falling right now" reading, and
   **deliberately declined**. The nowcast is a short-range forecast at every bucket, including the one
   behind `now`; there is no bucket that observes the present. Snapping backwards would therefore not buy
   an observation, it would substitute a staler estimate for a nearer one, and at the 7.5-minute boundary
