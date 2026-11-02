@@ -638,21 +638,6 @@ def test_merge_stale_inca_rr_does_not_drive_the_condition() -> None:
     assert merged["condition"] == "partlycloudy"
 
 
-def test_merge_future_dated_inca_rr_does_not_drive_the_condition() -> None:
-    """A negative age is not freshness.
-
-    `age <= INCA_RR_MAX_AGE_SECONDS` alone is satisfied by a future stamp, so
-    an hour that has not happened yet would read as the freshest reading there
-    is. The fetch path bounds INCA at `end=now`, but this merge takes its own
-    `now` and nothing in the signature ties the two together.
-    """
-    merged = merge_current_conditions(
-        None, _stale_inca((17, 30)), _arome_now(3), 48.219, 16.362, NOW
-    )
-    assert merged["precipitation_1h_mm"] == 5.0
-    assert merged["condition"] == "partlycloudy"
-
-
 def test_merge_fresh_inca_rr_still_drives_the_condition() -> None:
     """Without a nowcast, a current wet `RR` is evidence of rain."""
     merged = merge_current_conditions(

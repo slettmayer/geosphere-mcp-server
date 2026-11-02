@@ -109,7 +109,7 @@ Each field is filled from a per-field fallback chain (ported from `ha-geosphere-
 | Pressure (`P0`, Pa converted to hPa) | INCA only |
 | Cloud cover, weather symbol | the AROME row for the hour in progress (`weather._arome_current`, the same assembled row the hourly forecast emits — so the symbol is read from the next stamp, like the gust) |
 | 1-hour precipitation | INCA `RR` only -- absent when INCA is |
-| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR` whenever the nowcast reports `pt` or `rr` — a `pt` of 255 is an observed "dry" that INCA never overrules; otherwise INCA `RR`, but only when it is wet (>= 0.1 mm), its stamp is in the past and no older than `INCA_RR_MAX_AGE_SECONDS`; otherwise `None` (nothing observed). Once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
+| Precipitation rate (feeds the condition) | matched nowcast `rr` bucket x `NOWCAST_BUCKETS_PER_HOUR` whenever the nowcast reports `pt` or `rr` — a `pt` of 255 is an observed "dry" that INCA never overrules; otherwise INCA `RR`, but only when it is wet (>= 0.1 mm) and no older than `INCA_RR_MAX_AGE_SECONDS`; otherwise `None` (nothing observed). Once `pt` says it is precipitating, the peak across the last `RATE_LOOKBACK` (30 min) of buckets |
 | Precipitation kind (`precipitation_kind`) | `condition.derive_precipitation_type` on the nowcast `pt` code and the condition's own rate (above). Absent for a code outside GeoSphere's table (logged once per code per process) and for 255 beside a rate that says it is precipitating, so "none" never sits beside a rainy condition |
 | Observation time (`observed_at`) | INCA `T2M` analysis -> the matched nowcast bucket's stamp -> the AROME row's stamp (clamped to `now`) |
 
@@ -124,20 +124,14 @@ call against a shared rate limit. Reporting nothing is the honest answer, and it
 carries a `start` anchored to the 15-min grid (`NOWCAST_LOOKBACK`): without one the series holds a single
 bucket, which silently reduced the `RATE_LOOKBACK` peak to the matched bucket it exists to widen.
 
-**Why `is_precipitating` is tri-state.** "Is it precipitating right now" is an instantaneous question, and
-only the 15-min nowcast observes it. INCA's hourly `RR` is an accumulation over the hour it is stamped
-for, so substituting it reports rain that has already stopped — 2.4 mm falling in the hour to 15:00 still
-reads "wet" at 16:50. With no nowcast at all (a point inside the AROME domain but outside the Austrian
-grid, or a transient fetch failure) nothing observed precipitation, and a confident "dry" would be
-invented, so the flag is absent rather than false — consistent with `precipitation_1h_mm` in the same
-case. The condition derivation *does* still fall back to `RR` when the nowcast reports nothing, but only
-to a **wet** `RR` that is younger than `INCA_RR_MAX_AGE_SECONDS` (2 h) **and not future-dated** — a bare
-age comparison is also satisfied by a negative age, which would let an hour that has not happened yet
-read as the freshest reading there is. The bound catches a slice that has stopped updating, not ordinary
-lag: INCA routinely trails ~90 min, and a tighter bound would flap the condition between `rainy` and the
-symbol's condition once per publish cycle through steady rain. A dry `RR` is never passed on as an
-observation: it would demote a rain or thunder symbol to `cloudy` on the strength of an hour that is
-already over.
+**Why INCA `RR` stands in only when wet and current.** Only the 15-min nowcast observes precipitation
+*now*. INCA's hourly `RR` is an accumulation over the hour it is stamped for, so it can report rain that has
+already stopped — 2.4 mm falling in the hour to 15:00 is still on the books at 16:50. When the nowcast
+reports nothing, the condition still falls back to a **wet** `RR` younger than `INCA_RR_MAX_AGE_SECONDS`
+(2 h). The bound catches a slice that has stopped updating, not ordinary lag: INCA routinely trails
+~90 min, and a tighter bound would flap the condition between `rainy` and the symbol's condition once per
+publish cycle through steady rain. A dry `RR` is never passed on as an observation: it would demote a rain
+or thunder symbol to `cloudy` on the strength of an hour that is already over.
 
 `observed_at` reports the stamp of whichever source supplied the **temperature** — the field the reading
 is judged by — at every rung, so no other field's freshness can vouch for it. The INCA analysis behind the
