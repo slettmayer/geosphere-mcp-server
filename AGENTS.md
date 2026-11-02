@@ -53,7 +53,7 @@ See [Architecture](docs/tech/ARCHITECTURE.md) for module boundaries and data flo
 
 ## Tech Stack
 - Python 3.12+, `from __future__ import annotations` in every file
-- `mcp[cli]` (`mcp.server.MCPServer`) for MCP server framework -- v2 line, pinned `>=2,<3`
+- `mcp` (`mcp.server.MCPServer`) for MCP server framework -- v2 line, pinned `>=2,<3`
 - `aiohttp` for async HTTP, `astral` for day/night
 - `ruff` for linting/formatting, `pytest` + `pytest-asyncio` for testing
 - `uv` for environment management, `hatchling` + `hatch-vcs` build backend

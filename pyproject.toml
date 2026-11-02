@@ -30,7 +30,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "mcp[cli]>=2,<3",
+    "mcp>=2,<3",
     "aiohttp>=3.0.0",
     "astral>=3.2",
 ]
