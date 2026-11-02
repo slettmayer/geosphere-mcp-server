@@ -7,6 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-02
+
 - Fixed: `get_hourly_forecast` reads a `start` without an offset as Vienna local time, the zone every
   time in its output is shown in. It used to read one as UTC, so passing back `15:00` from the output
   started the forecast at 16:00 or 17:00 local. An explicit offset is honoured as before, and the tool
@@ -26,6 +28,7 @@ version being cut, so you never rename that heading by hand. See
     merge; removed guards for states that cannot occur, duplicated tests and stale documentation. The
     unknown-code warning reads `GeoSphere reported <table> code <n>, which is not in its published
     table; …`.
+- Build: bump the python-dependencies group with 3 updates.
 
 ## 0.7.0 - 2026-11-01
 
