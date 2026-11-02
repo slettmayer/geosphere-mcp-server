@@ -50,6 +50,7 @@ SAMPLE_HOURLY_GEOSPHERE = {
             "wind_speed_ms": 3.1,
             "precipitation_mm": 1.2,
             "precipitation_probability_pct": 70,
+            "snow_limit_m": 2986.4,
         },
         {
             "time": datetime(2026, 7, 15, 13, 0, tzinfo=UTC),  # 15:00 CEST
@@ -178,10 +179,14 @@ def test_render_hourly_geosphere() -> None:
     assert "Source: GeoSphere (AROME + C-LAEF ensemble)" in out
     # A day-divider header precedes the hours, which are indented beneath it.
     assert "Wed 2026-07-15" in out
-    # 14:00 CEST line with precip + probability + wind (indented under the day).
-    assert "  14:00: 21.3°C — rainy, 1.2 mm (70% chance), wind 3 m/s" in out
-    # 15:00 CEST line: zero precip/probability omitted, wind kept.
-    assert "  15:00: 20.1°C — cloudy, wind 2 m/s" in out
+    # 14:00 CEST line with precip + probability + wind + snow limit (indented
+    # under the day).
+    assert (
+        "  14:00: 21.3°C — rainy, 1.2 mm (70% chance), wind 3 m/s, snow limit 2986 m"
+    ) in out
+    # 15:00 CEST line: zero precip/probability and the absent snow limit
+    # omitted, wind kept.
+    assert "  15:00: 20.1°C — cloudy, wind 2 m/s" in out.splitlines()
 
 
 def test_render_hourly_day_divider_on_rollover() -> None:

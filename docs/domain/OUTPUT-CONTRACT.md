@@ -91,12 +91,14 @@ replaces. `hours=N` therefore yields the in-progress hour plus `N - 1`
 later ones, and the leading hour's precipitation figure covers the whole hour, including the part of it
 that has already elapsed.
 
-Each hour renders as `HH:MM: {temp}°C — {condition}, {precip} mm ({prob}% chance), wind {speed} m/s`.
+Each hour renders as
+`HH:MM: {temp}°C — {condition}, {precip} mm ({prob}% chance), wind {speed} m/s, snow limit {height} m`.
 The condition is GeoSphere's weather symbol for that hour (see
 [CONDITION-DERIVATION.md](CONDITION-DERIVATION.md)) and is omitted when the symbol is missing or unknown.
 Precipitation is omitted when unavailable or when it rounds to `0` at one decimal (the forecast publishes
 traces to a thousandth of a millimetre), the chance is omitted with it and when it is absent or zero, and
-the whole line degrades to `HH:MM: n/a` when there is no temperature.
+the snow limit (AROME `snowlmt`, whole metres) is omitted when unavailable, and the whole line degrades to
+`HH:MM: n/a` when there is no temperature.
 
 Whenever at least one line shows a chance, a trailing note labels it:
 `Precipitation chance is an estimate derived from the C-LAEF ensemble percentiles (0/30/70/95 %), not a
@@ -143,9 +145,9 @@ there, having no figures left to explain. See [AIR-QUALITY.md](AIR-QUALITY.md).
 ### Values Computed but Never Rendered
 Current weather merges the weather-symbol code and the raw precipitation-type code without printing them:
 they feed the condition, the `Falling now` line (the decoded kind) and the once-per-code warnings.
-An hourly row also carries wind bearing, wind gust, humidity, cloud cover, snow limit, CAPE and the
-ensemble's `cape_p90`/`tp_p90`, of which the hourly renderer reads only time, temperature, condition,
-precipitation, chance and wind speed. The rest feed the current-conditions fallback (the AROME row for the
+An hourly row also carries wind bearing, wind gust, humidity, cloud cover, CAPE and the ensemble's
+`cape_p90`/`tp_p90`, of which the hourly renderer reads none: it prints time, temperature, condition,
+precipitation, chance, wind speed and snow limit. The rest feed the current-conditions fallback (the AROME row for the
 hour in progress) and the storm outlook.
 
 ### Error Lines

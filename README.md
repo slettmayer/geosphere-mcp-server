@@ -114,14 +114,14 @@ Hour-by-hour forecast from AROME, up to ~60 h. Each hour's condition is GeoSpher
 AROME model, reference 2026-07-22 12:00 CEST · Source: GeoSphere (AROME + C-LAEF ensemble)
 
 Wed 2026-07-22
-  15:00: 24.7°C — partlycloudy, wind 3 m/s
-  16:00: 23.9°C — rainy, 1.2 mm (70% chance), wind 4 m/s
-  17:00: 22.5°C — cloudy, wind 3 m/s
+  15:00: 24.7°C — partlycloudy, wind 3 m/s, snow limit 3410 m
+  16:00: 23.9°C — rainy, 1.2 mm (70% chance), wind 4 m/s, snow limit 3380 m
+  17:00: 22.5°C — cloudy, wind 3 m/s, snow limit 3350 m
 
 Precipitation chance is an estimate derived from the C-LAEF ensemble percentiles (0/30/70/95 %), not a probability GeoSphere publishes.
 ```
 
-The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note naming where the horizon ends — there is nothing further ahead to reach for. Dry hours, and hours whose amount rounds to 0 mm, omit the precipitation and chance parts; the estimate note appears only when a chance is shown.
+The hours are grouped under a day-divider header (`%a %Y-%m-%d` in the point's local timezone) that repeats whenever the local date changes, so a window crossing midnight stays unambiguous. Requesting more hours than the AROME horizon provides appends a note naming where the horizon ends — there is nothing further ahead to reach for. Dry hours, and hours whose amount rounds to 0 mm, omit the precipitation and chance parts; the estimate note appears only when a chance is shown. Each hour ends with the forecast snow limit in metres, omitted when the run has none.
 
 ### `get_storm_outlook`
 

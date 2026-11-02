@@ -226,6 +226,10 @@ def _hourly_line(hour: dict[str, Any]) -> str:
     if wind is not None:
         segments.append(f"wind {wind} m/s")
 
+    snow_limit = _round_int(hour.get("snow_limit_m"))
+    if snow_limit is not None:
+        segments.append(f"snow limit {snow_limit} m")
+
     if segments:
         head += ", " + ", ".join(segments)
     return head
