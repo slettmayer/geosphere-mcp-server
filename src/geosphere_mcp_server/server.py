@@ -50,8 +50,7 @@ OUT_OF_DOMAIN_MESSAGE = (
 
 mcp = MCPServer(
     "geosphere",
-    # v2 advertises this verbatim and defaults it to "" (v1 had no such
-    # parameter and reported the SDK's own version instead).
+    # Advertised to clients verbatim; the SDK defaults it to "".
     version=__version__,
     instructions=(
         "High-resolution weather forecasts and current conditions for "

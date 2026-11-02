@@ -1,9 +1,8 @@
 """Async client for the GeoSphere Austria Dataset API.
 
-Module-level async functions (oebb-style) — no client class. The parsed
-response dataclasses live here too so this module and ``condition.py`` form a
-homeassistant-free, PyPI-extractable core. These functions raise typed
-exceptions; the server layer converts them to user-facing text.
+Module-level async functions — no client class — plus the parsed response
+dataclasses. These functions raise typed exceptions; the server layer
+converts them to user-facing text.
 """
 
 from __future__ import annotations

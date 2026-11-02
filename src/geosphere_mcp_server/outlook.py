@@ -14,9 +14,8 @@ Every row has a ``time``; its values are read through ``.get``, so a missing
 value is judged on what the row does carry.
 Gust values are returned in m/s, matching the rows themselves.
 
-Ported from ha-geosphere-next, where the same functions read ``HourlyForecast``
-dataclass attributes. Here :func:`window` is applied once by the caller and
-handed to the window readers, so one series is walked three times, not six.
+:func:`window` is applied once by the caller and handed to the window
+readers, so one series is walked once per horizon.
 """
 
 from __future__ import annotations

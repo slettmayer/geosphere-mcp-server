@@ -169,10 +169,8 @@ def render_current(data: dict[str, Any]) -> str:
 
     precip = _mm(data.get("precipitation_1h_mm"))
     if precip is not None:
-        # Dated by its own stamp, not by the source line's observation time.
-        # The two come from the same INCA slice but not the same row, so a
-        # slice with a current temperature and an hours-old `RR` would
-        # otherwise read as an hour of rain that has just fallen.
+        # Dated by its own stamp, not the observation time: see
+        # `weather.merge_current_conditions`.
         covers = _hm(data.get("precipitation_1h_at"))
         window = f"hour to {covers}" if covers is not None else "last hour"
         lines.append(f"🌧️ Precipitation ({window}): {precip} mm")

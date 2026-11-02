@@ -1,7 +1,4 @@
-"""Tests for the pure condition-derivation functions.
-
-Table cases ported from ha-geosphere-next tests/test_condition.py.
-"""
+"""Tests for the pure condition-derivation functions."""
 
 from __future__ import annotations
 

@@ -5,8 +5,6 @@ and their helpers) take already-fetched :class:`GeoSphereResponse` objects and
 are fully testable without I/O. The ``async_fetch_*`` helpers orchestrate the
 concurrent HTTP calls, apply the graceful-degradation rules, and track which
 sources contributed.
-
-Re-hosted (pure, no homeassistant) from the ha-geosphere-next coordinator.
 """
 
 from __future__ import annotations
@@ -175,25 +173,13 @@ def assemble_hourly_forecast(
 ) -> dict[str, Any]:
     """Assemble the per-hour AROME forecast (+ ensemble values per hour).
 
-    A row stamped ``ts`` describes the hour *beginning* at ``ts``. The dataset
-    mixes two stampings (see ``AROME_PARAMETERS`` for how each was classified):
-
-    * instantaneous AT the stamp — ``2t``, ``2r``, ``10u``/``10v``, ``tcc``,
-      ``cape``, ``snowlmt``;
-    * the interval ENDING at the stamp — ``10fg`` and ``tp`` ("... in the
-      last forecast interval"), each already a per-hour value.
-
-    The interval fields covering the hour that *starts* at ``ts`` therefore
-    live one step later, at ``nxt``. Reading them at ``i`` would report the
-    hour that already ended — rain that has stopped, the previous hour's gust
-    peak, and a thunderstorm the outlook would then place in the future.
-
-    ``sy`` is read at ``nxt`` too. Its precipitation classes follow ``tp`` at
-    their own stamp, so only there does the symbol agree with the row's
-    precipitation: at ``i`` a row would show rain for the hour after it
-    stopped and none for the hour it started. Its cloud classes bin ``tcc`` at
-    that same later stamp, i.e. the sky at the end of the row's hour. Night is
-    judged at the middle of the row's hour.
+    A row stamped ``ts`` describes the hour *beginning* at ``ts``. Its
+    instantaneous fields are read at ``ts``; ``10fg``, ``tp`` and ``sy`` cover
+    the interval *ending* at their stamp (see ``AROME_PARAMETERS``), so the hour
+    that starts at ``ts`` reads them one step later, at ``nxt``. Reading them at
+    ``i`` would report the hour that already ended — rain that has stopped, the
+    previous hour's gust peak, and a thunderstorm the outlook would then place
+    in the future. Night is judged at the middle of the row's hour.
 
     The final stamp has no successor and so cannot be emitted. Hours before
     the current top-of-hour are dropped; ``start`` filters to hours at/after a
@@ -270,12 +256,8 @@ def _arome_current(
     same stamping as the hourly forecast: the gust and the weather symbol are
     the ones covering the hour under way, read one stamp on.
 
-    That hour has to be present in the series, and it is not there for free:
-    an unbounded request begins well after the current hour, so the caller
-    anchors an explicit ``start`` (see :func:`async_fetch_current_conditions`).
-    Without it the first row is a future one, and this function would present
-    its cloud, CAPE and symbol as current -- the symbol feeds the current
-    condition.
+    That hour is in the series only because the caller anchors its request
+    (see :func:`_forecast_bounds`).
 
     ``None`` when the run has no row at or after the current hour, which
     includes a run whose final stamp is the current hour: that stamp has no
@@ -297,7 +279,7 @@ def merge_current_conditions(
 ) -> dict[str, Any]:
     """Merge INCA + nowcast + AROME into a current-conditions dict.
 
-    Per-field preference (ported from GeoSphereCurrentCoordinator._merge):
+    Per-field preference:
     temp/humidity/wind speed+bearing = INCA -> nowcast -> AROME; gust =
     nowcast -> AROME; pressure (P0 Pa->hPa) = INCA only; cloud/weather symbol
     = AROME; 1-h precip = INCA RR only; precip type from nowcast pt (255 =

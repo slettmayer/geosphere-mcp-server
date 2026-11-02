@@ -439,9 +439,8 @@ def test_merge_arome_only_degraded() -> None:
 def test_merge_observed_at_follows_the_temperature_not_precipitation() -> None:
     """An INCA slice with temperature but no RR must not claim to be current.
 
-    `observed_at` used to come from the RR series alone, so an analysis whose
-    precipitation was absent reported `now` while the temperature on display
-    was an hour old -- the one case the timestamp exists to catch.
+    Dated by the precipitation instead, an analysis without `RR` would report
+    `now` while the temperature on display is an hour old.
     """
     inca = _response(
         "inca-v1-1h-1km",
@@ -586,8 +585,7 @@ def test_merge_without_inca_rr_reports_no_hourly_accumulation() -> None:
     """Nowcast buckets are never summed into the hourly total.
 
     The endpoint serves one model run clamped to its own t0, so the buckets on
-    hand cover 15-45 min; summing them published a quarter-hour of rain as an
-    hour. With no INCA `RR` the field is simply absent.
+    hand cover 15-45 min, never an hour. With no INCA `RR` the field is absent.
     """
     nowcast = _nowcast(
         stamps=_ts((14, 45), (15, 0), (15, 15), (15, 30), (15, 45)),

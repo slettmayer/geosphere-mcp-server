@@ -49,11 +49,8 @@ to the new weather.
 time -- description length (<=100), package identifier matching `pyproject.toml`, transport and registry
 type, the OIDC namespace, and the `mcp-name:` ownership marker in the README.
 
-That timing is the point. The registry validates *after* the PyPI upload has succeeded and the tag is
-pushed, and the failed job cannot be re-run (the workflow checks out the tag) nor the tag moved (PyPI
-rejects a re-upload, failing the job the registry step needs). Every rejection therefore costs a version
-number -- the sibling `calc-mcp-server` burned two that way on 2026-07-30. These tests move both checks
-into CI, minutes before a release rather than during one.
+That timing is the point: the registry validates only after the PyPI upload, so a rejection costs a
+version number (see the module docstring of `test_server_json.py`).
 
 ### Test File Naming
 - Unit tests: `test_<module>.py`

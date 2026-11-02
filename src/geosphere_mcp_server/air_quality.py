@@ -3,8 +3,6 @@
 ``merge_air_quality`` takes already-fetched :class:`GeoSphereResponse` objects
 and is fully testable without I/O; ``async_fetch_air_quality`` orchestrates the
 two concurrent HTTP calls and applies the graceful-degradation rule.
-
-Ported from the ha-geosphere-next air-quality coordinator.
 """
 
 from __future__ import annotations

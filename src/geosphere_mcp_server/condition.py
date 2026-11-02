@@ -5,8 +5,6 @@ Home Assistant's conditions; the current condition lets observations decide
 whether and what is falling and takes the rest from that symbol. Condition
 strings equal Home Assistant's ATTR_CONDITION_* values, declared as literals
 in const.py to keep this module free of homeassistant imports.
-
-Ported from ha-geosphere-next (already homeassistant-free).
 """
 
 from __future__ import annotations

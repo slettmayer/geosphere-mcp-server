@@ -1,8 +1,4 @@
-"""Tests for the pure forecast-outlook functions.
-
-Cases ported from ha-geosphere-next tests/test_outlook.py, adapted to the row
-dicts this server passes around instead of the HourlyForecast dataclass.
-"""
+"""Tests for the pure forecast-outlook functions."""
 
 from __future__ import annotations
 
