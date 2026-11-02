@@ -136,11 +136,11 @@ Coverage is decided by the upstream API, not by a hardcoded bounding box: the fe
 
 | Exception | Raised for | Caught by |
 |-----------|------------|-----------|
-| `GeoSphereApiError` | Base; also a rejected request or an unexpected HTTP status | `_guarded` generic handler |
-| `GeoSphereConnectionError` | Network failure (`aiohttp.ClientError` is wrapped) | `_guarded` generic handler |
-| `GeoSphereTimeoutError` | A `GEOSPHERE_TIMEOUT` breach; subclasses `GeoSphereConnectionError` | `_guarded` timeout handler |
-| `GeoSphereRateLimitError` | HTTP 429; carries a `retry_after` attribute | `_guarded` rate-limit handler |
-| `GeoSphereOutOfDomainError` | HTTP 400 containing "outside of dataset bounds" | `_guarded` out-of-domain handler |
+| `GeoSphereApiError` | Base; also a rejected request or an unexpected HTTP status | `_error_line` generic case |
+| `GeoSphereConnectionError` | Network failure (`aiohttp.ClientError` is wrapped) | `_error_line` generic case |
+| `GeoSphereTimeoutError` | A `GEOSPHERE_TIMEOUT` breach; subclasses `GeoSphereConnectionError` | `_error_line` timeout case |
+| `GeoSphereRateLimitError` | HTTP 429; carries a `retry_after` attribute | `_guarded` retry, then `_error_line` |
+| `GeoSphereOutOfDomainError` | HTTP 400 containing "outside of dataset bounds" | `_error_line` out-of-domain case |
 
 **Validation lines** are returned by the tool body before `_guarded` runs and before any session opens:
 
@@ -149,22 +149,21 @@ Coverage is decided by the upstream API, not by a hardcoded bounding box: the fe
 An over-long `hours` value is **clamped silently** rather than rejected — see
 [../domain/OUTPUT-CONTRACT.md](../domain/OUTPUT-CONTRACT.md).
 
-**Runtime failures** are funnelled through the `_guarded` wrapper, which returns:
+**Runtime failures** are funnelled through the `_guarded` wrapper, which maps each to a line with
+`_error_line`:
 
 - out-of-domain -> `OUT_OF_DOMAIN_MESSAGE`, checked **first** so a point outside the grid never falls
   through to a retryable-sounding line
 - 429 -> the server retries **once**, but only when `retry_after <= RATE_LIMIT_RETRY_MAX_S` (5 s); a
   longer or absent retry-after skips the retry. The message is
   `⚠️ GeoSphere rate limit exceeded (retry in {N}s)` when the API sent a `Retry-After` header, else
-  `... (retry shortly)`. A failing retry is logged and the original rate-limit message is still returned —
-  except when the retry itself is out-of-domain, which yields the coverage line.
+  `... (retry shortly)`. A failing retry answers with its own failure's line.
 - a timeout -> `⚠️ Timeout fetching weather data`
 - anything else -> `⚠️ No weather data available` (logged at warning level)
 
-The timeout branch catches `GeoSphereTimeoutError` **as well as** a bare `TimeoutError`. This matters: the
-client never lets a bare `asyncio` timeout escape — it wraps it in its own typed error — so catching only
-the builtin would silently route every real timeout to the generic handler. Any new client must therefore
-either raise a timeout type or be added to that branch. A non-timeout network failure stays a plain
+The timeout case matches `GeoSphereTimeoutError`, not the builtin `TimeoutError`: the client never lets a
+bare `asyncio` timeout escape — it wraps it in its own typed error. Any new client must therefore raise a
+typed timeout too, or its timeouts land in the generic case. A non-timeout network failure stays a plain
 `GeoSphereConnectionError` and is reported as "no weather data", because the caller can do nothing
 differently about it.
 

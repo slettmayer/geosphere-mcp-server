@@ -75,44 +75,42 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(value, high))
 
 
-def _rate_limit_message(retry_after: float | None) -> str:
-    """Build the user-facing GeoSphere rate-limit line."""
-    if retry_after is not None:
-        return f"⚠️ GeoSphere rate limit exceeded (retry in {int(retry_after)}s)"
-    return "⚠️ GeoSphere rate limit exceeded (retry shortly)"
+def _error_line(err: Exception) -> str:
+    """The markdown line a tool answers with when ``err`` ends its fetch."""
+    if isinstance(err, GeoSphereOutOfDomainError):
+        return OUT_OF_DOMAIN_MESSAGE
+    if isinstance(err, GeoSphereTimeoutError):
+        return "⚠️ Timeout fetching weather data"
+    if isinstance(err, GeoSphereRateLimitError):
+        if err.retry_after is not None:
+            return f"⚠️ GeoSphere rate limit exceeded (retry in {int(err.retry_after)}s)"
+        return "⚠️ GeoSphere rate limit exceeded (retry shortly)"
+    _LOGGER.warning("Weather fetch failed: %s", err)
+    return "⚠️ No weather data available"
 
 
 async def _guarded(work: Callable[[], Awaitable[str]]) -> str:
     """Run ``work`` translating every failure into a markdown error line.
 
-    Handles the single retry-once behaviour for short GeoSphere rate limits.
+    A rate limit with a short enough ``Retry-After`` is retried once.
     Out-of-domain is caught here rather than inside each tool: with no
     worldwide source behind it, every tool answers an uncovered point the same
     way, and it is the one failure the caller can act on.
     """
     try:
         return await work()
-    except GeoSphereOutOfDomainError:
-        return OUT_OF_DOMAIN_MESSAGE
-    except (TimeoutError, GeoSphereTimeoutError):
-        # The API client wraps asyncio timeouts into its own typed error, so
-        # both that and a bare TimeoutError must be handled here.
-        return "⚠️ Timeout fetching weather data"
     except GeoSphereRateLimitError as err:
-        retry_after = err.retry_after
-        if retry_after is not None and retry_after <= RATE_LIMIT_RETRY_MAX_S:
-            _LOGGER.info("GeoSphere rate limited, retrying in %ss", retry_after)
-            await asyncio.sleep(retry_after)
-            try:
-                return await work()
-            except GeoSphereOutOfDomainError:
-                return OUT_OF_DOMAIN_MESSAGE
-            except Exception as retry_err:  # noqa: BLE001
-                _LOGGER.warning("GeoSphere retry failed: %s", retry_err)
-        return _rate_limit_message(retry_after)
+        wait = err.retry_after
+        if wait is None or wait > RATE_LIMIT_RETRY_MAX_S:
+            return _error_line(err)
+        _LOGGER.info("GeoSphere rate limited, retrying in %ss", wait)
+        await asyncio.sleep(wait)
     except Exception as err:  # noqa: BLE001
-        _LOGGER.warning("Weather fetch failed: %s", err)
-        return "⚠️ No weather data available"
+        return _error_line(err)
+    try:
+        return await work()
+    except Exception as err:  # noqa: BLE001
+        return _error_line(err)
 
 
 def _parse_start(start: str | None) -> tuple[datetime | None, str | None]:

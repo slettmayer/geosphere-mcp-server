@@ -90,13 +90,6 @@ async def test_current_out_of_domain_reports_no_coverage() -> None:
     assert "Outside coverage" in out
 
 
-async def test_current_timeout_returns_warning() -> None:
-    fetch = AsyncMock(side_effect=TimeoutError())
-    with patch.object(weather, "async_fetch_current_conditions", fetch):
-        out = await get_current_weather(LAT, LON)
-    assert out == "⚠️ Timeout fetching weather data"
-
-
 async def test_current_client_timeout_returns_warning() -> None:
     """The client's wrapped timeout must reach the timeout line, not the
 
