@@ -35,7 +35,7 @@ rather than as a generic failure — see *Coverage Classes* below.
 | WRF-Chem pollutants | `chem-v2-1h-3km` | `forecast` | ~73 h hourly | Austria + Alps |
 | WRF-Chem daily AQI | `chem_aqi-v1-1d-3km` | `forecast` | daily (EEA band 1-6) | Austria + Alps |
 
-Resource IDs, the per-dataset parameter lists, and the 30 s request timeout live in `const.py`.
+Resource IDs, the per-dataset parameter lists, and the 20 s request timeout live in `const.py`.
 `AROME_MAX_HOURS = 60` bounds the GeoSphere hourly horizon.
 
 ### The forecast datasets
