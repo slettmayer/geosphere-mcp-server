@@ -15,6 +15,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -24,8 +25,10 @@ from geosphere_mcp_server import __version__, air_quality, weather
 from geosphere_mcp_server import format as fmt
 from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
+    GEOSPHERE_TIMEOUT,
     GEOSPHERE_TZ,
     RATE_LIMIT_RETRY_MAX_S,
+    TOOL_CALL_BUDGET_S,
 )
 from geosphere_mcp_server.geosphere_api import (
     GeoSphereOutOfDomainError,
@@ -86,16 +89,23 @@ def _error_line(err: Exception) -> str:
 async def _guarded(work: Callable[[], Awaitable[str]]) -> str:
     """Run ``work`` translating every failure into a markdown error line.
 
-    A rate limit with a short enough ``Retry-After`` is retried once.
+    A rate limit with a short enough ``Retry-After`` is retried once, if the
+    wait plus a full request still fits in ``TOOL_CALL_BUDGET_S``.
     Out-of-domain is caught here rather than inside each tool: with no
     worldwide source behind it, every tool answers an uncovered point the same
     way, and it is the one failure the caller can act on.
     """
+    started = monotonic()
     try:
         return await work()
     except GeoSphereRateLimitError as err:
         wait = err.retry_after
-        if wait is None or wait > RATE_LIMIT_RETRY_MAX_S:
+        elapsed = monotonic() - started
+        if (
+            wait is None
+            or wait > RATE_LIMIT_RETRY_MAX_S
+            or elapsed + wait + GEOSPHERE_TIMEOUT > TOOL_CALL_BUDGET_S
+        ):
             return _error_line(err)
         _LOGGER.info("GeoSphere rate limited, retrying in %ss", wait)
         await asyncio.sleep(wait)

@@ -74,7 +74,7 @@ The API clients and `condition.py` must not import `mcp` or `homeassistant`.
 - Argument validation happens in the tool body before any session is opened, and returns its own
   `⚠️ `-prefixed line rather than raising
 - GeoSphere out-of-domain is not a failure: `weather.py` raises `GeoSphereOutOfDomainError` and `server._guarded` renders it as the out-of-coverage line, distinct from the retryable ones
-- `asyncio.timeout()` enforces the per-request timeout (20 s, `GEOSPHERE_TIMEOUT`), kept below Home Assistant's 30 s MCP tool-call timeout
+- `asyncio.timeout()` enforces the per-request timeout (20 s, `GEOSPHERE_TIMEOUT`), kept below Home Assistant's MCP tool-call timeout (30 s since HA 2026.11, 10 s before). A rate-limit retry runs only if it still fits in `TOOL_CALL_BUDGET_S` (25 s)
 
 ### Return Types
 - MCP tools return `str` (emoji-markdown)

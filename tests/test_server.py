@@ -173,6 +173,23 @@ async def test_rate_limit_short_retry_then_fails() -> None:
     assert fetch.await_count == 2
 
 
+async def test_rate_limit_not_retried_when_the_call_budget_is_spent() -> None:
+    """A 429 that arrives late is not retried past the tool-call budget.
+
+    One request of a concurrent batch can take up to the request timeout, so
+    the 429 may only surface after ~20 s; a retry then would run past the
+    client's own timeout and the caller would never see this line.
+    """
+    fetch = AsyncMock(side_effect=GeoSphereRateLimitError("429", retry_after=1))
+    with (
+        patch.object(weather, "async_fetch_current_conditions", fetch),
+        patch("geosphere_mcp_server.server.monotonic", side_effect=[0.0, 18.0]),
+    ):
+        out = await get_current_weather(LAT, LON)
+    assert out == "⚠️ GeoSphere rate limit exceeded (retry in 1s)"
+    fetch.assert_awaited_once()
+
+
 # --- get_hourly_forecast ---
 
 

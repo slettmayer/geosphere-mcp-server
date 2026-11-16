@@ -7,7 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
-- Changed: requests to the GeoSphere API now time out after 20 s instead of 30 s. Home Assistant's MCP client cancels a tool call after 30 s, so with 30 s here a slow GeoSphere response reached a voice assistant as a generic tool error instead of this server's `⚠️ Timeout fetching weather data` line. A voice user can simply ask again, so failing sooner is the friendlier outcome
+- Changed: requests to the GeoSphere API now time out after 20 s instead of 30 s. Home Assistant's MCP client cancels a tool call after 30 s (since HA 2026.11; before that after 10 s, which this does not help with), so with 30 s here a slow GeoSphere response reached a voice assistant as a generic tool error instead of this server's `⚠️ Timeout fetching weather data` line. A voice user can simply ask again, so failing sooner is the friendlier outcome
+- Changed: a rate-limited request is retried only if the wait plus a full request still fits in 25 s, so the retry cannot push a tool call past Home Assistant's timeout either
 
 ## 0.8.0 - 2026-11-02
 
