@@ -11,7 +11,10 @@ from datetime import timedelta
 # --- GeoSphere Dataset API ---
 
 GEOSPHERE_API_BASE_URL = "https://dataset.api.hub.geosphere.at/v1"
-GEOSPHERE_TIMEOUT = 30
+# Below Home Assistant's 30 s MCP tool-call timeout, so the caller gets this
+# server's timeout line rather than a generic client-side error. Each tool
+# sends its requests concurrently, so this also bounds a whole tool call.
+GEOSPHERE_TIMEOUT = 20
 # Retry a rate-limited request once when the API asks to wait no longer than
 # this (seconds); otherwise surface the limit to the caller immediately.
 RATE_LIMIT_RETRY_MAX_S = 5.0
