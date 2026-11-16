@@ -90,7 +90,8 @@ async def _guarded(work: Callable[[], Awaitable[str]]) -> str:
     """Run ``work`` translating every failure into a markdown error line.
 
     A rate limit with a short enough ``Retry-After`` is retried once, if the
-    wait plus a full request still fits in ``TOOL_CALL_BUDGET_S``.
+    wait plus a full request still fits in ``TOOL_CALL_BUDGET_S``; the retry
+    is then cut off at that budget, so a late wake-up cannot overrun it.
     Out-of-domain is caught here rather than inside each tool: with no
     worldwide source behind it, every tool answers an uncovered point the same
     way, and it is the one failure the caller can act on.
@@ -112,7 +113,10 @@ async def _guarded(work: Callable[[], Awaitable[str]]) -> str:
     except Exception as err:  # noqa: BLE001
         return _error_line(err)
     try:
-        return await work()
+        async with asyncio.timeout(TOOL_CALL_BUDGET_S - (monotonic() - started)):
+            return await work()
+    except TimeoutError:
+        return _error_line(GeoSphereTimeoutError("Tool-call budget spent"))
     except Exception as err:  # noqa: BLE001
         return _error_line(err)
 

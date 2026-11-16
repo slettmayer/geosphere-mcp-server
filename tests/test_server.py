@@ -7,6 +7,7 @@ the function and returns it undecorated rather than wrapping it.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -188,6 +189,29 @@ async def test_rate_limit_not_retried_when_the_call_budget_is_spent() -> None:
         out = await get_current_weather(LAT, LON)
     assert out == "⚠️ GeoSphere rate limit exceeded (retry in 1s)"
     fetch.assert_awaited_once()
+
+
+async def test_rate_limit_retry_is_cut_off_at_the_call_budget() -> None:
+    """A retry that would run past the tool-call budget answers with a timeout.
+
+    The pre-check only bounds the retry it starts; a late wake-up from the
+    wait must not let the second request overrun the client's timeout.
+    """
+
+    async def rate_limited_then_hang(*_args: object, **_kwargs: object) -> None:
+        if fetch.await_count == 1:
+            raise GeoSphereRateLimitError("429", retry_after=0)
+        await asyncio.sleep(10)
+
+    fetch = AsyncMock(side_effect=rate_limited_then_hang)
+    with (
+        patch.object(weather, "async_fetch_current_conditions", fetch),
+        patch("geosphere_mcp_server.server.GEOSPHERE_TIMEOUT", 0),
+        patch("geosphere_mcp_server.server.TOOL_CALL_BUDGET_S", 0.05),
+    ):
+        out = await asyncio.wait_for(get_current_weather(LAT, LON), timeout=2)
+    assert out == "⚠️ Timeout fetching weather data"
+    assert fetch.await_count == 2
 
 
 # --- get_hourly_forecast ---

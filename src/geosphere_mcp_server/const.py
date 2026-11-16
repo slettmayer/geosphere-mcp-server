@@ -11,17 +11,18 @@ from datetime import timedelta
 # --- GeoSphere Dataset API ---
 
 GEOSPHERE_API_BASE_URL = "https://dataset.api.hub.geosphere.at/v1"
-# Below Home Assistant's MCP tool-call timeout (30 s since HA 2026.11; 10 s
-# before that), so the caller gets this server's timeout line rather than a
-# generic client-side error. Each tool sends its requests concurrently, so
-# this also bounds a whole tool call without a retry.
+# Below Home Assistant's MCP tool-call timeout of 30 s (HA 2026.11 and later),
+# so the caller gets this server's timeout line rather than a generic
+# client-side error. Older HA versions cancel after 10 s, before this fires.
+# Each tool sends its requests concurrently, so this also bounds a whole tool
+# call without a retry.
 GEOSPHERE_TIMEOUT = 20
 # Retry a rate-limited request once when the API asks to wait no longer than
 # this (seconds); otherwise surface the limit to the caller immediately.
 RATE_LIMIT_RETRY_MAX_S = 5.0
 # Longest a tool call may take, a rate-limit retry included. The retry runs
-# only if its wait plus a full request still fits, so it cannot push the call
-# past the client's timeout either.
+# only if its wait plus a full request still fits, and is cut off at this
+# budget, so it stays inside HA's 30 s timeout too (HA 2026.11 and later).
 TOOL_CALL_BUDGET_S = 25.0
 # GeoSphere covers Austria + the Alpine region, all within CET/CEST. Used to
 # render its UTC stamps and to match its daily values to a calendar day.
