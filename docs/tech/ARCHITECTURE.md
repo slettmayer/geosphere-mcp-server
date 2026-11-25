@@ -31,6 +31,7 @@ src/geosphere_mcp_server/
   weather.py           -- merge chain, hourly assembly, POP mapping, unit conversions
   air_quality.py       -- WRF-Chem pollutant merge + daily AQI (orchestration)
   geosphere_api.py     -- pure async client for the GeoSphere Dataset API
+  forecast_cache.py    -- in-process cache of the AROME and C-LAEF runs (per point, 3 h)
   condition.py         -- pure condition derivation (ported from ha-geosphere-next)
   outlook.py           -- pure storm-outlook derivation (ported from ha-geosphere-next)
   format.py            -- emoji-markdown renderers for the four tools
@@ -58,14 +59,34 @@ One module per responsibility. No sub-packages.
   bounds). Both run **before** any session is opened, so a validation failure never issues an HTTP request.
 - Does not own: HTTP communication, the merge/derivation logic
 - Calls: `weather.py` (fetch + merge), `air_quality.py`, and `format.py` (normalize + render) -- passing
-  in the session
+  in the session, except to the cached forecast fetch, which opens its own
 
 **`weather.py` (Orchestration Layer)**
 - Owns: the current-conditions merge chain (INCA -> nowcast -> AROME per field), hourly assembly (interval-ending parameters and the weather symbol read one stamp on, wind-from-components, the ensemble's POP estimate and storm inputs per row), the once-per-code warnings for unknown `pt` and `sy` codes
 - Does not own: HTTP calls (delegates to `geosphere_api`), the out-of-domain response (raises `GeoSphereOutOfDomainError` up to `server.py`), rendering, MCP concerns
 - Calls: `geosphere_api`, `condition`
-- `async_fetch_hourly_forecast` always requests AROME and C-LAEF together; the hourly tool uses the
-  ensemble for the precipitation chance, the storm outlook for its ensemble storm signal
+- `async_fetch_hourly_forecast` always requests AROME and C-LAEF together, each for its whole horizon and
+  through `forecast_cache`; the hourly tool uses the ensemble for the precipitation chance, the storm
+  outlook for its ensemble storm signal
+- The ensemble gets `ENSEMBLE_GRACE_S` (2 s) after AROME is in. One that misses it is left running (it
+  fills the cache) and the result carries `ensemble_pending`. `wait_for_ensemble=True` waits instead --
+  the storm outlook always passes it, the hourly tool only when its caller asks
+
+**`forecast_cache.py` (Caching)**
+- Owns: one entry per dataset, parameter list and point (coordinates rounded to 4 decimals), each holding
+  the *task* that fetches the run. Concurrent calls share the in-flight request, a finished run is reused
+  for `GEOSPHERE_FORECAST_CACHE_MINUTES` (default 180, `0` turns it off), and failures are dropped, never
+  replayed
+- An entry can also carry a `max_run_age`: the ensemble's is `ENSEMBLE_MAX_AGE` (12 h), so a cached run
+  is refetched once the storm outlook would stop counting it. Runs are published 6-9 h after their
+  reference time, so without it a run could cross that limit inside the 3 h lifetime while a newer one
+  waits upstream
+- At most `FORECAST_CACHE_MAX_ENTRIES` (64) entries; the oldest finished ones are dropped first, running
+  fetches never
+- With the cache off the hourly tool waits for the ensemble: a late one would have nowhere to go
+- Callers await an entry through `asyncio.shield`, so one that gives up cannot cancel a request others
+  share
+- Process-wide and in memory: a server restart starts it empty
 
 **`air_quality.py` (Orchestration Layer)**
 - Owns: the WRF-Chem pollutant merge (nearest forecast hour, full series retained) and the daily AQI
@@ -124,9 +145,11 @@ Coverage is decided by the upstream API, not by a hardcoded bounding box: the fe
 `GeoSphereOutOfDomainError` propagates to `_guarded`, which renders the out-of-coverage line.
 
 ### Session Management
-- `aiohttp.ClientSession` is created per-tool-call in `server.py` using `async with`
-- The session is passed into orchestration and API functions as a parameter
-- The API modules never create or own a session
+- `aiohttp.ClientSession` is created per-tool-call in `server.py` using `async with` for
+  `get_current_weather` and `get_air_quality`
+- The two forecast tools open no session in `server.py`: each cached forecast fetch in `weather.py` opens
+  its own, because it can outlive the tool call that started it (a skipped ensemble finishes into the cache)
+- The session is passed into the API functions as a parameter; `geosphere_api.py` never creates one
 - No session reuse or connection pooling across calls
 
 ### Error Signaling
@@ -171,7 +194,8 @@ every tool answers an uncovered point identically. Tools never raise across the 
 
 ## Dependencies
 - `server.py` depends on `weather.py`, `air_quality.py`, `format.py`, `const.py`
-- `weather.py` depends on `geosphere_api.py`, `condition.py`, `const.py` (not `format`)
+- `weather.py` depends on `geosphere_api.py`, `forecast_cache.py`, `condition.py`, `const.py` (not `format`)
+- `forecast_cache.py` depends on `geosphere_api.py` (the response type) and `const.py`
 - `geosphere_api.py` depends on `const.py`, `aiohttp`, `asyncio`
 - `condition.py` depends on `astral` and `const.py` only
 - `outlook.py` depends on `condition.py` and `const.py`; `format.py` depends on `outlook.py`

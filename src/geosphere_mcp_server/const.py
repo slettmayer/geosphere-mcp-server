@@ -28,6 +28,26 @@ TOOL_CALL_BUDGET_S = 25.0
 # render its UTC stamps and to match its daily values to a calendar day.
 GEOSPHERE_TZ = "Europe/Vienna"
 
+# How long `get_hourly_forecast` waits for the C-LAEF ensemble once AROME is
+# in (seconds). The ensemble only adds the precipitation chance, and the API
+# answers it anywhere from under a second to ~20 s, so the forecast is not
+# held for it unless the caller passes `wait_for_ensemble=True`. A late
+# ensemble request keeps running and fills the forecast cache for later calls.
+ENSEMBLE_GRACE_S = 2.0
+
+# Forecast-run cache (see forecast_cache.py). AROME and the C-LAEF ensemble
+# rerun every 3 h, so a 3 h lifetime is at most one run behind. Overridable in
+# minutes through the environment variable below; 0 turns caching off.
+FORECAST_CACHE_TTL_ENV = "GEOSPHERE_FORECAST_CACHE_MINUTES"
+FORECAST_CACHE_DEFAULT_MINUTES = 180.0
+# Coordinates are rounded to this many decimals for the cache key (~11 m), so
+# the same place spelled 48.2208 and 48.22080001 shares an entry.
+FORECAST_CACHE_COORD_DECIMALS = 4
+# Most entries kept (two per point: AROME and the ensemble); the oldest
+# finished ones go first. A run is a few kB, so this only bounds a caller
+# sweeping many points.
+FORECAST_CACHE_MAX_ENTRIES = 64
+
 # Datasets (mode, resource id). `AROME` names the deterministic forecast source
 # throughout the code; the dataset itself is the control run of the C-LAEF
 # AlpeAdria ensemble on a 1 km grid, and `DATASET_ENSEMBLE` is that ensemble.

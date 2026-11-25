@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 from datetime import UTC, datetime, timedelta
@@ -10,15 +11,20 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from geosphere_mcp_server import weather
+from geosphere_mcp_server import forecast_cache, weather
 from geosphere_mcp_server.const import (
+    AROME_MAX_HOURS,
     AROME_PARAMETERS,
+    DATASET_AROME,
+    DATASET_ENSEMBLE,
+    ENSEMBLE_MAX_AGE,
     ENSEMBLE_PARAMETERS,
     NOWCAST_LOOKBACK,
     PRECIP_MIN_MM,
     SY_PRECIPITATION,
 )
 from geosphere_mcp_server.geosphere_api import (
+    GeoSphereApiError,
     GeoSphereOutOfDomainError,
     GeoSphereResponse,
     ParameterSeries,
@@ -829,39 +835,76 @@ async def test_async_fetch_current_arome_out_of_domain_raises() -> None:
 # --- async_fetch_hourly_forecast ---
 
 
+@pytest.fixture(autouse=True)
+def _wall_clock_at_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Age the fixtures' runs against NOW, not the real date.
+
+    The cache refetches an ensemble run once it reaches ENSEMBLE_MAX_AGE by
+    the wall clock; against the real date every fixture run is months old.
+    """
+    monkeypatch.setattr(forecast_cache, "_utcnow", lambda: NOW)
+
+
+def _by_dataset(
+    arome: GeoSphereResponse | BaseException,
+    ensemble: GeoSphereResponse | BaseException,
+    *,
+    ensemble_delay: float = 0.0,
+) -> AsyncMock:
+    """A stand-in for `async_get_timeseries` that answers by dataset.
+
+    The two requests run as separate tasks, so their order is not a contract;
+    keying on the resource id keeps the tests independent of it.
+    """
+
+    async def answer(*args: object, **_kwargs: object) -> GeoSphereResponse:
+        if args[2] == DATASET_AROME[1]:
+            result = arome
+        else:
+            if ensemble_delay:
+                await asyncio.sleep(ensemble_delay)
+            result = ensemble
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    return AsyncMock(side_effect=answer)
+
+
+def _requests_for(mock: AsyncMock, dataset: tuple[str, str]) -> int:
+    """How many requests `mock` received for `dataset`."""
+    return sum(1 for call in mock.await_args_list if call.args[2] == dataset[1])
+
+
 async def test_async_fetch_hourly_with_ensemble() -> None:
-    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    mock = _by_dataset(_arome_forecast(), _ensemble())
     with patch.object(weather, "async_get_timeseries", mock):
-        result = await async_fetch_hourly_forecast(
-            None, 48.219, 16.362, hours=24, now=NOW
-        )
+        result = await async_fetch_hourly_forecast(48.219, 16.362, hours=24, now=NOW)
     assert result["sources"] == ["AROME", "C-LAEF ensemble"]
+    assert result["ensemble_pending"] is False
     pop = {h["time"]: h["precipitation_probability_pct"] for h in result["hourly"]}
     assert pop[datetime(2026, 7, 15, 16, 0, tzinfo=UTC)] == 70
 
 
 async def test_async_fetch_hourly_ensemble_failure_omits_pop() -> None:
-    mock = AsyncMock(
-        side_effect=[_arome_forecast(), GeoSphereOutOfDomainError("ens oob")]
-    )
+    mock = _by_dataset(_arome_forecast(), GeoSphereOutOfDomainError("ens oob"))
     with patch.object(weather, "async_get_timeseries", mock):
-        result = await async_fetch_hourly_forecast(None, 48.219, 16.362, now=NOW)
+        result = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
     assert result["sources"] == ["AROME"]
+    # A failed ensemble is not a pending one: waiting longer would not help.
+    assert result["ensemble_pending"] is False
     assert all(h["precipitation_probability_pct"] is None for h in result["hourly"])
 
 
 async def test_async_fetch_hourly_arome_out_of_domain_raises() -> None:
-    mock = AsyncMock(
-        side_effect=[
-            GeoSphereOutOfDomainError("arome oob"),
-            GeoSphereOutOfDomainError("ens oob"),
-        ]
+    mock = _by_dataset(
+        GeoSphereOutOfDomainError("arome oob"), GeoSphereOutOfDomainError("ens oob")
     )
     with (
         patch.object(weather, "async_get_timeseries", mock),
         pytest.raises(GeoSphereOutOfDomainError),
     ):
-        await async_fetch_hourly_forecast(None, 38.7, -9.1, now=NOW)
+        await async_fetch_hourly_forecast(38.7, -9.1, now=NOW)
 
 
 async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
@@ -876,9 +919,9 @@ async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
     so anchoring to `now` at 15:30 with no lookback would come back at 16:00
     and lose the hour under way. The lookback is margin on top of the anchor.
     """
-    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    mock = _by_dataset(_arome_forecast(), _ensemble())
     with patch.object(weather, "async_get_timeseries", mock):
-        await async_fetch_hourly_forecast(None, 48.219, 16.362, now=NOW)
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
 
     expected = NOW.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     assert mock.await_count == 2
@@ -888,9 +931,9 @@ async def test_async_fetch_hourly_requests_an_hour_of_history() -> None:
 
 async def test_async_fetch_hourly_keeps_the_in_progress_hour() -> None:
     """With the predecessor present, the series starts at the current hour."""
-    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
+    mock = _by_dataset(_arome_forecast(), _ensemble())
     with patch.object(weather, "async_get_timeseries", mock):
-        result = await async_fetch_hourly_forecast(None, 48.219, 16.362, now=NOW)
+        result = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
 
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     assert result["hourly"][0]["time"] == top_of_hour
@@ -934,48 +977,219 @@ def test_arome_current_needs_a_successor() -> None:
     assert weather._arome_current(None, 48.219, 16.362, NOW) is None
 
 
-async def test_async_fetch_hourly_bounds_the_request_to_the_window() -> None:
-    """`hours=N` must not pull the whole ~60 h horizon and discard most of it."""
-    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
-    with patch.object(weather, "async_get_timeseries", mock):
-        await async_fetch_hourly_forecast(None, 48.219, 16.362, hours=6, now=NOW)
+@pytest.mark.parametrize(
+    ("hours", "start"),
+    [
+        pytest.param(6, None, id="short-window"),
+        pytest.param(4, NOW + timedelta(hours=10), id="future-start"),
+        pytest.param(3, NOW - timedelta(hours=8), id="past-start"),
+    ],
+)
+async def test_async_fetch_hourly_requests_the_whole_horizon(
+    hours: int, start: datetime | None
+) -> None:
+    """Every window is served from one fetch of the whole run.
 
-    top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
-    for call in mock.await_args_list:
-        assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
-        # Two hours of slack past the requested window: one because the last
-        # hour's interval fields (gust, precipitation, symbol) live on the
-        # following stamp, and one so rounding at the boundary cannot clip
-        # that successor.
-        assert call.kwargs["end"] == top_of_hour + timedelta(hours=8)
-
-
-async def test_async_fetch_hourly_bounds_from_an_explicit_start() -> None:
-    """A `start` in the future moves the whole fetched window with it."""
-    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
-    later = NOW.replace(minute=0, second=0, microsecond=0) + timedelta(hours=10)
+    The run only changes every 3 h, so the cached horizon answers any later
+    window too; a request bounded to the caller's window would not. The
+    start stays anchored to the hour under way whatever the caller asked.
+    """
+    mock = _by_dataset(_arome_forecast(), _ensemble())
     with patch.object(weather, "async_get_timeseries", mock):
         await async_fetch_hourly_forecast(
-            None, 48.219, 16.362, hours=4, start=later, now=NOW
-        )
-
-    for call in mock.await_args_list:
-        assert call.kwargs["start"] == later - timedelta(hours=1)
-        assert call.kwargs["end"] == later + timedelta(hours=6)
-
-
-async def test_async_fetch_hourly_start_in_the_past_is_ignored_for_bounds() -> None:
-    """A `start` before now must not drag the window backwards."""
-    mock = AsyncMock(side_effect=[_arome_forecast(), _ensemble()])
-    earlier = NOW - timedelta(hours=8)
-    with patch.object(weather, "async_get_timeseries", mock):
-        await async_fetch_hourly_forecast(
-            None, 48.219, 16.362, hours=3, start=earlier, now=NOW
+            48.219, 16.362, hours=hours, start=start, now=NOW
         )
 
     top_of_hour = NOW.replace(minute=0, second=0, microsecond=0)
     for call in mock.await_args_list:
         assert call.kwargs["start"] == top_of_hour - timedelta(hours=1)
+        # Two hours of slack past the horizon: one for the last row's
+        # successor, which holds its interval fields, and one for rounding.
+        assert call.kwargs["end"] == NOW + timedelta(hours=AROME_MAX_HOURS + 2)
+
+
+async def test_async_fetch_hourly_reuses_the_cached_run() -> None:
+    """A second call for the same point sends no request."""
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        later = await async_fetch_hourly_forecast(
+            48.219, 16.362, hours=3, start=NOW + timedelta(hours=1), now=NOW
+        )
+    assert mock.await_count == 2
+    assert later["sources"] == ["AROME", "C-LAEF ensemble"]
+    assert later["hourly"]
+    assert all(h["time"] >= NOW + timedelta(hours=1) for h in later["hourly"])
+
+
+async def test_async_fetch_hourly_cache_is_per_point() -> None:
+    """Another location is fetched; the same one, rounded, is not."""
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        await async_fetch_hourly_forecast(48.21900001, 16.36199999, now=NOW)
+        assert mock.await_count == 2
+        await async_fetch_hourly_forecast(46.6354, 14.1412, now=NOW)
+    assert mock.await_count == 4
+
+
+async def test_async_fetch_hourly_concurrent_calls_share_a_request() -> None:
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await asyncio.gather(
+            async_fetch_hourly_forecast(48.219, 16.362, now=NOW),
+            async_fetch_hourly_forecast(48.219, 16.362, hours=60, now=NOW),
+        )
+    assert _requests_for(mock, DATASET_AROME) == 1
+    assert _requests_for(mock, DATASET_ENSEMBLE) == 1
+
+
+async def test_async_fetch_hourly_cache_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(forecast_cache, "monotonic", lambda: clock[0])
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        clock[0] += 3 * 3600 - 1
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        assert mock.await_count == 2
+        clock[0] += 1
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert mock.await_count == 4
+
+
+@pytest.mark.parametrize("minutes", ["0", "-5"])
+async def test_async_fetch_hourly_cache_off(
+    monkeypatch: pytest.MonkeyPatch, minutes: str
+) -> None:
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, minutes)
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert mock.await_count == 4
+
+
+def test_cache_ttl_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert forecast_cache.cache_ttl_s() == 3 * 3600
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, "90")
+    assert forecast_cache.cache_ttl_s() == 90 * 60
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, "soon")
+    assert forecast_cache.cache_ttl_s() == 3 * 3600
+
+
+async def test_async_fetch_hourly_does_not_cache_a_failure() -> None:
+    """A failed fetch is retried by the next call instead of being replayed."""
+    good = _by_dataset(_arome_forecast(), _ensemble())
+    bad = _by_dataset(GeoSphereApiError("HTTP 503"), _ensemble())
+    with patch.object(weather, "async_get_timeseries", bad):
+        with pytest.raises(GeoSphereApiError):
+            await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        await asyncio.sleep(0)  # let the failed task's callback run
+    with patch.object(weather, "async_get_timeseries", good):
+        result = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert _requests_for(good, DATASET_AROME) == 1
+    assert result["hourly"]
+
+
+async def test_async_fetch_hourly_slow_ensemble_is_not_waited_for() -> None:
+    """A late ensemble is skipped, flagged, and lands in the cache anyway."""
+    mock = _by_dataset(_arome_forecast(), _ensemble(), ensemble_delay=0.2)
+    with (
+        patch.object(weather, "async_get_timeseries", mock),
+        patch.object(weather, "ENSEMBLE_GRACE_S", 0.01),
+    ):
+        first = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        assert first["sources"] == ["AROME"]
+        assert first["ensemble_pending"] is True
+        assert all(h["precipitation_probability_pct"] is None for h in first["hourly"])
+
+        await asyncio.sleep(0.3)  # the skipped request finishes meanwhile
+        second = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert second["sources"] == ["AROME", "C-LAEF ensemble"]
+    assert second["ensemble_pending"] is False
+    assert _requests_for(mock, DATASET_ENSEMBLE) == 1
+
+
+async def test_async_fetch_hourly_waits_for_the_ensemble_on_request() -> None:
+    mock = _by_dataset(_arome_forecast(), _ensemble(), ensemble_delay=0.1)
+    with (
+        patch.object(weather, "async_get_timeseries", mock),
+        patch.object(weather, "ENSEMBLE_GRACE_S", 0.01),
+    ):
+        result = await async_fetch_hourly_forecast(
+            48.219, 16.362, now=NOW, wait_for_ensemble=True
+        )
+    assert result["sources"] == ["AROME", "C-LAEF ensemble"]
+    assert result["ensemble_pending"] is False
+
+
+async def test_async_fetch_hourly_waits_for_the_ensemble_with_the_cache_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With nothing to keep a late ensemble for, skipping it would only lose it."""
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, "0")
+    mock = _by_dataset(_arome_forecast(), _ensemble(), ensemble_delay=0.1)
+    with (
+        patch.object(weather, "async_get_timeseries", mock),
+        patch.object(weather, "ENSEMBLE_GRACE_S", 0.01),
+    ):
+        result = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert result["sources"] == ["AROME", "C-LAEF ensemble"]
+    assert result["ensemble_pending"] is False
+
+
+async def test_async_fetch_hourly_refetches_an_ensemble_run_at_max_age(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached run is replaced once the storm outlook would stop counting it.
+
+    Runs are published hours after their reference time, so one fetched at
+    9.5 h old would cross the 12 h limit well inside the 3 h cache lifetime.
+    """
+    reference = _ensemble().reference_time
+    assert reference is not None
+    wall = [reference + ENSEMBLE_MAX_AGE - timedelta(minutes=1)]
+    monkeypatch.setattr(forecast_cache, "_utcnow", lambda: wall[0])
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        assert _requests_for(mock, DATASET_ENSEMBLE) == 1
+        wall[0] += timedelta(minutes=1)
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert _requests_for(mock, DATASET_ENSEMBLE) == 2
+    # AROME has no age rule, so it is still served from the cache.
+    assert _requests_for(mock, DATASET_AROME) == 1
+
+
+async def test_async_fetch_hourly_cache_drops_the_oldest_beyond_its_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(forecast_cache, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(forecast_cache, "FORECAST_CACHE_MAX_ENTRIES", 2)
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        clock[0] += 1
+        await async_fetch_hourly_forecast(46.6354, 14.1412, now=NOW)
+        assert len(forecast_cache._ENTRIES) == 2
+        clock[0] += 1
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert _requests_for(mock, DATASET_AROME) == 3
+
+
+def test_cache_ttl_warns_once_per_invalid_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, "soon")
+    for _ in range(3):
+        forecast_cache.cache_ttl_s()
+    warnings = [r for r in caplog.records if "Ignoring" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 # --- Recorded v2 responses ---

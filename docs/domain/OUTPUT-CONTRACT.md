@@ -22,7 +22,7 @@ produces — fields, source attribution, day-divider headers, and horizon notes.
 | Tool | Signature | Sources | Horizon |
 |------|-----------|---------|---------|
 | `get_current_weather` | `(latitude, longitude) -> str` | INCA + nowcast + AROME merge | now |
-| `get_hourly_forecast` | `(latitude, longitude, hours=24, start=None) -> str` | AROME (+C-LAEF) | 1-60 h |
+| `get_hourly_forecast` | `(latitude, longitude, hours=24, start=None, wait_for_ensemble=False) -> str` | AROME (+C-LAEF) | 1-60 h |
 | `get_storm_outlook` | `(latitude, longitude) -> str` | AROME + C-LAEF | fixed 1 h / 12 h windows over the full series |
 | `get_air_quality` | `(latitude, longitude) -> str` | WRF-Chem | now + 3 days |
 
@@ -41,6 +41,13 @@ second source, so the longest answer available is `get_hourly_forecast` at its c
 zone every output time is shown in; an explicit offset is honoured. An unparseable value returns
 `⚠️ Invalid start time '{start}'; use ISO 8601 (e.g. 2026-07-22T15:00)` **before** any HTTP session is
 opened.
+
+**`wait_for_ensemble`** (`get_hourly_forecast` only, default `false`) decides how long the tool waits for
+the C-LAEF ensemble behind the precipitation chance. By default it gets 2 s (`ENSEMBLE_GRACE_S`) after
+AROME is in, and the forecast comes without the chance if it is later — see the trailing note under Hourly
+Forecast Output. `true` waits for it, up to the request timeout, and so does the default while the forecast
+cache is off (`GEOSPHERE_FORECAST_CACHE_MINUTES=0`), when a skipped ensemble could never reach a later call.
+`get_storm_outlook` always waits: there the ensemble is a thunderstorm signal, not an extra.
 
 ### Current Weather Output
 The only renderer that uses per-field emoji. Fields are omitted when the value is unavailable:
@@ -103,6 +110,14 @@ the snow limit (AROME `snowlmt`, whole metres) is omitted when unavailable, and 
 Whenever at least one line shows a chance, a trailing note labels it:
 `Precipitation chance is an estimate derived from the C-LAEF ensemble percentiles (0/30/70/95 %), not a
 probability GeoSphere publishes.`
+
+When the ensemble missed its 2 s grace (not when it failed), the source drops to `GeoSphere (AROME)` and a
+trailing note says how to get the chance, and that it is only worth it when the chance is needed:
+`Precipitation chance not included: the C-LAEF ensemble was slow to respond. If the chance is needed,
+call again with wait_for_ensemble=true (can take up to ~20 s).` The wait is stated because a caller after
+a fast answer, such as a voice assistant, should not pay it for a forecast that never needed the chance.
+The skipped request keeps running and fills the forecast cache, so a repeat call a little later usually
+carries the chance without waiting.
 
 When fewer hours come back than were requested, a trailing note is appended:
 `Note: AROME forecast horizon ends {timestamp} (~60 h). This server publishes nothing beyond it.`

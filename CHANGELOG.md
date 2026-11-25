@@ -7,6 +7,23 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+- Added: `get_hourly_forecast` and `get_storm_outlook` share an in-memory cache of the forecast runs.
+  The first call for a place fetches the whole ~60 h AROME and C-LAEF run, and calls for that place over
+  the next 3 h answer from it without asking the API, which takes anywhere from 0.5 s to 20 s per request.
+  Concurrent calls share one request and failures are never cached. A cached ensemble run is refetched
+  once it is 12 h old, so the storm outlook keeps counting its signal, and the cache holds at most 64
+  runs. Set `GEOSPHERE_FORECAST_CACHE_MINUTES` to change the lifetime, or to `0` to turn the cache off
+  (the hourly forecast then always waits for the ensemble).
+- Changed: `get_hourly_forecast` no longer holds the forecast back for the C-LAEF ensemble. Once AROME is
+  in, the ensemble gets 2 s more; if it is later, the answer comes without the precipitation chance and
+  ends with a note saying so. The late request keeps running and fills the cache, so asking again a little
+  later usually includes the chance.
+- Added: **parameter.** `get_hourly_forecast(wait_for_ensemble=true)` waits for the ensemble instead, for
+  when the precipitation chance matters more than a fast answer. `get_storm_outlook` always waits for it,
+  because there the ensemble is one of the two thunderstorm signals.
+- Changed: the forecast requests always ask for the whole horizon instead of only the hours the caller
+  wants, so one cached run serves every window.
+
 ## 0.8.1 - 2026-11-16
 
 - Changed: requests to the GeoSphere API now time out after 20 s instead of 30 s. Home Assistant's MCP client cancels a tool call after 30 s (since HA 2026.11; before that after 10 s, which this does not help with), so with 30 s here a slow GeoSphere response reached a voice assistant as a generic tool error instead of this server's `⚠️ Timeout fetching weather data` line. A voice user can simply ask again, so failing sooner is the friendlier outcome

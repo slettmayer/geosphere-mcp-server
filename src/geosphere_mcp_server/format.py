@@ -22,6 +22,7 @@ from geosphere_mcp_server.const import (
     AROME_MAX_HOURS,
     ENSEMBLE_MAX_AGE,
     FALLING_NOW_LABELS,
+    GEOSPHERE_TIMEOUT,
     GEOSPHERE_TZ,
     OUTLOOK_LONG_HORIZON_HOURS,
     OUTLOOK_SHORT_HORIZON_HOURS,
@@ -203,6 +204,14 @@ _CHANCE_NOTE = (
     f"percentiles ({POP_DRY_PCT}/{POP_P90_WET_PCT}/{POP_P50_WET_PCT}/"
     f"{POP_P10_WET_PCT} %), not a probability GeoSphere publishes."
 )
+# Printed when the ensemble missed its grace. It names the argument that waits
+# for it, and only for a caller that needs the chance: a retry costs up to the
+# request timeout, which a caller after a fast answer should not pay.
+_ENSEMBLE_PENDING_NOTE = (
+    "Precipitation chance not included: the C-LAEF ensemble was slow to "
+    "respond. If the chance is needed, call again with wait_for_ensemble=true "
+    f"(can take up to ~{GEOSPHERE_TIMEOUT} s)."
+)
 
 
 def _hourly_line(hour: dict[str, Any]) -> str:
@@ -272,6 +281,7 @@ def normalize_hourly(
         "tz_abbr": reference_local.tzname() if reference_local is not None else None,
         "source": _source(assembled["sources"]),
         "note": note,
+        "ensemble_pending": assembled.get("ensemble_pending", False),
     }
 
 
@@ -303,6 +313,8 @@ def render_hourly(data: dict[str, Any]) -> str:
     notes = [data["note"]] if data.get("note") else []
     if shows_chance:
         notes.append(_CHANCE_NOTE)
+    if data.get("ensemble_pending"):
+        notes.append(_ENSEMBLE_PENDING_NOTE)
     if notes:
         lines.append("")
         lines.extend(notes)

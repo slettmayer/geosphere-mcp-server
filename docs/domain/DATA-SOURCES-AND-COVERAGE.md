@@ -68,12 +68,18 @@ deterministic run, so the newest ensemble run in service is routinely 6–9 h ol
 remaining horizon from *now* is typically ~52–55 h rather than 60, and the storm outlook allows the
 ensemble up to 12 h of run age (`ENSEMBLE_MAX_AGE`, see [STORM-OUTLOOK.md](STORM-OUTLOOK.md)).
 
-Hourly requests carry both a `start` and an `end`: one hour of history (so the series is guaranteed to
-reach the hour in progress, which the API's round-up of `start` would otherwise skip past) through two
-hours past the window the caller asked for — one because the last hour's interval parameters live on the
-following stamp, one so rounding at the boundary cannot clip that successor. A 6-hour request therefore
-transfers 9 hourly steps rather than the full horizon. A `start` before the run's t0 comes back at t0.
-`get_storm_outlook` asks for `AROME_MAX_HOURS`, so its scan still spans everything AROME publishes.
+Forecast requests (AROME and C-LAEF, for `get_hourly_forecast` and `get_storm_outlook`) carry both a
+`start` and an `end`: one hour of history (so the series is guaranteed to reach the hour in progress,
+which the API's round-up of `start` would otherwise skip past) through two hours past `AROME_MAX_HOURS` —
+one because the last hour's interval parameters live on the following stamp, one so rounding at the
+boundary cannot clip that successor. They always ask for the whole horizon, whatever window the caller
+wants, because the run is cached per point for 3 h (`forecast_cache.py`) and serves every later window
+and both tools from that one fetch. A `start` before the run's t0 comes back at t0.
+
+**Response times.** Measured 2026-11-25 from Vienna, the API answered a forecast request in anywhere from
+0.5 s to 20 s, almost all of it waiting for its first byte, and either dataset can be the slow one. That
+is why the forecast runs are cached and why `get_hourly_forecast` gives the ensemble only 2 s after AROME
+unless the caller passes `wait_for_ensemble=true`.
 `get_current_weather` bounds its AROME request the same way for the single hour in progress
 (`weather._forecast_bounds`), and `get_air_quality` asks WRF-Chem only for the two hours around now, the
 stamp nearest now being the only one it reads.
