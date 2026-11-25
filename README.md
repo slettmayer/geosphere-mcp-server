@@ -107,6 +107,7 @@ Hour-by-hour forecast from AROME, up to ~60 h. Each hour's condition is GeoSpher
 | `longitude` | float | required | Decimal longitude (e.g. `16.3738`) |
 | `hours` | int | 24 | Forecast hours (clamped to 1–60) |
 | `start` | string | now | Optional ISO 8601 start (e.g. `2026-07-22T15:00`); forecast begins at/after this instant. Without an offset it is Vienna local time, like the output |
+| `wait_for_ensemble` | bool | false | Wait for the C-LAEF ensemble behind the precipitation chance (up to ~20 s). By default it gets 2 s after the forecast is in; if it is later, the answer comes without the chance and a note says so |
 
 ```
 # 3-Hour Forecast for 48.2208, 16.3738
@@ -187,6 +188,10 @@ The API is keyless and intended for **non-commercial** use. When you redistribut
 ## Rate limits
 
 The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Each call issues a small burst of concurrent requests (three for current weather, two each for the hourly forecast, the storm outlook and air quality); on an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice.
+
+## Forecast cache
+
+The API often takes several seconds, sometimes up to 20 s, to answer a forecast request, while a forecast run only changes every 3 h. So the hourly forecast and the storm outlook share an in-memory cache: the first call for a place fetches the whole ~60 h run, and every call for that place in the next 3 h answers from it without a request. Concurrent calls share one request, and a failed request is never cached. Set `GEOSPHERE_FORECAST_CACHE_MINUTES` to change the lifetime, or to `0` to turn the cache off. The cache lives in the server process, so a restart empties it.
 
 ## Development
 

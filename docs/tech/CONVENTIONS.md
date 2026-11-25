@@ -18,7 +18,7 @@ Documents naming patterns, code style, import ordering, error handling, and logg
 
 ### File Naming
 - Source files: `snake_case.py`
-- Module names match their responsibility: `server`, `weather`, `air_quality`, `geosphere_api`, `condition`, `outlook`, `format`, `const`
+- Module names match their responsibility: `server`, `weather`, `air_quality`, `geosphere_api`, `forecast_cache`, `condition`, `outlook`, `format`, `const`
 
 ### Function Naming
 | Category | Pattern | Example |

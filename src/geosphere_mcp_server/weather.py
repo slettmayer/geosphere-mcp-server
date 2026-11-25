@@ -17,6 +17,7 @@ from typing import Any
 
 import aiohttp
 
+from geosphere_mcp_server import forecast_cache
 from geosphere_mcp_server.condition import (
     apparent_temperature,
     derive_condition_from_symbol,
@@ -26,11 +27,13 @@ from geosphere_mcp_server.condition import (
     wind_from_components,
 )
 from geosphere_mcp_server.const import (
+    AROME_MAX_HOURS,
     AROME_PARAMETERS,
     DATASET_AROME,
     DATASET_ENSEMBLE,
     DATASET_INCA,
     DATASET_NOWCAST,
+    ENSEMBLE_GRACE_S,
     ENSEMBLE_PARAMETERS,
     FORECAST_ROW_MIDPOINT,
     HOURLY_LOOKBACK_HOURS,
@@ -51,6 +54,7 @@ from geosphere_mcp_server.const import (
     SY_CODES,
 )
 from geosphere_mcp_server.geosphere_api import (
+    GeoSphereConnectionError,
     GeoSphereResponse,
     async_get_timeseries,
     optional_response,
@@ -510,62 +514,97 @@ async def async_fetch_current_conditions(
     return merged
 
 
+def _forecast_run(
+    dataset: tuple[str, str],
+    parameters: tuple[str, ...],
+    latitude: float,
+    longitude: float,
+    now: datetime,
+) -> asyncio.Task[GeoSphereResponse]:
+    """The cached or in-flight fetch of one dataset's whole horizon for a point.
+
+    The whole horizon, not just the caller's window: the run only changes
+    every 3 h, so one fetch serves every window and both forecast tools until
+    the cache entry expires. The start is anchored to the hour under way
+    (see `HOURLY_LOOKBACK_HOURS`), and every later call starts later still,
+    so a cached series always reaches back to the hour under way.
+    """
+    series_start, series_end = _forecast_bounds(now, AROME_MAX_HOURS)
+
+    async def fetch() -> GeoSphereResponse:
+        async with aiohttp.ClientSession() as session:
+            return await async_get_timeseries(
+                session,
+                *dataset,
+                parameters,
+                latitude,
+                longitude,
+                start=series_start,
+                end=series_end,
+            )
+
+    key = forecast_cache.cache_key(dataset[1], parameters, latitude, longitude)
+    return forecast_cache.forecast_run_task(key, fetch)
+
+
+async def _ensemble_result(
+    task: asyncio.Task[GeoSphereResponse],
+    wait: bool,
+) -> GeoSphereResponse | BaseException | None:
+    """The ensemble's response or failure, or None if it missed the grace.
+
+    Never cancels the request: one still running keeps going and lands in the
+    forecast cache for the next call.
+    """
+    done, _ = await asyncio.wait({task}, timeout=None if wait else ENSEMBLE_GRACE_S)
+    if not done:
+        _LOGGER.info(
+            "C-LAEF ensemble not back %ss after AROME; answering without it",
+            ENSEMBLE_GRACE_S,
+        )
+        return None
+    if task.cancelled():
+        return GeoSphereConnectionError("C-LAEF ensemble request was cancelled")
+    return task.exception() or task.result()
+
+
 async def async_fetch_hourly_forecast(
-    session: aiohttp.ClientSession,
     latitude: float,
     longitude: float,
     hours: int = 24,
     start: datetime | None = None,
     now: datetime | None = None,
+    wait_for_ensemble: bool = False,
 ) -> dict[str, Any]:
     """Fetch AROME + C-LAEF ensemble concurrently and assemble the hourly forecast.
 
-    Ensemble failure just omits the precipitation probability and the
-    ensemble's thunderstorm signal. Raises :class:`GeoSphereOutOfDomainError`
-    only when AROME is out of domain, which the server renders as an
-    out-of-coverage notice; other AROME errors propagate. The result carries a
-    ``sources`` list.
+    Both come from the forecast cache when a run for the point is held there.
+    Once AROME is in, the ensemble gets ``ENSEMBLE_GRACE_S`` more unless
+    ``wait_for_ensemble`` is set; an ensemble that misses it is reported as
+    ``ensemble_pending`` and left to finish into the cache.
+
+    Ensemble failure, or a missed grace, just omits the precipitation
+    probability and the ensemble's thunderstorm signal. Raises
+    :class:`GeoSphereOutOfDomainError` only when AROME is out of domain, which
+    the server renders as an out-of-coverage notice; other AROME errors
+    propagate. The result carries a ``sources`` list.
     """
     now = now or datetime.now(UTC)
 
-    # The first hour the assembly will keep: the hour in progress, or the
-    # caller's `start` when that is later.
-    window_start = now.replace(minute=0, second=0, microsecond=0)
-    if start is not None and start > window_start:
-        window_start = start
-
-    # No further than the caller asked for: `hours=6` has no use for the
-    # other ~54 h of the AROME horizon. The storm outlook asks for
-    # AROME_MAX_HOURS, so its scan still spans the full run.
-    series_start, series_end = _forecast_bounds(window_start, hours)
-
-    arome_res, ensemble_res = await asyncio.gather(
-        async_get_timeseries(
-            session,
-            *DATASET_AROME,
-            AROME_PARAMETERS,
-            latitude,
-            longitude,
-            start=series_start,
-            end=series_end,
-        ),
-        async_get_timeseries(
-            session,
-            *DATASET_ENSEMBLE,
-            ENSEMBLE_PARAMETERS,
-            latitude,
-            longitude,
-            start=series_start,
-            end=series_end,
-        ),
-        return_exceptions=True,
+    arome_task = _forecast_run(
+        DATASET_AROME, AROME_PARAMETERS, latitude, longitude, now
+    )
+    ensemble_task = _forecast_run(
+        DATASET_ENSEMBLE, ENSEMBLE_PARAMETERS, latitude, longitude, now
     )
 
-    if isinstance(arome_res, BaseException):
-        raise arome_res
-    arome: GeoSphereResponse = arome_res
-
-    ensemble = optional_response(ensemble_res, "C-LAEF ensemble")
+    arome = await asyncio.shield(arome_task)
+    ensemble_res = await _ensemble_result(ensemble_task, wait_for_ensemble)
+    ensemble = (
+        optional_response(ensemble_res, "C-LAEF ensemble")
+        if ensemble_res is not None
+        else None
+    )
 
     assembled = assemble_hourly_forecast(
         arome, ensemble, latitude, longitude, now, hours=hours, start=start
@@ -576,4 +615,5 @@ async def async_fetch_hourly_forecast(
     if ensemble is not None:
         sources.append("C-LAEF ensemble")
     assembled["sources"] = sources
+    assembled["ensemble_pending"] = ensemble_res is None
     return assembled

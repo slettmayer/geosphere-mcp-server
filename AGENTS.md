@@ -40,6 +40,7 @@ All code lives in `src/geosphere_mcp_server/`.
 - `weather.py` -- merge chain, hourly assembly, POP mapping, unit conversions (orchestration)
 - `air_quality.py` -- WRF-Chem pollutant merge + daily AQI by local calendar day (orchestration)
 - `geosphere_api.py` -- pure async client for the GeoSphere Dataset API
+- `forecast_cache.py` -- in-process cache of the AROME and C-LAEF runs per point (3 h, `GEOSPHERE_FORECAST_CACHE_MINUTES`), shared by the hourly forecast and the storm outlook
 - `condition.py` -- pure condition derivation from GeoSphere's `sy` weather symbol, with observations overriding it for now (ported from ha-geosphere-next)
 - `outlook.py` -- pure storm-outlook derivation over the hourly rows: symbol or current-ensemble thunderstorm signal (ported from ha-geosphere-next)
 - `format.py` -- emoji-markdown renderers for the four tools
@@ -87,7 +88,8 @@ indexes the per-concept files on data sources, condition derivation, and the too
 ## Structural Risks
 - GeoSphere dataset resource IDs are versioned -- a catalog rotation breaks the server until IDs in `const.py` are bumped
 - No GeoSphere forecast beyond ~60 h, and no fallback source -- a multi-day answer is simply not available from this server
-- Per-call `aiohttp.ClientSession` creation -- no connection pooling
+- Per-call `aiohttp.ClientSession` creation -- no connection pooling. A cached forecast fetch opens its own session, because it can outlive the call that started it
+- The GeoSphere API answers a forecast request in 0.5-20 s, so the first forecast call for a place after the cache expires can still take that long. `get_hourly_forecast` holds the C-LAEF ensemble to a 2 s grace unless `wait_for_ensemble=true`; the storm outlook always waits for it -- see [ARCHITECTURE.md](docs/tech/ARCHITECTURE.md)
 - `condition.py` duplicates HA `ATTR_CONDITION_*` string literals (to stay import-free) -- could drift if HA renames a condition
 - Rate limits (GeoSphere 5 req/s, 240 req/h) shared across all callers -- no server-side quota tracking
 - Clients never let a bare `TimeoutError` escape (each wraps it in a typed `*TimeoutError`), so the server

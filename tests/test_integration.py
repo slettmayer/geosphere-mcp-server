@@ -50,7 +50,9 @@ async def test_current_weather_vienna_uses_geosphere() -> None:
 
 
 async def test_hourly_forecast_vienna_uses_geosphere() -> None:
-    result = await get_hourly_forecast(*VIENNA, hours=6)
+    # Waits for the ensemble: this checks that its dataset still serves, and
+    # the live API often answers it later than the default grace.
+    result = await get_hourly_forecast(*VIENNA, hours=6, wait_for_ensemble=True)
     _assert_rendered(result)
     assert "AROME" in result
     # A retired dataset answers HTTP 200 with all-null data, which renders as

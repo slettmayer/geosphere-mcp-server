@@ -174,6 +174,7 @@ async def get_hourly_forecast(
     longitude: float,
     hours: int = 24,
     start: str | None = None,
+    wait_for_ensemble: bool = False,
 ) -> str:
     """Get an hour-by-hour weather forecast for a location.
 
@@ -183,6 +184,11 @@ async def get_hourly_forecast(
     probability GeoSphere publishes. Serves Austria and the Alpine region only;
     a point outside that grid returns an out-of-coverage notice.
 
+    The ensemble behind the precipitation chance is often slow to answer, so by
+    default the forecast does not wait more than a couple of seconds for it and
+    then comes without the chance (the output says so). It usually arrives in
+    the background, so asking again a little later often includes it.
+
     Args:
         latitude: Decimal latitude (e.g. 48.2208 for Vienna). Geocode city
             names to coordinates yourself.
@@ -191,6 +197,9 @@ async def get_hourly_forecast(
         start: Optional ISO 8601 start time (e.g. "2026-07-22T15:00"); the
             forecast begins at/after this instant instead of now. Without
             an offset it is Vienna local time, like the times in the output.
+        wait_for_ensemble: Set true when the precipitation chance matters more
+            than a fast answer: the call then waits for the ensemble, which
+            can take up to ~20 s. Default false.
     """
     start_dt, error = _parse_start(start)
     if error is not None:
@@ -199,16 +208,15 @@ async def get_hourly_forecast(
     forecast_hours = max(1, min(hours, AROME_MAX_HOURS))
 
     async def work() -> str:
-        async with aiohttp.ClientSession() as session:
-            assembled = await weather.async_fetch_hourly_forecast(
-                session,
-                latitude,
-                longitude,
-                hours=forecast_hours,
-                start=start_dt,
-            )
-            data = fmt.normalize_hourly(assembled, latitude, longitude, forecast_hours)
-            return fmt.render_hourly(data)
+        assembled = await weather.async_fetch_hourly_forecast(
+            latitude,
+            longitude,
+            hours=forecast_hours,
+            start=start_dt,
+            wait_for_ensemble=wait_for_ensemble,
+        )
+        data = fmt.normalize_hourly(assembled, latitude, longitude, forecast_hours)
+        return fmt.render_hourly(data)
 
     return await _guarded(work)
 
@@ -250,12 +258,13 @@ async def get_storm_outlook(latitude: float, longitude: float) -> str:
     """
 
     async def work() -> str:
-        async with aiohttp.ClientSession() as session:
-            assembled = await weather.async_fetch_hourly_forecast(
-                session, latitude, longitude, hours=AROME_MAX_HOURS
-            )
-            data = fmt.normalize_outlook(assembled, latitude, longitude)
-            return fmt.render_outlook(data)
+        # The ensemble is one of the two thunderstorm signals here, not an
+        # extra, so the outlook always waits for it.
+        assembled = await weather.async_fetch_hourly_forecast(
+            latitude, longitude, hours=AROME_MAX_HOURS, wait_for_ensemble=True
+        )
+        data = fmt.normalize_outlook(assembled, latitude, longitude)
+        return fmt.render_outlook(data)
 
     return await _guarded(work)
 

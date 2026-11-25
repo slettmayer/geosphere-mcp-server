@@ -203,6 +203,12 @@ _CHANCE_NOTE = (
     f"percentiles ({POP_DRY_PCT}/{POP_P90_WET_PCT}/{POP_P50_WET_PCT}/"
     f"{POP_P10_WET_PCT} %), not a probability GeoSphere publishes."
 )
+# Printed when the ensemble missed its grace. It names the argument that waits
+# for it, so a caller that needs the chance knows how to get it.
+_ENSEMBLE_PENDING_NOTE = (
+    "Precipitation chance not included: the C-LAEF ensemble was slow to "
+    "respond. Call again with wait_for_ensemble=true to wait for it."
+)
 
 
 def _hourly_line(hour: dict[str, Any]) -> str:
@@ -272,6 +278,7 @@ def normalize_hourly(
         "tz_abbr": reference_local.tzname() if reference_local is not None else None,
         "source": _source(assembled["sources"]),
         "note": note,
+        "ensemble_pending": assembled.get("ensemble_pending", False),
     }
 
 
@@ -303,6 +310,8 @@ def render_hourly(data: dict[str, Any]) -> str:
     notes = [data["note"]] if data.get("note") else []
     if shows_chance:
         notes.append(_CHANCE_NOTE)
+    if data.get("ensemble_pending"):
+        notes.append(_ENSEMBLE_PENDING_NOTE)
     if notes:
         lines.append("")
         lines.extend(notes)

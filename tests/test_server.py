@@ -240,6 +240,34 @@ async def test_hourly_invalid_start_returns_error_line() -> None:
     fetch.assert_not_awaited()
 
 
+async def test_hourly_passes_wait_for_ensemble_through() -> None:
+    fetch = AsyncMock(return_value=SAMPLE_ASSEMBLED)
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        await get_hourly_forecast(LAT, LON)
+        assert fetch.await_args.kwargs["wait_for_ensemble"] is False
+        await get_hourly_forecast(LAT, LON, wait_for_ensemble=True)
+    assert fetch.await_args.kwargs["wait_for_ensemble"] is True
+
+
+async def test_hourly_says_when_the_ensemble_was_skipped() -> None:
+    """The caller learns the chance is missing and how to get it."""
+    skipped = {**SAMPLE_ASSEMBLED, "sources": ["AROME"], "ensemble_pending": True}
+    fetch = AsyncMock(return_value=skipped)
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        out = await get_hourly_forecast(LAT, LON)
+    assert out.splitlines()[-1] == (
+        "Precipitation chance not included: the C-LAEF ensemble was slow to "
+        "respond. Call again with wait_for_ensemble=true to wait for it."
+    )
+
+
+async def test_hourly_has_no_skip_note_when_the_ensemble_arrived() -> None:
+    fetch = AsyncMock(return_value={**SAMPLE_ASSEMBLED, "ensemble_pending": False})
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        out = await get_hourly_forecast(LAT, LON)
+    assert "wait_for_ensemble" not in out
+
+
 @pytest.mark.parametrize(
     ("start", "expected"),
     [
@@ -323,6 +351,14 @@ async def test_storm_outlook_counts_a_current_ensemble() -> None:
         out = await get_storm_outlook(LAT, LON)
     assert "⛈️ Thunderstorm expected next 1 h: yes (signal: ensemble)" in out
     assert fetch.await_args.kwargs["hours"] == AROME_MAX_HOURS
+
+
+async def test_storm_outlook_always_waits_for_the_ensemble() -> None:
+    """The ensemble is a thunderstorm signal here, so it is never skipped."""
+    fetch = AsyncMock(return_value=SAMPLE_OUTLOOK_ASSEMBLED)
+    with patch.object(weather, "async_fetch_hourly_forecast", fetch):
+        await get_storm_outlook(LAT, LON)
+    assert fetch.await_args.kwargs["wait_for_ensemble"] is True
 
 
 def test_storm_outlook_description_states_the_thresholds() -> None:
