@@ -43,6 +43,10 @@ FORECAST_CACHE_DEFAULT_MINUTES = 180.0
 # Coordinates are rounded to this many decimals for the cache key (~11 m), so
 # the same place spelled 48.2208 and 48.22080001 shares an entry.
 FORECAST_CACHE_COORD_DECIMALS = 4
+# Most entries kept (two per point: AROME and the ensemble); the oldest
+# finished ones go first. A run is a few kB, so this only bounds a caller
+# sweeping many points.
+FORECAST_CACHE_MAX_ENTRIES = 64
 
 # Datasets (mode, resource id). `AROME` names the deterministic forecast source
 # throughout the code; the dataset itself is the control run of the C-LAEF

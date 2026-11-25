@@ -77,6 +77,13 @@ One module per responsibility. No sub-packages.
   the *task* that fetches the run. Concurrent calls share the in-flight request, a finished run is reused
   for `GEOSPHERE_FORECAST_CACHE_MINUTES` (default 180, `0` turns it off), and failures are dropped, never
   replayed
+- An entry can also carry a `max_run_age`: the ensemble's is `ENSEMBLE_MAX_AGE` (12 h), so a cached run
+  is refetched once the storm outlook would stop counting it. Runs are published 6-9 h after their
+  reference time, so without it a run could cross that limit inside the 3 h lifetime while a newer one
+  waits upstream
+- At most `FORECAST_CACHE_MAX_ENTRIES` (64) entries; the oldest finished ones are dropped first, running
+  fetches never
+- With the cache off the hourly tool waits for the ensemble: a late one would have nowhere to go
 - Callers await an entry through `asyncio.shield`, so one that gives up cannot cancel a request others
   share
 - Process-wide and in memory: a server restart starts it empty

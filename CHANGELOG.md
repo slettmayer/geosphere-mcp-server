@@ -10,8 +10,10 @@ version being cut, so you never rename that heading by hand. See
 - Added: `get_hourly_forecast` and `get_storm_outlook` share an in-memory cache of the forecast runs.
   The first call for a place fetches the whole ~60 h AROME and C-LAEF run, and calls for that place over
   the next 3 h answer from it without asking the API, which takes anywhere from 0.5 s to 20 s per request.
-  Concurrent calls share one request and failures are never cached. Set
-  `GEOSPHERE_FORECAST_CACHE_MINUTES` to change the lifetime, or to `0` to turn the cache off.
+  Concurrent calls share one request and failures are never cached. A cached ensemble run is refetched
+  once it is 12 h old, so the storm outlook keeps counting its signal, and the cache holds at most 64
+  runs. Set `GEOSPHERE_FORECAST_CACHE_MINUTES` to change the lifetime, or to `0` to turn the cache off
+  (the hourly forecast then always waits for the ensemble).
 - Changed: `get_hourly_forecast` no longer holds the forecast back for the C-LAEF ensemble. Once AROME is
   in, the ensemble gets 2 s more; if it is later, the answer comes without the precipitation chance and
   ends with a note saying so. The late request keeps running and fills the cache, so asking again a little

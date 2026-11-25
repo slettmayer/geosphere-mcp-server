@@ -34,6 +34,7 @@ from geosphere_mcp_server.const import (
     DATASET_INCA,
     DATASET_NOWCAST,
     ENSEMBLE_GRACE_S,
+    ENSEMBLE_MAX_AGE,
     ENSEMBLE_PARAMETERS,
     FORECAST_ROW_MIDPOINT,
     HOURLY_LOOKBACK_HOURS,
@@ -520,6 +521,7 @@ def _forecast_run(
     latitude: float,
     longitude: float,
     now: datetime,
+    max_run_age: timedelta | None = None,
 ) -> asyncio.Task[GeoSphereResponse]:
     """The cached or in-flight fetch of one dataset's whole horizon for a point.
 
@@ -528,6 +530,9 @@ def _forecast_run(
     the cache entry expires. The start is anchored to the hour under way
     (see `HOURLY_LOOKBACK_HOURS`), and every later call starts later still,
     so a cached series always reaches back to the hour under way.
+
+    ``max_run_age`` expires the cached run early once it is that old (see
+    `forecast_cache.forecast_run_task`).
     """
     series_start, series_end = _forecast_bounds(now, AROME_MAX_HOURS)
 
@@ -544,7 +549,7 @@ def _forecast_run(
             )
 
     key = forecast_cache.cache_key(dataset[1], parameters, latitude, longitude)
-    return forecast_cache.forecast_run_task(key, fetch)
+    return forecast_cache.forecast_run_task(key, fetch, max_run_age=max_run_age)
 
 
 async def _ensemble_result(
@@ -578,10 +583,13 @@ async def async_fetch_hourly_forecast(
 ) -> dict[str, Any]:
     """Fetch AROME + C-LAEF ensemble concurrently and assemble the hourly forecast.
 
-    Both come from the forecast cache when a run for the point is held there.
-    Once AROME is in, the ensemble gets ``ENSEMBLE_GRACE_S`` more unless
-    ``wait_for_ensemble`` is set; an ensemble that misses it is reported as
-    ``ensemble_pending`` and left to finish into the cache.
+    Both come from the forecast cache when a run for the point is held there;
+    a cached ensemble run is refetched once it reaches ``ENSEMBLE_MAX_AGE``,
+    the age past which the storm outlook stops counting it. Once AROME is in,
+    the ensemble gets ``ENSEMBLE_GRACE_S`` more unless ``wait_for_ensemble``
+    is set or the cache is off (a skipped ensemble would then be discarded
+    rather than kept for the next call); an ensemble that misses it is
+    reported as ``ensemble_pending`` and left to finish into the cache.
 
     Ensemble failure, or a missed grace, just omits the precipitation
     probability and the ensemble's thunderstorm signal. Raises
@@ -595,11 +603,17 @@ async def async_fetch_hourly_forecast(
         DATASET_AROME, AROME_PARAMETERS, latitude, longitude, now
     )
     ensemble_task = _forecast_run(
-        DATASET_ENSEMBLE, ENSEMBLE_PARAMETERS, latitude, longitude, now
+        DATASET_ENSEMBLE,
+        ENSEMBLE_PARAMETERS,
+        latitude,
+        longitude,
+        now,
+        max_run_age=ENSEMBLE_MAX_AGE,
     )
 
     arome = await asyncio.shield(arome_task)
-    ensemble_res = await _ensemble_result(ensemble_task, wait_for_ensemble)
+    wait = wait_for_ensemble or not forecast_cache.cache_enabled()
+    ensemble_res = await _ensemble_result(ensemble_task, wait)
     ensemble = (
         optional_response(ensemble_res, "C-LAEF ensemble")
         if ensemble_res is not None

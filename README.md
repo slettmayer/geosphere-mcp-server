@@ -187,11 +187,11 @@ The API is keyless and intended for **non-commercial** use. When you redistribut
 
 ## Rate limits
 
-The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Each call issues a small burst of concurrent requests (three for current weather, two each for the hourly forecast, the storm outlook and air quality); on an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice.
+The GeoSphere Dataset API allows **5 requests/second and 240 requests/hour**. Current weather sends three concurrent requests per call and air quality two. The hourly forecast and the storm outlook send two only when the [forecast cache](#forecast-cache) has no run for the place, and none otherwise; a default hourly call can leave its ensemble request running for a few seconds after it has answered. On an HTTP 429 the server retries once (when the API asks for a short wait) and otherwise returns a rate-limit notice.
 
 ## Forecast cache
 
-The API often takes several seconds, sometimes up to 20 s, to answer a forecast request, while a forecast run only changes every 3 h. So the hourly forecast and the storm outlook share an in-memory cache: the first call for a place fetches the whole ~60 h run, and every call for that place in the next 3 h answers from it without a request. Concurrent calls share one request, and a failed request is never cached. Set `GEOSPHERE_FORECAST_CACHE_MINUTES` to change the lifetime, or to `0` to turn the cache off. The cache lives in the server process, so a restart empties it.
+The API often takes several seconds, sometimes up to 20 s, to answer a forecast request, while a forecast run only changes every 3 h. So the hourly forecast and the storm outlook share an in-memory cache: the first call for a place fetches the whole ~60 h run, and every call for that place in the next 3 h answers from it without a request. Concurrent calls share one request, and a failed request is never cached. An ensemble run is also refetched once it is 12 h old, the age past which the storm outlook stops counting it, and the cache keeps at most 64 runs (two per place). Set `GEOSPHERE_FORECAST_CACHE_MINUTES` to change the lifetime, or to `0` to turn the cache off; the hourly forecast then always waits for the ensemble, since there is nowhere to keep a late one. The cache lives in the server process, so a restart empties it.
 
 ## Development
 

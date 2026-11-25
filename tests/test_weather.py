@@ -17,6 +17,7 @@ from geosphere_mcp_server.const import (
     AROME_PARAMETERS,
     DATASET_AROME,
     DATASET_ENSEMBLE,
+    ENSEMBLE_MAX_AGE,
     ENSEMBLE_PARAMETERS,
     NOWCAST_LOOKBACK,
     PRECIP_MIN_MM,
@@ -834,6 +835,16 @@ async def test_async_fetch_current_arome_out_of_domain_raises() -> None:
 # --- async_fetch_hourly_forecast ---
 
 
+@pytest.fixture(autouse=True)
+def _wall_clock_at_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Age the fixtures' runs against NOW, not the real date.
+
+    The cache refetches an ensemble run once it reaches ENSEMBLE_MAX_AGE by
+    the wall clock; against the real date every fixture run is months old.
+    """
+    monkeypatch.setattr(forecast_cache, "_utcnow", lambda: NOW)
+
+
 def _by_dataset(
     arome: GeoSphereResponse | BaseException,
     ensemble: GeoSphereResponse | BaseException,
@@ -1113,6 +1124,72 @@ async def test_async_fetch_hourly_waits_for_the_ensemble_on_request() -> None:
         )
     assert result["sources"] == ["AROME", "C-LAEF ensemble"]
     assert result["ensemble_pending"] is False
+
+
+async def test_async_fetch_hourly_waits_for_the_ensemble_with_the_cache_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With nothing to keep a late ensemble for, skipping it would only lose it."""
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, "0")
+    mock = _by_dataset(_arome_forecast(), _ensemble(), ensemble_delay=0.1)
+    with (
+        patch.object(weather, "async_get_timeseries", mock),
+        patch.object(weather, "ENSEMBLE_GRACE_S", 0.01),
+    ):
+        result = await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert result["sources"] == ["AROME", "C-LAEF ensemble"]
+    assert result["ensemble_pending"] is False
+
+
+async def test_async_fetch_hourly_refetches_an_ensemble_run_at_max_age(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached run is replaced once the storm outlook would stop counting it.
+
+    Runs are published hours after their reference time, so one fetched at
+    9.5 h old would cross the 12 h limit well inside the 3 h cache lifetime.
+    """
+    reference = _ensemble().reference_time
+    assert reference is not None
+    wall = [reference + ENSEMBLE_MAX_AGE - timedelta(minutes=1)]
+    monkeypatch.setattr(forecast_cache, "_utcnow", lambda: wall[0])
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        assert _requests_for(mock, DATASET_ENSEMBLE) == 1
+        wall[0] += timedelta(minutes=1)
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert _requests_for(mock, DATASET_ENSEMBLE) == 2
+    # AROME has no age rule, so it is still served from the cache.
+    assert _requests_for(mock, DATASET_AROME) == 1
+
+
+async def test_async_fetch_hourly_cache_drops_the_oldest_beyond_its_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(forecast_cache, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(forecast_cache, "FORECAST_CACHE_MAX_ENTRIES", 2)
+    mock = _by_dataset(_arome_forecast(), _ensemble())
+    with patch.object(weather, "async_get_timeseries", mock):
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+        clock[0] += 1
+        await async_fetch_hourly_forecast(46.6354, 14.1412, now=NOW)
+        assert len(forecast_cache._ENTRIES) == 2
+        clock[0] += 1
+        await async_fetch_hourly_forecast(48.219, 16.362, now=NOW)
+    assert _requests_for(mock, DATASET_AROME) == 3
+
+
+def test_cache_ttl_warns_once_per_invalid_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv(forecast_cache.FORECAST_CACHE_TTL_ENV, "soon")
+    for _ in range(3):
+        forecast_cache.cache_ttl_s()
+    warnings = [r for r in caplog.records if "Ignoring" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 # --- Recorded v2 responses ---

@@ -45,8 +45,9 @@ opened.
 **`wait_for_ensemble`** (`get_hourly_forecast` only, default `false`) decides how long the tool waits for
 the C-LAEF ensemble behind the precipitation chance. By default it gets 2 s (`ENSEMBLE_GRACE_S`) after
 AROME is in, and the forecast comes without the chance if it is later — see the trailing note under Hourly
-Forecast Output. `true` waits for it, up to the request timeout. `get_storm_outlook` always waits: there
-the ensemble is a thunderstorm signal, not an extra.
+Forecast Output. `true` waits for it, up to the request timeout, and so does the default while the forecast
+cache is off (`GEOSPHERE_FORECAST_CACHE_MINUTES=0`), when a skipped ensemble could never reach a later call.
+`get_storm_outlook` always waits: there the ensemble is a thunderstorm signal, not an extra.
 
 ### Current Weather Output
 The only renderer that uses per-field emoji. Fields are omitted when the value is unavailable:
