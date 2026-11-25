@@ -7,6 +7,8 @@ version being cut, so you never rename that heading by hand. See
 
 ## Unreleased
 
+## 0.9.0 - 2026-11-25
+
 - Added: `get_hourly_forecast` and `get_storm_outlook` share an in-memory cache of the forecast runs.
   The first call for a place fetches the whole ~60 h AROME and C-LAEF run, and calls for that place over
   the next 3 h answer from it without asking the API, which takes anywhere from 0.5 s to 20 s per request.
@@ -23,6 +25,8 @@ version being cut, so you never rename that heading by hand. See
   because there the ensemble is one of the two thunderstorm signals.
 - Changed: the forecast requests always ask for the whole horizon instead of only the hours the caller
   wants, so one cached run serves every window.
+- Build: bump opentelemetry-api from 1.45.1 to 1.45.2.
+- Build: bump ruff.
 
 ## 0.8.1 - 2026-11-16
 
