@@ -111,10 +111,12 @@ Whenever at least one line shows a chance, a trailing note labels it:
 probability GeoSphere publishes.`
 
 When the ensemble missed its 2 s grace (not when it failed), the source drops to `GeoSphere (AROME)` and a
-trailing note says how to get the chance:
-`Precipitation chance not included: the C-LAEF ensemble was slow to respond. Call again with
-wait_for_ensemble=true to wait for it.` The skipped request keeps running and fills the forecast cache, so
-a repeat call a little later usually carries the chance without waiting.
+trailing note says how to get the chance, and that it is only worth it when the chance is needed:
+`Precipitation chance not included: the C-LAEF ensemble was slow to respond. If the chance is needed,
+call again with wait_for_ensemble=true (can take up to ~20 s).` The wait is stated because a caller after
+a fast answer, such as a voice assistant, should not pay it for a forecast that never needed the chance.
+The skipped request keeps running and fills the forecast cache, so a repeat call a little later usually
+carries the chance without waiting.
 
 When fewer hours come back than were requested, a trailing note is appended:
 `Note: AROME forecast horizon ends {timestamp} (~60 h). This server publishes nothing beyond it.`

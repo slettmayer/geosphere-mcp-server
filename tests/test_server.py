@@ -257,7 +257,8 @@ async def test_hourly_says_when_the_ensemble_was_skipped() -> None:
         out = await get_hourly_forecast(LAT, LON)
     assert out.splitlines()[-1] == (
         "Precipitation chance not included: the C-LAEF ensemble was slow to "
-        "respond. Call again with wait_for_ensemble=true to wait for it."
+        "respond. If the chance is needed, call again with wait_for_ensemble=true "
+        "(can take up to ~20 s)."
     )
 
 
